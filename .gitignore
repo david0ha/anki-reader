@@ -1,0 +1,34 @@
+# OMC (oh-my-claudecode) local state — not for committing
+.omc/
+
+# ESP-IDF build artifacts
+build/
+sdkconfig.old
+# Generated per-developer config (may hold a WiFi password) — never commit. Shared config goes in sdkconfig.defaults
+sdkconfig
+*.pyc
+__pycache__/
+
+# Dependencies fetched by the ESP-IDF component manager (regenerable)
+managed_components/
+dependencies.lock
+
+# LVGL simulator screenshot artifacts
+sim/shots/
+shots/
+
+# Claude Code local state / git worktree — not for committing
+.claude/
+
+# clangd / editor index caches
+.cache/
+
+# macOS
+.DS_Store
+
+# host test/sim run logs
+*.log
+
+# local secrets — never commit
+.env
+.env.*

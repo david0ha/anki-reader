@@ -1,0 +1,65 @@
+# Shared project configuration. Per-developer settings (and anything secret)
+# belong in the generated `sdkconfig`, which is gitignored.
+#
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=512
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FREERTOS_HZ=1000
+# LVGL built-in Montserrat sizes. These cover every Latin glyph on screen — the
+# clock, temperature, weekday letters and battery percentage. Korean and Hanja
+# come from the subset faces in components/fortune_core/fonts/ (see ui_fonts.h).
+CONFIG_LV_FONT_MONTSERRAT_10=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+# Add the original GlobalSign Root CA. It was needed for finnhub.io's chain,
+# which this firmware no longer talks to; Open-Meteo is the only HTTPS host left
+# and its chain should validate against IDF's default bundle. Kept until that is
+# confirmed on real hardware — see docs/epaper-2in13.md's "still to verify".
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="certs/globalsign_root_ca.pem"
+# TLS setup was failing with mbedtls_ssl_setup -0x008D (PSA_ERROR_INSUFFICIENT_MEMORY
+# = MBEDTLS_ERR_SSL_ALLOC_FAILED) on the first HTTPS request: the default INTERNAL_MEM_ALLOC
+# forced all handshake buffers into internal DRAM, which WiFi+lwIP+LVGL had already drained.
+# Allow mbedTLS to spill to PSRAM and right-size/free buffers dynamically.
+CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+# Task Watchdog: bump from the 5s default to 10s. ECDSA cert verification
+# (mbedtls_mpi_mul_mpi) busy-polls the MPI peripheral with no interrupt path, so
+# a legitimate handshake can pin a core for several seconds. It's a long crypto
+# op, not a hung task (PANIC stays off), so widen the window rather than mask it.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+# TLS client session tickets (RFC 5077): let a reconnect to the SAME host resume
+# the prior session (abbreviated handshake, skips the ECDSA cert-chain verify).
+# Paired with .save_client_session=true in http_port_esp.c. The weather task
+# reconnects every 30 min to one host, which is exactly this case. Cert-bundle
+# auth (VERIFY_REQUIRED) is unchanged — a full handshake still validates the chain.
+CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
+
+# app_main renders the full LVGL screen (provisioning drives the setup overlay
+# with Lvgl_RenderNow + epd_refresh_full on the main task) — the IDF default of
+# 3584 bytes overflows there, reproducibly, right at the first Wi-Fi connect.
+# 8 KB matches UiTask, which exists to run exactly the same render path.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# The Wi-Fi event task runs provisioning's scan-done handler; the IDF default
+# of 2304 bytes left it one log call away from overflow even after the handler
+# stopped keeping buffers on its stack. Headroom, cheap at 8 MB PSRAM.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+
+# Phone browsers send >512 bytes of request headers to the captive portal;
+# esp_http_server's default rejects the setup form with a 431
+# ("Header fields are too long") before our handler ever runs.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
+
+# Seeed EE05: GPIO43/44 (default UART0 TX/RX) are the e-Paper power-enable and
+# CS lines, so the console must live on USB Serial/JTAG — a UART0 console would
+# clock log bytes straight into the panel control pins.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "Ticker Board",
+    "slug": "ticker-board",
+    "scheme": "tickerboard",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tickerboard.app",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Ticker Board connects to your ESP32 over your local Wi-Fi to set it up and control the on-screen ticker.",
+        "NSBonjourServices": ["_http._tcp"],
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "predictiveBackGestureEnabled": false,
+      "package": "com.tickerboard.app",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-splash-screen",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          },
+          "ios": {
+            "buildReactNativeFromSource": true
+          }
+        }
+      ]
+    ]
+  }
+}

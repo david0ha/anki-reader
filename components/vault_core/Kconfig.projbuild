@@ -1,0 +1,63 @@
+menu "Fortune Board"
+
+config FORTUNE_TIMEZONE
+    string "Local timezone (POSIX TZ)"
+    default "KST-9"
+    help
+      POSIX TZ string used for the clock AND for the 일진 (day pillar), which
+      rolls over at LOCAL midnight — get this wrong and the device shows the
+      previous or next day's pillar for hours.
+      Examples: "KST-9" (Korea), "JST-9" (Japan), "EST5EDT,M3.2.0,M11.1.0"
+      (US Eastern), "CET-1CEST,M3.5.0,M10.5.0/3" (Central Europe), "UTC0".
+
+config FORTUNE_LOCATION
+    string "Fallback weather location"
+    default ""
+    help
+      Used only when no weather location was entered in the captive-portal setup.
+      Free text resolved on-device to a coordinate via the free, keyless
+      Open-Meteo geocoding API — a city ("Seoul") or "City, Country" ("Austin, US").
+      Leave empty to hide the weather block until provisioned.
+
+menu "Omikuji draw weights"
+
+comment "Relative weights, normalised by their sum. The defaults are percentages."
+
+config FORTUNE_W_DAIKICHI
+    int "大吉 대길 (great blessing)"
+    default 5
+    range 0 1000
+
+config FORTUNE_W_CHUKICHI
+    int "中吉 중길 (middle blessing)"
+    default 15
+    range 0 1000
+
+config FORTUNE_W_SHOKICHI
+    int "小吉 소길 (small blessing)"
+    default 20
+    range 0 1000
+
+config FORTUNE_W_KICHI
+    int "吉 길 (blessing)"
+    default 25
+    range 0 1000
+
+config FORTUNE_W_SHOKYO
+    int "小凶 소흉 (small curse)"
+    default 15
+    range 0 1000
+
+config FORTUNE_W_KYO
+    int "凶 흉 (curse)"
+    default 15
+    range 0 1000
+
+config FORTUNE_W_DAIKYO
+    int "大凶 대흉 (great curse)"
+    default 5
+    range 0 1000
+
+endmenu
+
+endmenu

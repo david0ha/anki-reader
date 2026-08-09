@@ -1,0 +1,6 @@
+## Managed dependencies for the companion-app control server.
+dependencies:
+  idf:
+    version: '>=5.0'
+  # mDNS responder so the app can reach the device at "tickerboard.local" on the home LAN.
+  espressif/mdns: '^1.2.0'
