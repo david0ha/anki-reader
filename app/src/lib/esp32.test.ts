@@ -1,9 +1,8 @@
 import { describe, it, expect } from '@jest/globals'
-import { createEsp32Client, Esp32Error } from './esp32'
+import { createEsp32Client } from './esp32'
 
 // A fake `fetch` that replays a queue of responses (or throws a queued Error to simulate the
-// SoftAP dropping). Records every call so we can assert URLs/methods/bodies. Mirrors the
-// masterham esp32.test.ts harness.
+// SoftAP dropping). Records every call so we can assert URLs/methods/bodies.
 type Reply = { ok?: boolean; status?: number; body?: unknown; jsonThrows?: boolean } | Error
 
 function fakeFetch(replies: Reply[]) {
@@ -51,14 +50,14 @@ function client(replies: Reply[], extra: Record<string, unknown> = {}) {
 describe('esp32 client — getInfo', () => {
   it('parses device identity and trims the base URL', async () => {
     const { fetchImpl, calls } = fakeFetch([
-      { body: { deviceId: '9F3A', model: 'Ticker Board', apSsid: 'Ticker Board-AB12' } },
+      { body: { deviceId: '9F3A', model: 'Obsidian Board', apSsid: 'Obsidian Board-AB12' } },
     ])
     const c = createEsp32Client({ baseUrl: 'http://192.168.4.1/', fetchImpl })
     const info = await c.getInfo()
     expect(info).toEqual({
       deviceId: '9F3A',
-      model: 'Ticker Board',
-      apSsid: 'Ticker Board-AB12',
+      model: 'Obsidian Board',
+      apSsid: 'Obsidian Board-AB12',
       fw: '',
       ip: '',
     })
@@ -67,11 +66,11 @@ describe('esp32 client — getInfo', () => {
 
   it('parses the STA-mode info (fw + ip present, apSsid empty)', async () => {
     const { client: c } = client([
-      { body: { deviceId: '9F3A', model: 'Ticker Board', fw: '0.1.0', ip: '192.168.0.42' } },
+      { body: { deviceId: '9F3A', model: 'Obsidian Board', fw: '0.1.0', ip: '192.168.0.42' } },
     ])
     expect(await c.getInfo()).toEqual({
       deviceId: '9F3A',
-      model: 'Ticker Board',
+      model: 'Obsidian Board',
       apSsid: '',
       fw: '0.1.0',
       ip: '192.168.0.42',
@@ -125,60 +124,26 @@ describe('esp32 client — scanNetworks', () => {
 })
 
 describe('esp32 client — provision', () => {
-  it('POSTs url-encoded ssid+password and resolves on 202', async () => {
+  it('POSTs url-encoded ssid+password+vault_url and resolves on 202', async () => {
     const { client: c, calls } = client([{ status: 202, body: { ok: true, state: 'connecting' } }])
-    await c.provision('My Wi-Fi', 'p@ss&w/rd')
+    await c.provision('My Wi-Fi', 'p@ss&w/rd', 'http://mac.local:8123/vault.json')
     expect(calls[0].url).toBe(`${BASE}/api/provision`)
     expect(calls[0].init?.method).toBe('POST')
     expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe(
       'application/x-www-form-urlencoded',
     )
-    expect(calls[0].init?.body).toBe('ssid=My%20Wi-Fi&password=p%40ss%26w%2Frd')
-  })
-
-  it('appends an url-encoded tickers field when provided', async () => {
-    const { client: c, calls } = client([{ status: 202, body: { ok: true } }])
-    await c.provision('Home', 'pw', 'AAPL, TSLA')
-    expect(calls[0].init?.body).toBe('ssid=Home&password=pw&tickers=AAPL%2C%20TSLA')
-  })
-
-  it('omits the tickers field when empty', async () => {
-    const { client: c, calls } = client([{ status: 202, body: { ok: true } }])
-    await c.provision('Home', 'pw', '')
-    expect(calls[0].init?.body).toBe('ssid=Home&password=pw')
-  })
-
-  it('appends url-encoded key fields when provided in opts', async () => {
-    const { client: c, calls } = client([{ status: 202, body: { ok: true } }])
-    await c.provision('Home', 'pw', 'AAPL', {
-      finnhubKey: 'fh key/1',
-      fmpKey: 'fmp&2',
-      econUrl: 'http://proxy.local:8442/calendar',
-    })
     expect(calls[0].init?.body).toBe(
-      'ssid=Home&password=pw&tickers=AAPL' +
-        '&finnhub_key=fh%20key%2F1&fmp_key=fmp%262' +
-        '&econ_url=http%3A%2F%2Fproxy.local%3A8442%2Fcalendar',
+      'ssid=My%20Wi-Fi&password=p%40ss%26w%2Frd' +
+        '&vault_url=http%3A%2F%2Fmac.local%3A8123%2Fvault.json',
     )
   })
 
-  it('omits a key field that is undefined but sends an empty-string (clear) field', async () => {
+  it('still sends an empty vault_url when none was given', async () => {
+    // Provisioning REWRITES the whole stored config on the board, so omitting the field would
+    // clear the URL regardless. Sending '' states that intent instead of relying on it.
     const { client: c, calls } = client([{ status: 202, body: { ok: true } }])
-    await c.provision('Home', 'pw', undefined, { finnhubKey: 'k', fmpKey: '' })
-    // fmp_key is sent (empty = clear); econ_url is omitted (undefined = leave untouched).
-    expect(calls[0].init?.body).toBe('ssid=Home&password=pw&finnhub_key=k&fmp_key=')
-  })
-
-  it('appends an url-encoded location field when provided in opts', async () => {
-    const { client: c, calls } = client([{ status: 202, body: { ok: true } }])
-    await c.provision('Home', 'pw', undefined, { location: 'Paris, FR' })
-    expect(calls[0].init?.body).toBe('ssid=Home&password=pw&location=Paris%2C%20FR')
-  })
-
-  it('omits the location field when not provided in opts', async () => {
-    const { client: c, calls } = client([{ status: 202, body: { ok: true } }])
-    await c.provision('Home', 'pw', undefined, { finnhubKey: 'k' })
-    expect(calls[0].init?.body).toBe('ssid=Home&password=pw&finnhub_key=k')
+    await c.provision('Home', 'pw')
+    expect(calls[0].init?.body).toBe('ssid=Home&password=pw&vault_url=')
   })
 
   it('throws an Esp32Error carrying the firmware error code on 400', async () => {
@@ -186,6 +151,15 @@ describe('esp32 client — provision', () => {
     await expect(c.provision('Home', 'x')).rejects.toMatchObject({
       name: 'Esp32Error',
       code: 'pass_too_long',
+    })
+  })
+
+  it('surfaces vault_url_invalid from the provisioning endpoint', async () => {
+    const { client: c } = client([
+      { ok: false, status: 400, body: { ok: false, error: 'vault_url_invalid' } },
+    ])
+    await expect(c.provision('Home', 'pw', 'ftp://nope')).rejects.toMatchObject({
+      code: 'vault_url_invalid',
     })
   })
 
@@ -218,7 +192,7 @@ describe('esp32 client — getStatus parsing', () => {
 })
 
 describe('esp32 client — waitForConnected', () => {
-  it('resolves connected once the device reports it', async () => {
+  it('resolves connected once the board reports it', async () => {
     const clock = fakeClock()
     const { client: c } = client(
       [
@@ -235,10 +209,10 @@ describe('esp32 client — waitForConnected', () => {
 
   it('resolves failed with the firmware reason', async () => {
     const clock = fakeClock()
-    const { client: c } = client(
-      [{ body: { state: 'failed', ssid: 'Home', reason: 'auth_failed' } }],
-      { now: clock.now, sleep: clock.sleep },
-    )
+    const { client: c } = client([{ body: { state: 'failed', ssid: 'Home', reason: 'auth_failed' } }], {
+      now: clock.now,
+      sleep: clock.sleep,
+    })
     const res = await c.waitForConnected()
     expect(res.outcome).toBe('failed')
     expect(res.reason).toBe('auth_failed')
@@ -282,303 +256,177 @@ describe('esp32 client — waitForConnected', () => {
 })
 
 // =====================================================================================
-// Stock-control surface
+// Control surface
 // =====================================================================================
 
 describe('esp32 client — getState', () => {
+  // The documented payload from docs/app-control.md, verbatim.
   const FULL = {
-    model: 'Ticker Board',
+    deviceId: '1A2B',
+    model: 'Obsidian Board',
     fw: '0.1.0',
-    deviceId: '9F3A',
-    index: 1,
+    ip: '192.168.0.42',
     page: 2,
-    econMode: true,
-    econWeek: 1,
-    refreshSeconds: 30,
-    keys: { finnhub: true, fmp: false, econUrl: true },
-    env: {
+    pageTitle: '에이전트',
+    vault: {
       valid: true,
-      tempC: 24.3,
-      humidity: 41.0,
-      batteryValid: true,
-      batteryV: 4.02,
-      batteryPct: 88,
+      demo: false,
+      name: 'second-brain',
+      generatedAt: '21:04',
+      notes: 1428,
+      links: 3910,
+      orphans: 37,
+      tags: 212,
+      addedToday: 6,
+      added7d: 41,
+      agents: 5,
+      agentsRunning: 2,
+      recent: 8,
+      inbox: 11,
     },
-    location: 'Seoul',
-    weather: { valid: true, tempC: 21, city: 'Seoul, KR' },
-    watchlist: [
-      { symbol: 'AAPL', valid: true, price: 201.5, change: 1.2, percent: 0.6, ageSec: 12 },
-      { symbol: 'TSLA', valid: false, price: 0, change: 0, percent: 0, ageSec: -1 },
-    ],
+    source: {
+      url: 'http://mac.local:8123/vault.json',
+      lastResult: 'ok',
+      pollSeconds: 300,
+      ageSeconds: 42,
+      stale: false,
+    },
+    battery: { present: true, percent: 84, millivolts: 4012 },
+    panel: { partialChain: 3, fullRefreshMs: 4120, partialRefreshMs: 780 },
   }
 
-  it('parses a full snapshot exactly', async () => {
+  it('parses the documented payload', async () => {
     const { client: c, calls } = client([{ body: FULL }])
-    const st = await c.getState()
-    expect(calls[0].url).toBe(`${BASE}/api/stock/state`)
-    expect(st).toEqual(FULL)
+    const s = await c.getState()
+    expect(calls[0].url).toBe(`${BASE}/api/state`)
+    expect(s.deviceId).toBe('1A2B')
+    expect(s.page).toBe(2)
+    // The board's page title is Korean; it must survive as-is, not be mangled or dropped.
+    expect(s.pageTitle).toBe('에이전트')
+    expect(s.vault.notes).toBe(1428)
+    expect(s.vault.agentsRunning).toBe(2)
+    expect(s.source.lastResult).toBe('ok')
+    expect(s.source.ageSeconds).toBe(42)
+    expect(s.battery).toEqual({ present: true, percent: 84, millivolts: 4012 })
+    expect(s.panel).toEqual({ partialChain: 3, fullRefreshMs: 4120, partialRefreshMs: 780 })
   })
 
-  it('defaults a missing env to an all-zero/invalid block', async () => {
-    const { client: c } = client([{ body: { ...FULL, env: undefined } }])
-    const st = await c.getState()
-    expect(st.env).toEqual({
-      valid: false,
-      tempC: 0,
-      humidity: 0,
-      batteryValid: false,
-      batteryV: 0,
-      batteryPct: 0,
-    })
+  it('renders an empty object as zeros, not a crash', async () => {
+    const { client: c } = client([{ body: {} }])
+    const s = await c.getState()
+    expect(s.vault.notes).toBe(0)
+    expect(s.vault.valid).toBe(false)
+    expect(s.battery.present).toBe(false)
+    expect(s.panel.fullRefreshMs).toBe(0)
   })
 
-  it('returns an empty watchlist when the array is missing', async () => {
-    const { client: c } = client([{ body: { ...FULL, watchlist: undefined } }])
-    expect((await c.getState()).watchlist).toEqual([])
+  it('defaults a MISSING ageSeconds to -1, not 0', async () => {
+    // -1 is "no poll has ever succeeded". Defaulting to 0 would draw a board that had just
+    // synced when in fact it never has — the single most misleading thing this parser could do.
+    const { client: c } = client([{ body: { source: { url: 'http://x/', lastResult: 'transport' } } }])
+    const s = await c.getState()
+    expect(s.source.ageSeconds).toBe(-1)
   })
 
-  it('coerces a partial ticker (missing ageSec -> -1, missing numbers -> 0)', async () => {
-    const { client: c } = client([{ body: { watchlist: [{ symbol: 'NVDA', valid: true }] } }])
-    const st = await c.getState()
-    expect(st.watchlist[0]).toEqual({
-      symbol: 'NVDA',
-      valid: true,
-      price: 0,
-      change: 0,
-      percent: 0,
-      ageSec: -1,
-    })
+  it('preserves an explicit ageSeconds of 0', async () => {
+    const { client: c } = client([{ body: { source: { ageSeconds: 0 } } }])
+    expect((await c.getState()).source.ageSeconds).toBe(0)
   })
 
-  it('parses the keys presence block', async () => {
+  it('maps an unrecognised lastResult to "unknown" rather than passing it through', async () => {
+    // A future firmware may add a code. The UI switches on this value, so an unknown one has to
+    // land in a case the UI already handles.
+    const { client: c } = client([{ body: { source: { lastResult: 'quantum_failure' } } }])
+    expect((await c.getState()).source.lastResult).toBe('unknown')
+  })
+
+  it('keeps every documented lastResult value', async () => {
+    for (const r of ['ok', 'no_url', 'transport', 'http_status', 'bad_payload']) {
+      const { client: c } = client([{ body: { source: { lastResult: r } } }])
+      expect((await c.getState()).source.lastResult).toBe(r)
+    }
+  })
+
+  it('coerces garbage numbers to 0 instead of NaN', async () => {
     const { client: c } = client([
-      { body: { ...FULL, keys: { finnhub: false, fmp: true, econUrl: false } } },
+      { body: { page: 'two', vault: { notes: 'many', links: null }, battery: { percent: {} } } },
     ])
-    expect((await c.getState()).keys).toEqual({ finnhub: false, fmp: true, econUrl: false })
-  })
-
-  it('defaults a missing keys block to all-false', async () => {
-    const { client: c } = client([{ body: { ...FULL, keys: undefined } }])
-    expect((await c.getState()).keys).toEqual({ finnhub: false, fmp: false, econUrl: false })
-  })
-
-  it('parses the location and resolved weather block', async () => {
-    const { client: c } = client([
-      { body: { ...FULL, location: 'Paris', weather: { valid: true, tempC: 14, city: 'Paris, FR' } } },
-    ])
-    const st = await c.getState()
-    expect(st.location).toBe('Paris')
-    expect(st.weather).toEqual({ valid: true, tempC: 14, city: 'Paris, FR' })
-  })
-
-  it('defaults a missing location to "" and a missing weather block to invalid/zero/empty', async () => {
-    const { client: c } = client([{ body: { ...FULL, location: undefined, weather: undefined } }])
-    const st = await c.getState()
-    expect(st.location).toBe('')
-    expect(st.weather).toEqual({ valid: false, tempC: 0, city: '' })
+    const s = await c.getState()
+    expect(s.page).toBe(0)
+    expect(s.vault.notes).toBe(0)
+    expect(s.vault.links).toBe(0)
+    expect(s.battery.percent).toBe(0)
   })
 
   it('rejects with http_error on a non-ok response', async () => {
     const { client: c } = client([{ ok: false, status: 500, body: {} }])
-    await expect(c.getState()).rejects.toMatchObject({ code: 'http_error' })
-  })
-})
-
-describe('esp32 client — select', () => {
-  it('POSTs an index body as JSON and resolves on 200 {ok:true}', async () => {
-    const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.select({ index: 2 })
-    expect(calls[0].url).toBe(`${BASE}/api/stock/select`)
-    expect(calls[0].init?.method).toBe('POST')
-    expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe('application/json')
-    expect(calls[0].init?.body).toBe('{"index":2}')
-  })
-
-  it('POSTs a symbol body as JSON', async () => {
-    const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.select({ symbol: 'TSLA' })
-    expect(calls[0].init?.body).toBe('{"symbol":"TSLA"}')
-  })
-
-  it('throws symbol_not_found on a 404 body', async () => {
-    const { client: c } = client([{ ok: false, status: 404, body: { ok: false, error: 'symbol_not_found' } }])
-    await expect(c.select({ symbol: 'ZZZZ' })).rejects.toMatchObject({ code: 'symbol_not_found' })
-  })
-
-  it('throws index_range on a 400 body', async () => {
-    const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'index_range' } }])
-    await expect(c.select({ index: 99 })).rejects.toMatchObject({ code: 'index_range' })
+    await expect(c.getState()).rejects.toMatchObject({ code: 'http_error', status: 500 })
   })
 })
 
 describe('esp32 client — setPage', () => {
-  it('POSTs {page} and resolves', async () => {
+  it('POSTs the page as JSON', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setPage(1)
-    expect(calls[0].url).toBe(`${BASE}/api/stock/page`)
-    expect(calls[0].init?.body).toBe('{"page":1}')
+    await c.setPage(3)
+    expect(calls[0].url).toBe(`${BASE}/api/page`)
+    expect(calls[0].init?.method).toBe('POST')
+    expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe('application/json')
+    expect(calls[0].init?.body).toBe('{"page":3}')
   })
 
   it('throws page_range on a 400 body', async () => {
     const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'page_range' } }])
-    await expect(c.setPage(7)).rejects.toMatchObject({ code: 'page_range' })
+    await expect(c.setPage(9)).rejects.toMatchObject({ code: 'page_range', status: 400 })
   })
 })
 
-describe('esp32 client — setEcon', () => {
-  it('includes the week (defaulting to 0) when enabling', async () => {
+describe('esp32 client — setVaultUrl', () => {
+  it('POSTs the url as JSON', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setEcon(true)
-    expect(calls[0].init?.body).toBe('{"mode":true,"week":0}')
+    await c.setVaultUrl('http://mac.local:8123/vault.json')
+    expect(calls[0].url).toBe(`${BASE}/api/vault`)
+    expect(calls[0].init?.body).toBe('{"url":"http://mac.local:8123/vault.json"}')
   })
 
-  it('passes through a non-zero week when enabling', async () => {
+  it('sends an empty string through — that is the "use demo data" request', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setEcon(true, 2)
-    expect(calls[0].init?.body).toBe('{"mode":true,"week":2}')
+    await c.setVaultUrl('')
+    expect(calls[0].init?.body).toBe('{"url":""}')
   })
 
-  it('omits the week when disabling', async () => {
-    const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setEcon(false)
-    expect(calls[0].init?.body).toBe('{"mode":false}')
+  it('throws vault_url_invalid on a 400 body', async () => {
+    const { client: c } = client([
+      { ok: false, status: 400, body: { ok: false, error: 'vault_url_invalid' } },
+    ])
+    await expect(c.setVaultUrl('nope')).rejects.toMatchObject({ code: 'vault_url_invalid' })
   })
 })
 
-describe('esp32 client — refresh', () => {
-  it('POSTs {all:false} by default', async () => {
+describe('esp32 client — refresh and displayTest', () => {
+  it('POSTs /api/refresh with no body', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
     await c.refresh()
-    expect(calls[0].url).toBe(`${BASE}/api/stock/refresh`)
-    expect(calls[0].init?.body).toBe('{"all":false}')
-  })
-
-  it('POSTs {all:true} when requested', async () => {
-    const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.refresh(true)
-    expect(calls[0].init?.body).toBe('{"all":true}')
-  })
-})
-
-describe('esp32 client — setWatchlist', () => {
-  it('POSTs an array body', async () => {
-    const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setWatchlist(['AAPL', 'TSLA'])
-    expect(calls[0].url).toBe(`${BASE}/api/stock/watchlist`)
-    expect(calls[0].init?.body).toBe('{"tickers":["AAPL","TSLA"]}')
-  })
-
-  it('POSTs a string body', async () => {
-    const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setWatchlist('AAPL,TSLA')
-    expect(calls[0].init?.body).toBe('{"tickers":"AAPL,TSLA"}')
-  })
-
-  it('throws empty_watchlist on a 400 body', async () => {
-    const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'empty_watchlist' } }])
-    await expect(c.setWatchlist([])).rejects.toMatchObject({ code: 'empty_watchlist' })
-  })
-
-  it('throws too_many_tickers on a 400 body', async () => {
-    const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'too_many_tickers' } }])
-    await expect(c.setWatchlist(Array(20).fill('A'))).rejects.toMatchObject({ code: 'too_many_tickers' })
-  })
-
-  it('throws bad_json and carries the status when the body is malformed', async () => {
-    const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'bad_json' } }])
-    await expect(c.setWatchlist('')).rejects.toMatchObject({ code: 'bad_json', status: 400 })
-  })
-
-  it('maps a thrown fetch to network_error', async () => {
-    const { client: c } = client([new TypeError('Network request failed')])
-    await expect(c.setWatchlist(['AAPL'])).rejects.toMatchObject({ code: 'network_error' })
-  })
-})
-
-describe('esp32 client — setKeys', () => {
-  it('POSTs only the provided fields as JSON and resolves on 200 {ok:true}', async () => {
-    const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setKeys({ finnhubKey: 'abc', econUrl: 'http://proxy.local' })
-    expect(calls[0].url).toBe(`${BASE}/api/stock/keys`)
+    expect(calls[0].url).toBe(`${BASE}/api/refresh`)
     expect(calls[0].init?.method).toBe('POST')
-    expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe('application/json')
-    // fmpKey omitted (undefined); the two provided fields are present.
-    expect(calls[0].init?.body).toBe('{"finnhubKey":"abc","econUrl":"http://proxy.local"}')
+    expect(calls[0].init?.body).toBeUndefined()
   })
 
-  it('sends an empty string as a clear request (does not drop it)', async () => {
+  it('POSTs /api/display/test with no body', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setKeys({ fmpKey: '' })
-    expect(calls[0].init?.body).toBe('{"fmpKey":""}')
+    await c.displayTest()
+    expect(calls[0].url).toBe(`${BASE}/api/display/test`)
+    expect(calls[0].init?.body).toBeUndefined()
   })
 
-  it('throws bad_json carrying the status on a 400 body', async () => {
-    const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'bad_json' } }])
-    await expect(c.setKeys({ finnhubKey: 'x' })).rejects.toMatchObject({ code: 'bad_json', status: 400 })
+  it('surfaces busy — the board is mid-refresh and the command was not queued', async () => {
+    const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'busy' } }])
+    await expect(c.refresh()).rejects.toMatchObject({ code: 'busy' })
+    const { client: d } = client([{ ok: false, status: 400, body: { ok: false, error: 'busy' } }])
+    await expect(d.displayTest()).rejects.toMatchObject({ code: 'busy' })
   })
 
-  it('maps a thrown fetch to network_error', async () => {
+  it('maps a dropped connection to network_error', async () => {
     const { client: c } = client([new TypeError('Network request failed')])
-    await expect(c.setKeys({ finnhubKey: 'x' })).rejects.toMatchObject({ code: 'network_error' })
-  })
-})
-
-describe('esp32 client — setLocation', () => {
-  it('POSTs {location} as JSON and resolves on 200 {ok:true}', async () => {
-    const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setLocation('Seoul')
-    expect(calls[0].url).toBe(`${BASE}/api/stock/location`)
-    expect(calls[0].init?.method).toBe('POST')
-    expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe('application/json')
-    expect(calls[0].init?.body).toBe('{"location":"Seoul"}')
-  })
-
-  it('sends an empty string (clear) as a valid request', async () => {
-    const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setLocation('')
-    expect(calls[0].init?.body).toBe('{"location":""}')
-  })
-
-  it('throws bad_json carrying the status on a 400 body', async () => {
-    const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'bad_json' } }])
-    await expect(c.setLocation('!!')).rejects.toMatchObject({ code: 'bad_json', status: 400 })
-  })
-
-  it('maps a thrown fetch to network_error', async () => {
-    const { client: c } = client([new TypeError('Network request failed')])
-    await expect(c.setLocation('Seoul')).rejects.toMatchObject({ code: 'network_error' })
-  })
-})
-
-// =====================================================================================
-// Cross-cutting
-// =====================================================================================
-
-describe('esp32 client — base URL normalization', () => {
-  it('strips multiple trailing slashes', async () => {
-    const { fetchImpl, calls } = fakeFetch([{ body: {} }])
-    const c = createEsp32Client({ baseUrl: 'http://192.168.4.1///', fetchImpl })
-    await c.getInfo()
-    expect(calls[0].url).toBe('http://192.168.4.1/api/info')
-  })
-
-  it('falls back to the default base URL when none is provided', async () => {
-    const { fetchImpl, calls } = fakeFetch([{ body: {} }])
-    const c = createEsp32Client({ fetchImpl })
-    await c.getInfo()
-    expect(calls[0].url).toBe('http://192.168.4.1/api/info')
-  })
-})
-
-describe('Esp32Error', () => {
-  it('exposes the code and is an Error', () => {
-    const e = new Esp32Error('ssid_empty')
-    expect(e).toBeInstanceOf(Error)
-    expect(e.code).toBe('ssid_empty')
-  })
-
-  it('carries an optional HTTP status', () => {
-    const e = new Esp32Error('http_error', 'boom', 502)
-    expect(e.status).toBe(502)
+    await expect(c.refresh()).rejects.toMatchObject({ code: 'network_error' })
   })
 })

@@ -1,7 +1,8 @@
 # Obsidian Board — design
 
 **Date:** 2026-08-10
-**Status:** implemented — see §9 for where the implementation departed from this
+**Status:** implemented — see §9 for where the implementation departed from this, and
+§10 for sub-project 2, which this spec deferred and which was then built anyway
 **Hardware:** Seeed XIAO ePaper Display Board **EE04** + XIAO ESP32-S3 Plus,
 5.83" monochrome ePaper **648×480**, controller **UC8179**
 
@@ -229,6 +230,37 @@ itself DEMO — true, and useless.
 so the fetch layer's failure paths run without a server. §7 listed four; there are
 five, plus the simulator.
 
-Still deferred, exactly as §Scope said: the `app/` companion app. The HTTP contract
-it depends on is now exercised by host tests and by the simulator, but not yet by
-hardware.
+## 10. Sub-project 2: the companion app
+
+§Scope deferred the `app/` port until the HTTP contract had been exercised on real
+hardware, on the reasoning that porting it before then would mean doing it twice.
+
+It was ported anyway, before that condition was met. The board left the USB bus
+partway through the session and did not come back, so "wait for hardware" became
+"wait indefinitely" — and the contract had by then been exercised three other ways:
+by `test_api_json`, by the simulator, and, once `app/scripts/mock-esp32.js` existed,
+by a second independent implementation of the whole thing. That is not the same as
+hardware, and the risk §Scope named is real: if the board turns out to disagree with
+`docs/app-control.md`, the app follows the document and will be wrong with it.
+
+What the port is:
+
+- `src/lib/esp32.ts` rewritten against `docs/app-control.md` — the state snapshot,
+  the four writes, and the provisioning form's `vault_url`.
+- `src/lib/vaulturl.ts`, mirroring `prov_validate_vault_url()` so a typo is caught
+  before a ~45s Wi-Fi join rather than after it.
+- The onboarding wizard's third step is the snapshot URL where the stock build asked
+  for API keys; the dashboard and settings are rewritten around the vault.
+- `scripts/mock-esp32.js` really fetches the configured URL and summarises it the way
+  `device_api_json.c` does, including the three failure codes — so the app is
+  developed against a second implementation of the contract, not a stub.
+- Deleted with the stock build's domain: the watchlist, the geocoder, the location
+  autocomplete, the ticker row, the API-key step.
+
+Two decisions inside it are worth keeping when the contract next changes, both
+recorded in `docs/app-control.md`: a missing `ageSeconds` parses to `-1`, not `0`,
+and an unrecognised `lastResult` maps to `unknown` rather than passing through.
+
+105 unit tests, `tsc --noEmit` clean. Not run on a phone — that needs a native dev
+build, which needs Xcode/Android Studio, which is the same class of "not verified
+here" as the firmware.

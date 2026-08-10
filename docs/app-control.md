@@ -109,7 +109,19 @@ The captive portal collects the Wi-Fi credentials and the vault URL, saves them 
 
 ## The companion app
 
-`app/` still contains the fortune board's React Native app, unported. It is deliberately deferred:
-the HTTP contract above is its entire surface, and porting it before that contract had been
-exercised on real hardware would have meant doing it twice. See
-`docs/specs/2026-08-10-obsidian-board-design.md` §Scope.
+`app/` implements this contract — see [`../app/README.md`](../app/README.md). `app/src/lib/esp32.ts`
+is the TypeScript mirror of this document and the only file in the app that knows a field name, so
+a change here is a change there.
+
+Two things in the app are worth knowing about when changing this contract:
+
+- **`source.ageSeconds` of `-1`** is parsed as "never synced" and rendered as `never`. A client that
+  defaults a missing `ageSeconds` to `0` draws a board that just synced when it never has, so the
+  app defaults it to `-1` and a test pins that.
+- **An unrecognised `lastResult`** is mapped to `unknown` rather than passed through, because the
+  UI switches on it. Adding a code here is therefore safe; it degrades to a neutral chip until the
+  app learns it.
+
+`app/scripts/mock-esp32.js` implements this whole contract in Node, including really fetching a
+snapshot URL and summarising it — so the app can be developed against it, and the contract has a
+second implementation to disagree with.

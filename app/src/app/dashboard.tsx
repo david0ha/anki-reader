@@ -1,33 +1,52 @@
 import { useCallback, useRef, useState } from 'react'
-import { Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Screen } from '../components/Screen'
 import { Card } from '../components/Card'
 import { Chip } from '../components/Chip'
 import { Button } from '../components/Button'
+import { InfoRow } from '../components/InfoRow'
 import { SegmentedControl } from '../components/SegmentedControl'
-import { TickerRow } from '../components/TickerRow'
+import { StatTile } from '../components/StatTile'
 import { ScreenMessage } from '../components/ScreenMessage'
 import { useDevice } from '../lib/device'
-import { Esp32Error, type StockState, type StockTicker } from '../lib/esp32'
+import { Esp32Error, type DeviceState } from '../lib/esp32'
 import { DEFAULT_HOST, discoverDevice } from '../lib/discovery'
 import { getDeviceBaseUrl } from '../lib/store'
-import { PAGE_LABELS, direction, formatChange, formatPercent, formatPrice } from '../lib/format'
-import { colors, fonts, layout, radius, space } from '../theme'
+import {
+  PAGE_LABELS,
+  fetchResultLabel,
+  fetchResultMessage,
+  fetchResultTone,
+  formatAge,
+  formatCount,
+  formatDelta,
+  formatDensity,
+  formatInterval,
+  formatMs,
+  formatRatio,
+} from '../lib/format'
+import { colors, layout, space } from '../theme'
 
-const mono = Platform.OS === 'ios' ? fonts.monoIos : fonts.mono
-const POLL_MS = 4000
+// The board polls its source every few minutes and only redraws when something changed, so there
+// is nothing to gain from polling it fast. This is "keep the phone screen roughly current", not a
+// live feed.
+const POLL_MS = 5000
 
 export default function Dashboard() {
   const router = useRouter()
   const { client, baseUrl, setBaseUrl } = useDevice()
 
-  const [state, setState] = useState<StockState | null>(null)
+  const [state, setState] = useState<DeviceState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   // Disable controls briefly while a write command is in flight so taps can't race.
   const [busy, setBusy] = useState(false)
+  // A page the user asked for that the board has not confirmed yet. A page change is a full
+  // refresh of a 5.83" panel — seconds, not milliseconds — so without this the segmented control
+  // snaps back to the old page and looks like the tap was lost.
+  const [pendingPage, setPendingPage] = useState<number | null>(null)
   const focused = useRef(true)
 
   const load = useCallback(
@@ -37,6 +56,7 @@ export default function Dashboard() {
       try {
         const s = await client.getState()
         setState(s)
+        setPendingPage((p) => (p === null || p === s.page ? null : p))
         setError(null)
       } catch (e) {
         // Keep the last good snapshot on a transient poll failure; only surface an error when we
@@ -50,7 +70,7 @@ export default function Dashboard() {
   )
 
   // Poll while the screen is focused. useFocusEffect pauses polling when the user navigates away
-  // (settings/watchlist) and resumes on return, so we never poll a backgrounded screen.
+  // and resumes on return, so we never poll a backgrounded screen.
   useFocusEffect(
     useCallback(() => {
       focused.current = true
@@ -72,8 +92,8 @@ export default function Dashboard() {
   }, [load])
 
   // "Couldn't reach the board" retry: the saved address may be stale after the user rejoined their
-  // home Wi-Fi. Re-probe the LAN (saved IP + tickerboard.local), persist whichever answers, then
-  // reload. If discovery finds nothing we still fall back to a plain reload against the current URL.
+  // home Wi-Fi or the board took a new DHCP lease. Re-probe the LAN (saved address + the mDNS
+  // name), persist whichever answers, then reload.
   const retry = useCallback(async () => {
     setError(null)
     const saved = await getDeviceBaseUrl()
@@ -81,12 +101,12 @@ export default function Dashboard() {
     if (found && found !== baseUrl) {
       await setBaseUrl(found)
       // The client is recreated from the new baseUrl on the next render; the focus-effect poll and
-      // this explicit load will then hit the rediscovered device.
+      // this explicit load will then hit the rediscovered board.
     }
     await load()
   }, [baseUrl, setBaseUrl, load])
 
-  // Wrap a control command: optimistic re-poll afterwards so the UI reflects the device quickly.
+  // Wrap a control command: re-poll afterwards so the UI reflects the board quickly.
   const command = useCallback(
     async (fn: () => Promise<void>) => {
       if (!client || busy) return
@@ -115,19 +135,13 @@ export default function Dashboard() {
     return (
       <Screen>
         <Header baseUrl={baseUrl} onSettings={() => router.push('/settings')} />
-        <ScreenMessage
-          loading={!error}
-          error={error}
-          message="Loading…"
-          onRetry={retry}
-        />
+        <ScreenMessage loading={!error} error={error} message="Loading…" onRetry={retry} />
       </Screen>
     )
   }
 
-  const current: StockTicker | undefined = state.watchlist[state.index]
-  const dir = current ? direction(current.change) : 'flat'
-  const dirColor = dir === 'up' ? colors.up : dir === 'down' ? colors.down : colors.textDim
+  const { vault, source, battery, panel } = state
+  const shownPage = pendingPage ?? state.page
 
   return (
     <Screen edges={['top']}>
@@ -139,144 +153,134 @@ export default function Dashboard() {
           <RefreshControl refreshing={refreshing} onRefresh={onPullRefresh} tintColor={colors.accent} />
         }
       >
-        {/* Connection + sensor chips */}
+        {/* Status chips: how the last poll went, whether what's on the glass is demo/stale, and
+            the battery when there is one. */}
         <View style={styles.chipRow}>
-          <Chip label="Connected" icon="ellipse" tone="up" />
-          {state.env.valid ? (
-            <Chip label={`${state.env.tempC.toFixed(1)}°C`} icon="thermometer" />
-          ) : null}
-          {state.env.valid ? <Chip label={`${state.env.humidity.toFixed(0)}%`} icon="water" /> : null}
-          {/* Weather: show the resolved chip once valid; a subtle loading hint while the device
-              geocodes a freshly-set location; nothing at all when no location is configured. */}
-          {state.weather.valid ? (
-            <Chip label={`${Math.round(state.weather.tempC)}° ${state.weather.city}`} icon="cloud" />
-          ) : state.location ? (
-            <Chip label={`weather: ${state.location}…`} icon="cloud" tone="neutral" />
-          ) : null}
-          {state.env.batteryValid ? (
+          <Chip
+            label={fetchResultLabel(source.lastResult)}
+            icon="cloud-download"
+            tone={fetchResultTone(source.lastResult)}
+          />
+          {vault.demo ? <Chip label="demo data" icon="flask" tone="warn" /> : null}
+          {source.stale ? <Chip label="stale" icon="time" tone="warn" /> : null}
+          {battery.present ? (
             <Chip
-              label={`${state.env.batteryPct}%`}
+              label={`${battery.percent}%`}
               icon="battery-half"
-              tone={state.env.batteryPct < 20 ? 'down' : 'neutral'}
+              tone={battery.percent < 20 ? 'down' : 'neutral'}
             />
           ) : null}
         </View>
 
-        {/* Current ticker hero */}
+        {/* The vault, as the board understands it. */}
         <Card style={styles.hero}>
-          {current ? (
-            <>
-              <Text style={[styles.heroSymbol, { fontFamily: mono }]}>{current.symbol}</Text>
-              {current.valid ? (
-                <>
-                  <Text style={[styles.heroPrice, { fontFamily: mono }]}>{formatPrice(current.price)}</Text>
-                  <Text style={[styles.heroChange, { color: dirColor, fontFamily: mono }]}>
-                    {formatChange(current.change)} ({formatPercent(current.percent)})
-                  </Text>
-                </>
-              ) : (
-                <Text style={styles.heroLoading}>waiting for first quote…</Text>
-              )}
-            </>
-          ) : (
-            <Text style={styles.heroLoading}>No ticker selected</Text>
-          )}
+          <Text style={styles.heroName} numberOfLines={1}>
+            {vault.name || 'No vault'}
+          </Text>
           <Text style={styles.heroMeta}>
-            Showing {state.index + 1} of {state.watchlist.length} · refreshes every {state.refreshSeconds}s
+            {vault.valid
+              ? `snapshot ${vault.generatedAt || '—'} · ${formatAge(source.ageSeconds)}`
+              : 'no snapshot yet'}
           </Text>
         </Card>
 
-        {/* View (page) control */}
-        <Section title="On-screen view">
-          <SegmentedControl
-            segments={[...PAGE_LABELS]}
-            selectedIndex={state.page}
-            disabled={busy}
-            onChange={(page) => command(() => client.setPage(page))}
+        <View style={styles.tiles}>
+          <StatTile
+            label="Notes"
+            value={formatCount(vault.notes)}
+            footnote={`${formatDelta(vault.addedToday)} today · ${formatDelta(vault.added7d)} this week`}
           />
-        </Section>
+          <StatTile
+            label="Links"
+            value={formatCount(vault.links)}
+            footnote={`${formatDensity(vault.links, vault.notes)} per note`}
+          />
+          <StatTile
+            label="Orphans"
+            value={formatCount(vault.orphans)}
+            footnote={`${formatRatio(vault.orphans, vault.notes)} of the vault`}
+            tone={vault.orphans > 0 ? 'warn' : 'neutral'}
+          />
+          <StatTile label="Tags" value={formatCount(vault.tags)} />
+        </View>
 
-        {/* Economic calendar overlay */}
-        <Section title="Economic calendar">
-          <View style={styles.econRow}>
-            <Chip
-              label={state.econMode ? 'Overlay on' : 'Overlay off'}
-              icon="calendar"
-              tone={state.econMode ? 'warn' : 'neutral'}
-              active={state.econMode}
-              disabled={busy}
-              onPress={() => command(() => client.setEcon(!state.econMode, state.econWeek))}
+        <Section title="Agents & queue">
+          <Card style={styles.rows}>
+            <InfoRow
+              label="Agents running"
+              value={`${vault.agentsRunning} of ${vault.agents}`}
+              tone={vault.agentsRunning > 0 ? 'up' : 'dim'}
             />
-            {state.econMode ? (
-              <View style={styles.weekNav}>
-                <Pressable
-                  accessibilityLabel="Previous week"
-                  disabled={busy}
-                  onPress={() => command(() => client.setEcon(true, state.econWeek - 1))}
-                  hitSlop={8}
-                  style={styles.weekBtn}
-                >
-                  <Ionicons name="chevron-back" size={18} color={colors.text} />
-                </Pressable>
-                <Text style={styles.weekLabel}>
-                  {state.econWeek === 0 ? 'This week' : state.econWeek > 0 ? `+${state.econWeek}w` : `${state.econWeek}w`}
-                </Text>
-                <Pressable
-                  accessibilityLabel="Next week"
-                  disabled={busy}
-                  onPress={() => command(() => client.setEcon(true, state.econWeek + 1))}
-                  hitSlop={8}
-                  style={styles.weekBtn}
-                >
-                  <Ionicons name="chevron-forward" size={18} color={colors.text} />
-                </Pressable>
-              </View>
-            ) : null}
-          </View>
-        </Section>
-
-        {/* Watchlist */}
-        <Section
-          title="Watchlist"
-          action={
-            <Pressable accessibilityRole="button" onPress={() => router.push('/watchlist')} hitSlop={8}>
-              <Text style={styles.editLink}>Edit</Text>
-            </Pressable>
-          }
-        >
-          <Card style={styles.listCard}>
-            {state.watchlist.length === 0 ? (
-              <Text style={styles.empty}>No symbols yet. Tap Edit to add some.</Text>
-            ) : (
-              state.watchlist.map((t, i) => (
-                <TickerRow
-                  key={`${t.symbol}-${i}`}
-                  ticker={t}
-                  selected={i === state.index}
-                  onPress={() => command(() => client.select({ index: i }))}
-                />
-              ))
-            )}
+            <InfoRow label="Recent notes" value={formatCount(vault.recent)} />
+            <InfoRow label="Inbox" value={formatCount(vault.inbox)} last />
           </Card>
         </Section>
 
-        {/* Actions */}
+        {/* Page control. The board's own title for the page it is showing sits underneath, in its
+            UI language — that is the ground truth for what is on the glass. */}
+        <Section title="On the panel">
+          <SegmentedControl
+            segments={[...PAGE_LABELS]}
+            selectedIndex={shownPage}
+            disabled={busy}
+            onChange={(page) => {
+              setPendingPage(page)
+              command(() => client.setPage(page))
+            }}
+          />
+          <Text style={styles.pageNote}>
+            {pendingPage !== null && pendingPage !== state.page
+              ? 'Switching… a page change is a full refresh, which takes a few seconds.'
+              : `Showing “${state.pageTitle || PAGE_LABELS[state.page] || '—'}”.`}
+          </Text>
+        </Section>
+
+        {/* Where the data comes from, and how the last poll went. */}
+        <Section title="Source">
+          <Card style={styles.rows}>
+            <InfoRow label="URL" value={source.url || 'not set (demo)'} tone={source.url ? 'neutral' : 'dim'} />
+            <InfoRow
+              label="Last poll"
+              value={fetchResultLabel(source.lastResult)}
+              tone={fetchResultTone(source.lastResult) === 'down' ? 'down' : 'neutral'}
+            />
+            <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
+            <InfoRow label="Polls" value={formatInterval(source.pollSeconds)} last />
+          </Card>
+          {source.lastResult !== 'ok' ? (
+            <Text style={styles.sourceNote}>{fetchResultMessage(source.lastResult)}</Text>
+          ) : null}
+        </Section>
+
+        {/* Measured panel timings — the numbers the refresh policy is meant to be chosen from. */}
+        <Section title="Panel">
+          <Card style={styles.rows}>
+            <InfoRow label="Full refresh" value={formatMs(panel.fullRefreshMs)} />
+            <InfoRow label="Partial refresh" value={formatMs(panel.partialRefreshMs)} />
+            <InfoRow label="Partials since full" value={String(panel.partialChain)} last />
+          </Card>
+        </Section>
+
         <View style={styles.actions}>
           <Button
-            label="Refresh current"
+            label="Poll now"
             variant="secondary"
             disabled={busy}
-            onPress={() => command(() => client.refresh(false))}
+            onPress={() => command(() => client.refresh())}
             style={styles.actionBtn}
           />
           <Button
-            label="Refresh all"
+            label="Self-test"
             variant="secondary"
             disabled={busy}
-            onPress={() => command(() => client.refresh(true))}
+            onPress={() => command(() => client.displayTest())}
             style={styles.actionBtn}
           />
         </View>
+        <Text style={styles.actionsNote}>
+          Polling only redraws the panel if the snapshot changed. The self-test sweeps the panel for
+          about a minute.
+        </Text>
 
         {error ? <Text style={styles.errorLine}>{error}</Text> : null}
       </ScrollView>
@@ -288,11 +292,12 @@ function humanError(e: Esp32Error): string {
   switch (e.code) {
     case 'network_error':
       return 'Couldn’t reach the board. Check it’s powered on and on the same Wi-Fi.'
-    case 'index_range':
     case 'page_range':
-      return 'That option is out of range.'
-    case 'symbol_not_found':
-      return 'That symbol isn’t on the watchlist.'
+      return 'That page doesn’t exist on the board.'
+    case 'vault_url_invalid':
+      return 'The board wouldn’t accept that address.'
+    case 'busy':
+      return 'The board is busy redrawing. Try again in a moment.'
     default:
       return 'That command failed. Please try again.'
   }
@@ -301,8 +306,8 @@ function humanError(e: Esp32Error): string {
 function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: () => void }) {
   return (
     <View style={styles.header}>
-      <View>
-        <Text style={styles.headerTitle}>Ticker Board</Text>
+      <View style={styles.headerText}>
+        <Text style={styles.headerTitle}>Obsidian Board</Text>
         <Text style={styles.headerSub} numberOfLines={1}>
           {baseUrl ?? ''}
         </Text>
@@ -314,21 +319,10 @@ function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: (
   )
 }
 
-function Section({
-  title,
-  action,
-  children,
-}: {
-  title: string
-  action?: React.ReactNode
-  children: React.ReactNode
-}) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.section}>
-      <View style={styles.sectionHead}>
-        <Text style={styles.sectionTitle}>{title}</Text>
-        {action}
-      </View>
+      <Text style={styles.sectionTitle}>{title}</Text>
       {children}
     </View>
   )
@@ -341,6 +335,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: layout.gutter,
     paddingVertical: 12,
+  },
+  headerText: {
+    flexShrink: 1,
   },
   headerTitle: {
     fontSize: 20,
@@ -370,41 +367,26 @@ const styles = StyleSheet.create({
   },
   hero: {
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 24,
+    gap: 4,
+    paddingVertical: 20,
   },
-  heroSymbol: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.textDim,
-    letterSpacing: 1,
-  },
-  heroPrice: {
-    fontSize: 44,
+  heroName: {
+    fontSize: 28,
     fontWeight: '700',
     color: colors.text,
-  },
-  heroChange: {
-    fontSize: 16,
-  },
-  heroLoading: {
-    fontSize: 15,
-    color: colors.textFaint,
-    fontStyle: 'italic',
-    paddingVertical: 12,
   },
   heroMeta: {
     fontSize: 12,
     color: colors.textFaint,
-    marginTop: 8,
+  },
+  tiles: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    justifyContent: 'space-between',
   },
   section: {
     gap: 10,
-  },
-  sectionHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
   },
   sectionTitle: {
     fontSize: 13,
@@ -413,43 +395,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
-  editLink: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.accent,
+  rows: {
+    padding: 0,
   },
-  econRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  weekNav: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  weekBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.surfaceAlt,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  weekLabel: {
-    fontSize: 13,
-    color: colors.text,
-    minWidth: 64,
-    textAlign: 'center',
-  },
-  listCard: {
-    padding: 4,
-  },
-  empty: {
-    fontSize: 14,
+  pageNote: {
+    fontSize: 12,
     color: colors.textFaint,
-    textAlign: 'center',
-    paddingVertical: 24,
+    lineHeight: 16,
+  },
+  sourceNote: {
+    fontSize: 12,
+    color: colors.textDim,
+    lineHeight: 16,
   },
   actions: {
     flexDirection: 'row',
@@ -457,6 +414,12 @@ const styles = StyleSheet.create({
   },
   actionBtn: {
     flex: 1,
+  },
+  actionsNote: {
+    fontSize: 12,
+    color: colors.textFaint,
+    lineHeight: 16,
+    marginTop: -8,
   },
   errorLine: {
     fontSize: 13,

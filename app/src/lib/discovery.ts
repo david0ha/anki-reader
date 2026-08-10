@@ -1,18 +1,21 @@
-// Resolving the device's base URL for the stock-control (STA) API.
+// Resolving the board's base URL for the control (STA) API.
 //
 // Three sources, in priority order:
 //   1. A persisted last-known base URL (src/lib/store.ts), saved on successful onboarding/connect.
-//   2. The mDNS default `http://tickerboard.local` (NSBonjourservices _http._tcp / Android mDNS).
+//   2. The mDNS default `http://obsidianboard.local` (NSBonjourservices _http._tcp / Android mDNS).
 //   3. A manual IP/host the user typed in settings.
 //
 // This module is intentionally pure (no AsyncStorage, no fetch) so the URL hygiene — scheme
 // defaulting, trimming, host/IP validation, trailing-slash stripping — is unit-testable.
 
-/** mDNS hostname advertised by the firmware (components/stock_api). */
-export const DEFAULT_HOST = 'tickerboard.local'
+// The firmware advertises `obsidianboard`, deliberately NOT the `tickerboard` of the project it
+// forked from — two boards answering one discovery probe on the same LAN is a fault nobody can
+// diagnose from the phone side.
+/** mDNS hostname advertised by the firmware (components/device_api). */
+export const DEFAULT_HOST = 'obsidianboard.local'
 export const DEFAULT_BASE_URL = `http://${DEFAULT_HOST}`
 
-// host:        a DNS label, a dotted hostname (e.g. tickerboard.local), or an IPv4 address.
+// host:        a DNS label, a dotted hostname (e.g. obsidianboard.local), or an IPv4 address.
 // We keep this permissive (any label.label…) but reject whitespace and obvious garbage so a
 // fat-fingered settings entry surfaces immediately instead of producing a dead base URL.
 const HOSTNAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/
@@ -122,11 +125,11 @@ const DISCOVER_TIMEOUT_MS = 2000
 /**
  * Find a reachable device base URL by probing each candidate's `GET /api/info` in parallel and
  * resolving to the FIRST one that answers ok (or null if none do). The device leaves AP mode after
- * onboarding and lives on the home LAN, reachable via its DHCP IP or mDNS `tickerboard.local`.
+ * onboarding and lives on the home LAN, reachable via its DHCP IP or mDNS `obsidianboard.local`.
  *
  * Dependency-light by design: just `fetch` (no native zeroconf library). Note that Android (esp.
  * older versions) often can't resolve `.local` mDNS names, which is why the persisted device IP
- * (from `/api/info`'s `ip` field) is the preferred candidate and `tickerboard.local` is the
+ * (from `/api/info`'s `ip` field) is the preferred candidate and `obsidianboard.local` is the
  * fallback — pass them in that order.
  *
  * Each candidate is normalized (scheme defaulting, trailing-slash stripping); invalid candidates

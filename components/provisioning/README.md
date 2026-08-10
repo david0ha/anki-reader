@@ -55,16 +55,17 @@ STA attempt fails and the portal comes back up.
 | GET    | `/api/status`     | `{"state":"idle\|connecting\|connected\|failed","ssid?","reason?"}` |
 | *      | *(other)*         | 302 → `http://192.168.4.1/` (OS captive-portal detection) |
 
-`POST /api/provision` also accepts the stock firmware's `tickers` / `finnhub_key` / `fmp_key` /
-`econ_url` fields from an un-updated companion app. Unknown fields are simply not read, so they are
-discarded and onboarding still works. See [../../docs/app-control.md](../../docs/app-control.md).
+`POST /api/provision` reads `ssid` / `ssid_manual` / `password` / `vault_url` and nothing else, so a
+phone still running the stock-ticker app's build — which POSTs `tickers` / `finnhub_key` / `fmp_key`
+/ `econ_url` — has those fields discarded and still completes onboarding. The body allowance stays
+generous for the same reason. See [../../docs/app-control.md](../../docs/app-control.md).
 
 A UDP DNS responder on port 53 answers every A query with `192.168.4.1` so phones pop the
 captive sheet automatically.
 
 ## NVS keys (namespace `prov`)
 
-`ssid` (str) · `pass` (str) · `loc` (str, free-text place name) · `force_ap` (u8, one-shot).
+`ssid` (str) · `pass` (str) · `vurl` (str, the vault snapshot URL) · `force_ap` (u8, one-shot).
 
 `prov_store_save` also erases `tickers` / `fh_key` / `fmp_key` / `econ_url` — keys the stock-ticker
 firmware wrote, one of which held a live API secret. A device upgraded from that build drops them on

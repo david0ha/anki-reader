@@ -32,7 +32,7 @@ export default function Index() {
   return (
     <Screen>
       <View style={styles.center}>
-        <Text style={styles.brand}>Ticker Board</Text>
+        <Text style={styles.brand}>Obsidian Board</Text>
         <ActivityIndicator color={colors.accent} />
       </View>
     </Screen>

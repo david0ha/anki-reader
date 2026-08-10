@@ -1,25 +1,23 @@
-// Client for the ESP32 Ticker Board's two HTTP/JSON APIs (firmware:
-// components/provisioning/prov_portal.c + components/stock_api). See docs/app-control.md for the
-// full contract — this file is the source-of-truth TypeScript mirror of it.
+// Client for the Obsidian Board's two HTTP/JSON APIs (firmware:
+// components/provisioning/prov_portal.c + components/device_api). See docs/app-control.md and
+// components/provisioning/README.md for the contract — this file is the TypeScript mirror of it,
+// and the only place in the app that knows a field name.
 //
-// [1] Provisioning (SoftAP, http://192.168.4.1): join the device's setup AP first.
+// [1] Provisioning (SoftAP, http://192.168.4.1): join the board's setup AP first.
 //   GET  /api/info       -> { deviceId, model, apSsid }
 //   GET  /api/scan       -> { networks: [{ ssid, rssi, secure }] }
-//   POST /api/provision  (x-www-form-urlencoded: ssid, password, tickers?, finnhub_key?, fmp_key?, econ_url?) -> 202 | 4xx
+//   POST /api/provision  (x-www-form-urlencoded: ssid, password, vault_url?) -> 202 | 4xx
 //   GET  /api/status     -> { state: idle|connecting|connected|failed, ssid?, reason? }
 //
-// [2] Stock control (STA, http://tickerboard.local or device IP): same home Wi-Fi.
-//   GET  /api/info            -> { deviceId, model, fw, ip }
-//   GET  /api/stock/state     -> StockState snapshot (polled by the dashboard)
-//   POST /api/stock/select    { index } | { symbol }
-//   POST /api/stock/page      { page }
-//   POST /api/stock/econ      { mode, week? }
-//   POST /api/stock/refresh   { all? }
-//   POST /api/stock/watchlist { tickers: string[] | string }
-//   POST /api/stock/keys      { finnhubKey?, fmpKey?, econUrl? }
-//   POST /api/stock/location  { location }   // free-text place; '' turns the weather widget off
+// [2] Control (STA, http://obsidianboard.local or the board's IP): same home Wi-Fi.
+//   GET  /api/info          -> { deviceId, model, fw, ip }
+//   GET  /api/state         -> DeviceState snapshot (polled by the dashboard)
+//   POST /api/refresh       -> poll the vault source now
+//   POST /api/page          { page: 0..3 }
+//   POST /api/vault         { url }      // '' switches the board to its built-in demo snapshot
+//   POST /api/display/test  -> run the e-Paper self-test sweep
 //
-// Every function takes an injectable fetch/clock so it can be unit-tested without a device.
+// Every function takes an injectable fetch/clock so it can be unit-tested without a board.
 
 // ---------------------------------------------------------------------------
 // Response types (one interface per documented payload).
@@ -52,82 +50,92 @@ export interface ProvisionStatus {
   reason?: string
 }
 
-/** One watchlist slot in GET /api/stock/state. valid=false / ageSec=-1 → never fetched yet. */
-export interface StockTicker {
-  symbol: string
+/**
+ * How the board's last poll of the vault URL went (`source.lastResult`). These are the firmware's
+ * own strings — the three failures are separate codes because they send the user to three
+ * different places: `transport` is DNS/connect/timeout (is the PC awake?), `http_status` means the
+ * server answered but not with a 2xx (is the path right?), and `bad_payload` means it answered 2xx
+ * with something that is not a vault snapshot (is that a captive portal?).
+ */
+export type VaultFetchResult =
+  | 'ok'
+  | 'no_url'
+  | 'transport'
+  | 'http_status'
+  | 'bad_payload'
+  /** Anything the firmware might add later — rendered as-is rather than crashing the row. */
+  | 'unknown'
+
+const FETCH_RESULTS: readonly string[] = ['ok', 'no_url', 'transport', 'http_status', 'bad_payload']
+
+/** The board's summary of the vault it is displaying (GET /api/state, `vault`). */
+export interface VaultSummary {
+  /** A snapshot has been parsed at least once. False on a board that has never had a good poll. */
   valid: boolean
-  price: number
-  change: number
+  /** The board is showing its built-in demo snapshot (no vault URL configured). */
+  demo: boolean
+  name: string
+  /** Clock time the snapshot was generated, as the producer reported it (e.g. "21:04"). */
+  generatedAt: string
+  notes: number
+  links: number
+  orphans: number
+  tags: number
+  addedToday: number
+  added7d: number
+  agents: number
+  agentsRunning: number
+  /** How many recent notes the board is showing (page 3, left column). */
+  recent: number
+  /** Total inbox items — may exceed what fits on the panel. */
+  inbox: number
+}
+
+/** Where the board is fetching from and how that is going (GET /api/state, `source`). */
+export interface VaultSource {
+  /** Configured snapshot URL. Empty string = unconfigured, running on the demo snapshot. */
+  url: string
+  lastResult: VaultFetchResult
+  pollSeconds: number
+  /** Seconds since the last SUCCESSFUL poll; -1 when none has ever succeeded. */
+  ageSeconds: number
+  /** The board has decided what it is showing is old and has badged it on the panel. */
+  stale: boolean
+}
+
+export interface BatteryInfo {
+  present: boolean
   percent: number
-  /** Seconds since the last successful fetch for this slot; -1 if never received. */
-  ageSec: number
+  millivolts: number
 }
 
 /**
- * Whether each data-source credential/URL is configured on the device (GET /api/stock/state).
- * The firmware reports presence only — it NEVER exposes the stored secret values. An unset key
- * means the device falls back to its compiled-in (Kconfig) default.
+ * Measured panel timings (GET /api/state, `panel`). Not decoration: the refresh policy for the
+ * 648x480 UC8179 is meant to be chosen from measurement rather than inherited from the 2.13" panel
+ * this firmware forked from, and reading them off a phone beats holding a serial cable to a board
+ * on a shelf. Zero means "not measured yet" — that refresh has not run since boot.
  */
-export interface StockKeys {
-  finnhub: boolean
-  fmp: boolean
-  econUrl: boolean
+export interface PanelInfo {
+  /** Partial refreshes since the last full one. The firmware promotes to full at its cap. */
+  partialChain: number
+  fullRefreshMs: number
+  partialRefreshMs: number
 }
 
-/** Environment block (sensors + battery) in GET /api/stock/state. */
-export interface StockEnv {
-  valid: boolean
-  tempC: number
-  humidity: number
-  batteryValid: boolean
-  batteryV: number
-  batteryPct: number
-}
-
-/**
- * Resolved current weather for the configured location (GET /api/stock/state). valid=false until
- * the device's first forecast lands (or when no location is set). `city` is the geocoded place name
- * the device resolved (e.g. "Seoul, KR"); `tempC` is the current temperature in °C.
- */
-export interface StockWeather {
-  valid: boolean
-  tempC: number
-  city: string
-}
-
-/** The live snapshot the dashboard polls (GET /api/stock/state). */
-export interface StockState {
+/** The live snapshot the dashboard polls (GET /api/state). */
+export interface DeviceState {
+  deviceId: string
   model: string
   fw: string
-  deviceId: string
-  /** Watchlist index currently shown on the device screen. */
-  index: number
-  /** On-screen view: 0=home 1=chart 2=news 3=metrics. */
+  ip: string
+  /** Page currently on the panel: 0=stats 1=graph 2=agents 3=notes. */
   page: number
-  /** Economic-calendar overlay enabled. */
-  econMode: boolean
-  /** Week offset for the econ overlay (0 = current). */
-  econWeek: number
-  /** Seconds between the device's automatic quote refreshes. */
-  refreshSeconds: number
-  /** Which data-source keys/URL are configured (presence only — never the secret values). */
-  keys: StockKeys
-  env: StockEnv
-  /** Configured weather location (free-text place, e.g. "Seoul"). Empty string = weather off. */
-  location: string
-  /** Resolved current weather for `location` (valid=false until the first forecast lands). */
-  weather: StockWeather
-  watchlist: StockTicker[]
-}
-
-/** Optional data-source credentials the app can set at provisioning time or update live. */
-export interface StockKeyInput {
-  /** Finnhub API key (stock quotes). Empty string clears it back to the compiled default. */
-  finnhubKey?: string
-  /** FMP API key / econ-proxy token (economic calendar). Empty string clears it. */
-  fmpKey?: string
-  /** Economic-calendar base URL (FMP direct or a self-hosted proxy). Empty string clears it. */
-  econUrl?: string
+  /** The board's own title for that page, in its UI language (Korean). */
+  pageTitle: string
+  vault: VaultSummary
+  source: VaultSource
+  battery: BatteryInfo
+  panel: PanelInfo
 }
 
 // ---------------------------------------------------------------------------
@@ -139,15 +147,14 @@ export type Esp32ErrorCode =
   | 'ssid_empty'
   | 'ssid_too_long'
   | 'pass_too_long'
+  // Shared by /api/provision and the control writes
+  | 'vault_url_invalid'
   | 'too_large'
   | 'read_error'
-  // POST /api/stock/* (4xx body `error`)
+  // POST /api/* (4xx body `error`)
   | 'bad_json'
-  | 'index_range'
   | 'page_range'
-  | 'symbol_not_found'
-  | 'empty_watchlist'
-  | 'too_many_tickers'
+  | 'busy'
   // Client-side
   | 'http_error'
   | 'network_error'
@@ -169,7 +176,7 @@ export class Esp32Error extends Error {
 // ---------------------------------------------------------------------------
 
 export interface Esp32ClientOptions {
-  /** Base URL of the device. Defaults to EXPO_PUBLIC_ESP32_BASE_URL or 192.168.4.1. */
+  /** Base URL of the board. Defaults to EXPO_PUBLIC_ESP32_BASE_URL or 192.168.4.1. */
   baseUrl?: string
   /** Injectable fetch (RN global by default). */
   fetchImpl?: typeof fetch
@@ -191,27 +198,22 @@ export interface WaitForConnectedResult extends ProvisionStatus {
   outcome: 'connected' | 'failed' | 'timeout'
 }
 
-/** Validation constants mirroring the firmware's prov_tickers_parse / watchlist rules. */
-export const TICKER_MAX_LEN = 12
-export const WATCHLIST_MAX = 16
-export const SYMBOL_RE = /^[A-Z0-9.-]+$/
+/** Mirrors the firmware's PROV_URL_MAX_LEN — the board rejects anything longer. */
+export const VAULT_URL_MAX_LEN = 128
 
-/**
- * The firmware's compiled-in default econ-calendar base URL (CONFIG_STOCK_ECON_BASE_URL). Shown as
- * the placeholder when the user can optionally override it, so they see the expected URL shape.
- */
-export const DEFAULT_ECON_URL = 'https://financialmodelingprep.com/stable/economic-calendar'
+/** Page count on the panel; the firmware rejects anything outside 0..PAGE_COUNT-1. */
+export const PAGE_COUNT = 4
 
 const DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_ESP32_BASE_URL || 'http://192.168.4.1'
 const DEFAULT_TIMEOUT_MS = 8000
 // The connect test briefly hops the SoftAP to the home AP's channel, dropping the phone for a
 // few seconds; poll generously so we ride through the gap and still catch the 'connected' read
-// before the device reboots out of AP mode.
+// before the board reboots out of AP mode.
 const DEFAULT_WAIT_TIMEOUT_MS = 45000
 const DEFAULT_POLL_INTERVAL_MS = 1500
 
-// Coercers — the device JSON is trusted but we defensively normalize so a missing/garbage field
-// never crashes a render. Mirrors masterham's String()/Number()/Boolean() defaulting.
+// Coercers — the board's JSON is trusted but we defensively normalize so a missing/garbage field
+// never crashes a render.
 function asNum(v: unknown, fallback = 0): number {
   const n = Number(v)
   return Number.isFinite(n) ? n : fallback
@@ -223,44 +225,55 @@ function asStr(v: unknown): string {
   return v == null ? '' : String(v)
 }
 
-function parseTicker(raw: Record<string, unknown>): StockTicker {
+function parseVault(raw: Record<string, unknown> | undefined): VaultSummary {
+  const v = raw ?? {}
   return {
-    symbol: asStr(raw.symbol),
-    valid: asBool(raw.valid),
-    price: asNum(raw.price),
-    change: asNum(raw.change),
-    percent: asNum(raw.percent),
-    ageSec: asNum(raw.ageSec, -1),
+    valid: asBool(v.valid),
+    demo: asBool(v.demo),
+    name: asStr(v.name),
+    generatedAt: asStr(v.generatedAt),
+    notes: asNum(v.notes),
+    links: asNum(v.links),
+    orphans: asNum(v.orphans),
+    tags: asNum(v.tags),
+    addedToday: asNum(v.addedToday),
+    added7d: asNum(v.added7d),
+    agents: asNum(v.agents),
+    agentsRunning: asNum(v.agentsRunning),
+    recent: asNum(v.recent),
+    inbox: asNum(v.inbox),
   }
 }
 
-function parseEnv(raw: Record<string, unknown> | undefined): StockEnv {
-  const e = raw ?? {}
+function parseSource(raw: Record<string, unknown> | undefined): VaultSource {
+  const s = raw ?? {}
+  const result = asStr(s.lastResult)
   return {
-    valid: asBool(e.valid),
-    tempC: asNum(e.tempC),
-    humidity: asNum(e.humidity),
-    batteryValid: asBool(e.batteryValid),
-    batteryV: asNum(e.batteryV),
-    batteryPct: asNum(e.batteryPct),
+    url: asStr(s.url),
+    lastResult: (FETCH_RESULTS.includes(result) ? result : 'unknown') as VaultFetchResult,
+    pollSeconds: asNum(s.pollSeconds),
+    // -1 is "never synced", which is NOT "synced zero seconds ago". Defaulting a missing field to
+    // 0 would draw a board that had just polled successfully when it never has.
+    ageSeconds: asNum(s.ageSeconds, -1),
+    stale: asBool(s.stale),
   }
 }
 
-function parseKeys(raw: Record<string, unknown> | undefined): StockKeys {
-  const k = raw ?? {}
+function parseBattery(raw: Record<string, unknown> | undefined): BatteryInfo {
+  const b = raw ?? {}
   return {
-    finnhub: asBool(k.finnhub),
-    fmp: asBool(k.fmp),
-    econUrl: asBool(k.econUrl),
+    present: asBool(b.present),
+    percent: asNum(b.percent),
+    millivolts: asNum(b.millivolts),
   }
 }
 
-function parseWeather(raw: Record<string, unknown> | undefined): StockWeather {
-  const w = raw ?? {}
+function parsePanel(raw: Record<string, unknown> | undefined): PanelInfo {
+  const p = raw ?? {}
   return {
-    valid: asBool(w.valid),
-    tempC: asNum(w.tempC),
-    city: asStr(w.city),
+    partialChain: asNum(p.partialChain),
+    fullRefreshMs: asNum(p.fullRefreshMs),
+    partialRefreshMs: asNum(p.partialRefreshMs),
   }
 }
 
@@ -291,9 +304,20 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
     return ((await res.json()) ?? {}) as Record<string, unknown>
   }
 
-  // Shared POST helper for the JSON control endpoints. Resolves on a 2xx body of {ok:true},
-  // otherwise reads the firmware's {ok:false,error:<code>} and throws a typed Esp32Error
-  // (falling back to http_error for non-JSON / fieldless error bodies).
+  // Read the firmware's {ok:false,error:<code>} off a failed response, falling back to http_error
+  // for a non-JSON or fieldless body. Shared by the JSON writes and the form POST.
+  async function errorCodeOf(res: Response): Promise<Esp32ErrorCode> {
+    try {
+      const j = (await res.json()) as { error?: string }
+      if (j && typeof j.error === 'string') return j.error as Esp32ErrorCode
+    } catch {
+      // non-JSON error body
+    }
+    return 'http_error'
+  }
+
+  // Shared POST helper for the JSON control endpoints. Resolves on a 2xx, otherwise throws a
+  // typed Esp32Error carrying the firmware's error code.
   async function postJson(path: string, body: unknown, label: string): Promise<void> {
     const res = await request(path, {
       method: 'POST',
@@ -301,14 +325,15 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
       body: JSON.stringify(body),
     })
     if (res.ok) return
-    let code: Esp32ErrorCode = 'http_error'
-    try {
-      const j = (await res.json()) as { error?: string }
-      if (j && typeof j.error === 'string') code = j.error as Esp32ErrorCode
-    } catch {
-      // non-JSON error body — keep http_error
-    }
-    throw new Esp32Error(code, `${label} responded ${res.status}`, res.status)
+    throw new Esp32Error(await errorCodeOf(res), `${label} responded ${res.status}`, res.status)
+  }
+
+  // The board's POST handlers take no body for /api/refresh and /api/display/test. Sending one
+  // anyway is harmless, but sending none keeps the request identical to the documented curl.
+  async function postEmpty(path: string, label: string): Promise<void> {
+    const res = await request(path, { method: 'POST' })
+    if (res.ok) return
+    throw new Esp32Error(await errorCodeOf(res), `${label} responded ${res.status}`, res.status)
   }
 
   // ----- Provisioning (SoftAP) -----
@@ -332,45 +357,25 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
       .filter((n) => n.ssid.length > 0)
   }
 
-  // POST the home-Wi-Fi credentials (and optional comma/space-separated watchlist, plus optional
-  // data-source keys/URL) as a url-encoded form, matching the firmware's HTML /save path. The
-  // firmware reads `finnhub_key`, `fmp_key` and `econ_url` (all optional) into NVS at provisioning
-  // time. Returns once the device has accepted them (202); the caller then polls waitForConnected.
-  async function provision(
-    ssid: string,
-    password: string,
-    tickers?: string,
-    opts?: StockKeyInput & {
-      /** Weather location (free-text place, e.g. "Seoul"). Empty/omitted leaves it unset. */
-      location?: string
-    },
-  ): Promise<void> {
-    let body = `ssid=${encodeURIComponent(ssid)}&password=${encodeURIComponent(password)}`
-    if (tickers != null && tickers.length > 0) {
-      body += `&tickers=${encodeURIComponent(tickers)}`
-    }
-    // Keys are optional. Only append a field the caller actually provided (undefined = leave the
-    // device's existing/default value). An empty string is meaningful — it clears the key — so it
-    // is sent through; the firmware treats blank as "fall back to the compiled default".
-    if (opts?.finnhubKey != null) body += `&finnhub_key=${encodeURIComponent(opts.finnhubKey)}`
-    if (opts?.fmpKey != null) body += `&fmp_key=${encodeURIComponent(opts.fmpKey)}`
-    if (opts?.econUrl != null) body += `&econ_url=${encodeURIComponent(opts.econUrl)}`
-    // Weather location is optional too; same "send what was provided" semantics as the keys above.
-    if (opts?.location != null) body += `&location=${encodeURIComponent(opts.location)}`
+  // POST the home-Wi-Fi credentials and the vault URL as a url-encoded form, matching the
+  // firmware's HTML /save path. Returns once the board has accepted them (202); the caller then
+  // polls waitForConnected.
+  //
+  // `vault_url` is always sent, empty string included. Provisioning REWRITES the whole stored
+  // config (the firmware zeroes its struct and fills it from the form), so omitting the field
+  // would still clear the URL — sending '' says that on purpose instead of relying on it.
+  async function provision(ssid: string, password: string, vaultUrl = ''): Promise<void> {
+    const body =
+      `ssid=${encodeURIComponent(ssid)}` +
+      `&password=${encodeURIComponent(password)}` +
+      `&vault_url=${encodeURIComponent(vaultUrl)}`
     const res = await request('/api/provision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
     })
     if (res.ok) return
-    let code: Esp32ErrorCode = 'http_error'
-    try {
-      const j = (await res.json()) as { error?: string }
-      if (j && typeof j.error === 'string') code = j.error as Esp32ErrorCode
-    } catch {
-      // non-JSON error body — keep http_error
-    }
-    throw new Esp32Error(code, `provision responded ${res.status}`, res.status)
+    throw new Esp32Error(await errorCodeOf(res), `provision responded ${res.status}`, res.status)
   }
 
   async function getStatus(): Promise<ProvisionStatus> {
@@ -383,9 +388,9 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
     }
   }
 
-  // Poll /api/status until the device reports connected/failed, or the overall budget elapses.
+  // Poll /api/status until the board reports connected/failed, or the overall budget elapses.
   // Transient fetch failures are tolerated (the SoftAP drops momentarily during the connect
-  // test's channel hop, and disappears entirely once the device reboots into station mode after
+  // test's channel hop, and disappears entirely once the board reboots into station mode after
   // a confirmed join) — so a 'connected' read is terminal success and we never require the AP to
   // stay reachable to the end.
   async function waitForConnected(
@@ -409,78 +414,49 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
     return { ...last, outcome: 'timeout' }
   }
 
-  // ----- Stock control (STA) -----
+  // ----- Control (STA) -----
 
-  // The live snapshot. Defensively coerced so a malformed/partial payload renders as
-  // "loading" slots rather than crashing the dashboard.
-  async function getState(): Promise<StockState> {
-    const j = await getJson('/api/stock/state', 'state')
-    const watchlist = Array.isArray(j.watchlist)
-      ? (j.watchlist as Array<Record<string, unknown>>).map(parseTicker)
-      : []
+  // The live snapshot. Defensively coerced so a malformed/partial payload renders as empty
+  // counters rather than crashing the dashboard.
+  async function getState(): Promise<DeviceState> {
+    const j = await getJson('/api/state', 'state')
     return {
+      deviceId: asStr(j.deviceId),
       model: asStr(j.model),
       fw: asStr(j.fw),
-      deviceId: asStr(j.deviceId),
-      index: asNum(j.index),
+      ip: asStr(j.ip),
       page: asNum(j.page),
-      econMode: asBool(j.econMode),
-      econWeek: asNum(j.econWeek),
-      refreshSeconds: asNum(j.refreshSeconds),
-      keys: parseKeys(j.keys as Record<string, unknown> | undefined),
-      env: parseEnv(j.env as Record<string, unknown> | undefined),
-      location: asStr(j.location),
-      weather: parseWeather(j.weather as Record<string, unknown> | undefined),
-      watchlist,
+      pageTitle: asStr(j.pageTitle),
+      vault: parseVault(j.vault as Record<string, unknown> | undefined),
+      source: parseSource(j.source as Record<string, unknown> | undefined),
+      battery: parseBattery(j.battery as Record<string, unknown> | undefined),
+      panel: parsePanel(j.panel as Record<string, unknown> | undefined),
     }
   }
 
-  // Switch the on-screen ticker. Pass either a watchlist index or a symbol (the firmware
-  // resolves the symbol to an index); symbol_not_found / index_range are surfaced as typed errors.
-  async function select(target: { index: number } | { symbol: string }): Promise<void> {
-    return postJson('/api/stock/select', target, 'select')
-  }
-
-  // Switch the on-screen view (0=home 1=chart 2=news 3=metrics).
+  // Switch the page on the panel (0=stats 1=graph 2=agents 3=notes). Always a full refresh on the
+  // board, so it takes a few seconds to actually appear.
   async function setPage(page: number): Promise<void> {
-    return postJson('/api/stock/page', { page }, 'page')
+    return postJson('/api/page', { page }, 'page')
   }
 
-  // Toggle the economic-calendar overlay. When enabling, an optional week offset (0=current)
-  // navigates between weeks; week is ignored when disabling.
-  async function setEcon(mode: boolean, week?: number): Promise<void> {
-    const body = mode ? { mode, week: week ?? 0 } : { mode: false }
-    return postJson('/api/stock/econ', body, 'econ')
+  // Poll the vault source now instead of waiting out the interval. The board only refreshes the
+  // panel when what comes back differs from what is already on the glass, so this is safe to call
+  // repeatedly — a no-change refresh costs nothing and flashes nothing.
+  async function refresh(): Promise<void> {
+    return postEmpty('/api/refresh', 'refresh')
   }
 
-  // Force a quote re-fetch for the current ticker, or all of them when `all` is true.
-  async function refresh(all = false): Promise<void> {
-    return postJson('/api/stock/refresh', { all }, 'refresh')
+  // Point the board at a different snapshot URL (NVS-persisted, applied live, no reboot). An empty
+  // string is valid and meaningful: it switches the board to its built-in demo snapshot.
+  async function setVaultUrl(url: string): Promise<void> {
+    return postJson('/api/vault', { url }, 'vault')
   }
 
-  // Replace the watchlist (NVS-persisted, applied live without a reboot). Accepts an array or a
-  // comma/space-separated string; the firmware normalizes via prov_tickers_parse.
-  async function setWatchlist(tickers: string[] | string): Promise<void> {
-    return postJson('/api/stock/watchlist', { tickers }, 'watchlist')
-  }
-
-  // Update the data-source keys/URL live (NVS-persisted, re-fetches immediately). Sends ONLY the
-  // fields the caller provided — an omitted field is left untouched on the device. An empty-string
-  // value is a valid "clear this key" request (the device falls back to its compiled default) and
-  // is sent through. The firmware never echoes the stored values back; success is 200 {ok:true}.
-  async function setKeys(keys: StockKeyInput): Promise<void> {
-    const body: Record<string, string> = {}
-    if (keys.finnhubKey != null) body.finnhubKey = keys.finnhubKey
-    if (keys.fmpKey != null) body.fmpKey = keys.fmpKey
-    if (keys.econUrl != null) body.econUrl = keys.econUrl
-    return postJson('/api/stock/keys', body, 'keys')
-  }
-
-  // Set the weather location live (NVS-persisted, the device re-geocodes via Open-Meteo with no
-  // reboot). An empty string is valid — it turns the weather widget off — and is sent through.
-  // Success is 200 {ok:true}; a bad body is surfaced as a typed Esp32Error ('bad_json').
-  async function setLocation(location: string): Promise<void> {
-    return postJson('/api/stock/location', { location }, 'location')
+  // Run the e-Paper self-test sweep. Tens of seconds of full refreshes on the board; the request
+  // returns as soon as it is queued, not when the sweep finishes.
+  async function displayTest(): Promise<void> {
+    return postEmpty('/api/display/test', 'display test')
   }
 
   return {
@@ -491,15 +467,12 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
     provision,
     getStatus,
     waitForConnected,
-    // stock control
+    // control
     getState,
-    select,
     setPage,
-    setEcon,
     refresh,
-    setWatchlist,
-    setKeys,
-    setLocation,
+    setVaultUrl,
+    displayTest,
   }
 }
 

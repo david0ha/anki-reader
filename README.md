@@ -145,7 +145,7 @@ sim/                    desktop simulator — renders the real UI to 648×480 an
 tools/
   mock_vault_server.py  the vault contract, as a runnable server
   gen_fonts.py          regenerates components/vault_core/fonts/
-app/                    React Native companion app — inherited, not yet ported
+app/                    React Native companion app — setup + control over the LAN
 third_party/cJSON/      vendored (ESP-IDF v6 dropped cJSON from core)
 ```
 

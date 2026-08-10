@@ -14,11 +14,13 @@ import { Screen } from '../components/Screen'
 import { BackButton } from '../components/BackButton'
 import { Button } from '../components/Button'
 import { Card } from '../components/Card'
-import { LocationAutocomplete } from '../components/LocationAutocomplete'
+import { InfoRow } from '../components/InfoRow'
 import { useDevice } from '../lib/device'
-import { type DeviceInfo, type StockKeys, type StockWeather } from '../lib/esp32'
+import { Esp32Error, type DeviceInfo, type DeviceState } from '../lib/esp32'
 import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../lib/discovery'
 import { clearDeviceBaseUrl, getDeviceBaseUrl, resetOnboarding } from '../lib/store'
+import { validateVaultUrl, vaultUrlErrorMessage } from '../lib/vaulturl'
+import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../lib/format'
 import { colors, layout, radius, space } from '../theme'
 
 export default function Settings() {
@@ -31,16 +33,12 @@ export default function Settings() {
   const [hostError, setHostError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
-  // Which data-source keys are currently configured on the device (presence only — the firmware
-  // never exposes the stored values). Loaded from GET /api/stock/state alongside device info.
-  const [keys, setKeysState] = useState<StockKeys | null>(null)
+  // The board's own view of its source — the URL it is actually using and how the last poll went.
+  // Unlike a write-only secret, the URL is plain text the board echoes back, so the editor below
+  // can be prefilled with it and the user can see what they are changing.
+  const [source, setSource] = useState<DeviceState['source'] | null>(null)
 
-  // Configured weather location + the device's resolved current weather (GET /api/stock/state).
-  // Unlike keys, the location is plain text the device echoes back, so we can prefill the editor.
-  const [location, setLocationState] = useState<string | null>(null)
-  const [weather, setWeatherState] = useState<StockWeather | null>(null)
-
-  // Reconnect ("find device") UI state.
+  // Reconnect ("find board") UI state.
   const [reconnecting, setReconnecting] = useState(false)
   const [reconnectMsg, setReconnectMsg] = useState<string | null>(null)
 
@@ -57,15 +55,11 @@ export default function Settings() {
     } catch {
       setInfoError(true)
     }
-    // Best-effort: also pull which keys are set (data-sources) plus the weather location/resolved
-    // weather so those sections reflect the device.
+    // Best-effort: also pull the configured source so the editor below reflects the board.
     try {
-      const st = await client.getState()
-      setKeysState(st.keys)
-      setLocationState(st.location)
-      setWeatherState(st.weather)
+      setSource((await client.getState()).source)
     } catch {
-      // leave the last-known values; the sections just show "unknown" until a state read succeeds
+      // leave the last-known value; the section just shows "unknown" until a state read succeeds
     }
   }, [client])
 
@@ -73,14 +67,14 @@ export default function Settings() {
     loadInfo()
   }, [loadInfo])
 
-  // Re-probe the LAN for the board (saved IP + tickerboard.local) and persist whichever answers.
-  // Used after the user rejoins their home Wi-Fi and the saved address has gone stale.
+  // Re-probe the LAN for the board (its reported IP, the saved address, the mDNS name) and persist
+  // whichever answers. Used after the user rejoins their home Wi-Fi or the board's lease changes.
   const reconnect = useCallback(async () => {
     setReconnecting(true)
     setReconnectMsg(null)
     try {
-      const saved = await getDeviceBaseUrl()
-      const found = await discoverDevice([info?.ip, saved, `http://${DEFAULT_HOST}`])
+      const savedUrl = await getDeviceBaseUrl()
+      const found = await discoverDevice([info?.ip, savedUrl, `http://${DEFAULT_HOST}`])
       if (found) {
         await setBaseUrl(found)
         setReconnectMsg(`Found your board at ${found.replace(/^https?:\/\//, '')}.`)
@@ -92,49 +86,6 @@ export default function Settings() {
       setReconnecting(false)
     }
   }, [info?.ip, setBaseUrl, loadInfo])
-
-  const updateKey = useCallback(
-    async (patch: Parameters<NonNullable<typeof client>['setKeys']>[0]): Promise<boolean> => {
-      if (!client) return false
-      try {
-        await client.setKeys(patch)
-        // Re-read presence so the "set / not set" labels reflect the change.
-        try {
-          setKeysState((await client.getState()).keys)
-        } catch {
-          // ignore — the write succeeded; presence will refresh on the next load
-        }
-        return true
-      } catch {
-        return false
-      }
-    },
-    [client],
-  )
-
-  // Set the weather location live (empty string clears it → weather widget off). Re-reads state so
-  // the resolved-weather line refreshes; the device re-geocodes asynchronously so it may stay
-  // invalid for a poll or two.
-  const updateLocation = useCallback(
-    async (next: string): Promise<boolean> => {
-      if (!client) return false
-      try {
-        await client.setLocation(next)
-        try {
-          const st = await client.getState()
-          setLocationState(st.location)
-          setWeatherState(st.weather)
-        } catch {
-          // write succeeded; the value will refresh on the next load
-          setLocationState(next)
-        }
-        return true
-      } catch {
-        return false
-      }
-    },
-    [client],
-  )
 
   const applyHost = async () => {
     setSaved(false)
@@ -152,7 +103,7 @@ export default function Settings() {
   }
 
   const reonboard = async () => {
-    // Drop the saved device + onboarding flag, then restart the wizard.
+    // Drop the saved board + onboarding flag, then restart the wizard.
     await clearDeviceBaseUrl()
     await resetOnboarding()
     router.replace('/onboarding/turn-on')
@@ -168,8 +119,8 @@ export default function Settings() {
         </View>
 
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
-          {/* Device identity */}
-          <Section title="Device">
+          {/* Board identity */}
+          <Section title="Board">
             <Card style={styles.infoCard}>
               {infoError ? (
                 <Pressable onPress={loadInfo} accessibilityRole="button" style={styles.infoRetry}>
@@ -186,10 +137,54 @@ export default function Settings() {
             </Card>
           </Section>
 
+          {/* The vault snapshot URL — the one setting that decides what the board shows. */}
+          <Section title="Vault source">
+            <Text style={styles.help}>
+              The address the board fetches its snapshot from. Clear it and save to put the board
+              back on its built-in demo data.
+            </Text>
+            {source ? (
+              <Card style={styles.infoCard}>
+                <InfoRow label="Last poll" value={fetchResultLabel(source.lastResult)} />
+                <InfoRow label="Last success" value={formatAge(source.ageSeconds)} />
+                <InfoRow label="Polls" value={formatInterval(source.pollSeconds)} last />
+              </Card>
+            ) : null}
+            {source && source.lastResult !== 'ok' ? (
+              <Text style={styles.help}>{fetchResultMessage(source.lastResult)}</Text>
+            ) : null}
+            <VaultUrlEditor
+              // Remount when the board reports a different URL, so the field picks up the new
+              // value instead of holding a draft the board has already moved past.
+              key={source?.url ?? ''}
+              initial={source?.url ?? ''}
+              onSave={async (next) => {
+                if (!client) return 'Not connected to the board.'
+                try {
+                  await client.setVaultUrl(next)
+                } catch (e) {
+                  if (e instanceof Esp32Error && e.code === 'vault_url_invalid') {
+                    return 'The board wouldn’t accept that address.'
+                  }
+                  return 'Couldn’t update. Please try again.'
+                }
+                // Re-read so the rows above reflect the change. The board polls the new URL
+                // immediately, but the result lands a moment later — the next poll of this screen
+                // (or a pull-to-refresh on the dashboard) will show it.
+                try {
+                  setSource((await client.getState()).source)
+                } catch {
+                  // the write succeeded; the value refreshes on the next load
+                }
+                return null
+              }}
+            />
+          </Section>
+
           {/* Manual host / IP override */}
           <Section title="Connection">
             <Text style={styles.help}>
-              The app finds your board at tickerboard.local. If that doesn’t work on your network,
+              The app finds your board at {DEFAULT_HOST}. If that doesn’t work on your network,
               enter its IP address or hostname here.
             </Text>
             <View style={styles.hostRow}>
@@ -200,7 +195,7 @@ export default function Settings() {
                   setHostError(null)
                   setSaved(false)
                 }}
-                placeholder="192.168.0.42 or tickerboard.local"
+                placeholder={`192.168.0.42 or ${DEFAULT_HOST}`}
                 placeholderTextColor={colors.textFaint}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -217,59 +212,7 @@ export default function Settings() {
               Rejoined your home Wi-Fi? Find the board automatically on this network.
             </Text>
             {reconnectMsg ? <Text style={styles.saved}>{reconnectMsg}</Text> : null}
-            <Button
-              label="Find device"
-              variant="secondary"
-              loading={reconnecting}
-              onPress={reconnect}
-            />
-          </Section>
-
-          {/* Data-source keys — write-only (the device never returns stored values). */}
-          <Section title="Data sources">
-            <Text style={styles.help}>
-              Keys are stored on the board, never shown back. Enter a new value to replace one; leave
-              blank to keep the current setting.
-            </Text>
-            <KeyRow
-              label="Finnhub key"
-              isSet={keys?.finnhub}
-              placeholder="enter new Finnhub key"
-              onSave={(v) => updateKey({ finnhubKey: v })}
-            />
-            <KeyRow
-              label="FMP key"
-              isSet={keys?.fmp}
-              placeholder="enter new FMP key"
-              onSave={(v) => updateKey({ fmpKey: v })}
-            />
-            <KeyRow
-              label="Economic calendar URL"
-              isSet={keys?.econUrl}
-              placeholder="enter new calendar URL"
-              keyboardType="url"
-              onSave={(v) => updateKey({ econUrl: v })}
-            />
-          </Section>
-
-          {/* Weather location — plain text, prefilled with the current value. */}
-          <Section title="Weather">
-            <Text style={styles.help}>
-              Show local weather on the board's home screen. Enter a place like “Seoul” or
-              “Paris, FR”. Leave it blank and tap Save to turn the weather widget off.
-            </Text>
-            {weather?.valid ? (
-              <Text style={styles.saved}>
-                {weather.city} · {Math.round(weather.tempC)}°C
-              </Text>
-            ) : location ? (
-              <Text style={styles.help}>Resolving weather for “{location}”…</Text>
-            ) : null}
-            <LocationAutocomplete
-              key={location ?? ''}
-              initial={location ?? ''}
-              onSave={updateLocation}
-            />
+            <Button label="Find board" variant="secondary" loading={reconnecting} onPress={reconnect} />
           </Section>
 
           {/* Re-run onboarding */}
@@ -282,17 +225,6 @@ export default function Settings() {
   )
 }
 
-function InfoRow({ label, value, last = false }: { label: string; value: string; last?: boolean }) {
-  return (
-    <View style={[styles.infoRow, !last && styles.infoRowBordered]}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue} numberOfLines={1}>
-        {value}
-      </Text>
-    </View>
-  )
-}
-
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.section}>
@@ -302,78 +234,73 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-// One write-only data-source key: shows whether it's currently set, and a field to replace it.
-// We never receive the stored value, so the input starts empty and only sends on an explicit Save.
-// An empty value is a valid "clear this key" request (the device reverts to its compiled default).
-function KeyRow({
-  label,
-  isSet,
-  placeholder,
-  keyboardType,
+/**
+ * The snapshot-URL field. Prefilled with what the board reports, validated locally against the
+ * firmware's own rule before any request goes out, and explicit about the empty case: clearing the
+ * field and saving is a real, supported action (back to the demo snapshot), not a mistake.
+ *
+ * `onSave` returns null on success or a sentence to show on failure.
+ */
+function VaultUrlEditor({
+  initial,
   onSave,
 }: {
-  label: string
-  /** undefined = unknown (device unreachable); true/false = set / not set. */
-  isSet?: boolean
-  placeholder: string
-  keyboardType?: 'url'
-  onSave: (value: string) => Promise<boolean>
+  initial: string
+  onSave: (value: string) => Promise<string | null>
 }) {
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(initial)
   const [saving, setSaving] = useState(false)
   const [done, setDone] = useState(false)
-  const [failed, setFailed] = useState(false)
-  // Keys + the proxy URL (which can embed a token) are masked by default; reveal to check a paste.
-  const [reveal, setReveal] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
 
-  const status = isSet === undefined ? 'unknown' : isSet ? 'set' : 'not set'
+  const result = validateVaultUrl(draft)
+  const localError = !result.ok ? vaultUrlErrorMessage(result) : null
+  const dirty = draft.trim() !== initial.trim()
 
   const save = async () => {
+    if (!result.ok) return
     setSaving(true)
     setDone(false)
-    setFailed(false)
-    const ok = await onSave(draft.trim())
+    setFailure(null)
+    const err = await onSave(result.value ?? '')
     setSaving(false)
-    if (ok) {
-      setDone(true)
-      setDraft('')
-    } else {
-      setFailed(true)
-    }
+    if (err) setFailure(err)
+    else setDone(true)
   }
 
   return (
-    <View style={styles.keyRow}>
-      <View style={styles.keyHead}>
-        <Text style={styles.keyLabel}>{label}</Text>
-        <Text style={[styles.keyStatus, isSet ? styles.keyStatusSet : undefined]}>{status}</Text>
-      </View>
+    <View style={styles.field}>
       <View style={styles.hostRow}>
         <TextInput
           value={draft}
           onChangeText={(t) => {
             setDraft(t)
             setDone(false)
-            setFailed(false)
+            setFailure(null)
           }}
-          placeholder={placeholder}
+          placeholder="http://mymac.local:8123/vault.json"
           placeholderTextColor={colors.textFaint}
           autoCapitalize="none"
           autoCorrect={false}
-          keyboardType={reveal ? keyboardType : undefined}
-          secureTextEntry={!reveal}
-          autoComplete="off"
-          textContentType="none"
+          keyboardType="url"
           style={styles.hostInput}
           onSubmitEditing={save}
         />
-        <Pressable onPress={() => setReveal((v) => !v)} hitSlop={8} style={styles.keyReveal}>
-          <Text style={styles.keyRevealText}>{reveal ? 'Hide' : 'Show'}</Text>
-        </Pressable>
       </View>
-      {failed ? <Text style={styles.error}>Couldn’t update. Please try again.</Text> : null}
-      {done ? <Text style={styles.saved}>Updated.</Text> : null}
-      <Button label="Update" variant="secondary" loading={saving} onPress={save} />
+      {localError ? <Text style={styles.error}>{localError}</Text> : null}
+      {failure ? <Text style={styles.error}>{failure}</Text> : null}
+      {done ? (
+        <Text style={styles.saved}>
+          {draft.trim() ? 'Saved. The board is fetching it now.' : 'Cleared — the board is back on demo data.'}
+        </Text>
+      ) : null}
+      <Button
+        label={dirty && !draft.trim() ? 'Clear and use demo data' : 'Save address'}
+        variant="secondary"
+        disabled={!result.ok || !dirty}
+        loading={saving}
+        onPress={save}
+      />
     </View>
   )
 }
@@ -398,6 +325,7 @@ const styles = StyleSheet.create({
   body: {
     paddingHorizontal: layout.gutter,
     paddingTop: 12,
+    paddingBottom: 32,
     gap: space.xl,
   },
   section: {
@@ -413,28 +341,6 @@ const styles = StyleSheet.create({
   infoCard: {
     padding: 0,
   },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-  },
-  infoRowBordered: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  infoLabel: {
-    fontSize: 14,
-    color: colors.textDim,
-  },
-  infoValue: {
-    fontSize: 14,
-    color: colors.text,
-    flexShrink: 1,
-    textAlign: 'right',
-    marginLeft: 16,
-  },
   infoRetry: {
     padding: 16,
   },
@@ -447,6 +353,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textFaint,
     lineHeight: 18,
+  },
+  field: {
+    gap: 8,
   },
   hostRow: {
     flexDirection: 'row',
@@ -462,41 +371,12 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 16,
   },
-  keyReveal: {
-    justifyContent: 'center',
-    paddingLeft: 12,
-  },
-  keyRevealText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.accent,
-  },
   error: {
     fontSize: 13,
     color: colors.down,
   },
   saved: {
     fontSize: 13,
-    color: colors.up,
-  },
-  keyRow: {
-    gap: 8,
-  },
-  keyHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  keyLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  keyStatus: {
-    fontSize: 12,
-    color: colors.textFaint,
-  },
-  keyStatusSet: {
     color: colors.up,
   },
 })

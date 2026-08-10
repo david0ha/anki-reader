@@ -123,7 +123,7 @@ components/
   device_api/             STA-mode HTTP/JSON control server + mDNS (obsidianboard.local)
   board_io/               battery ADC
   buttons/                KEY0/1/2 + BOOT edge events
-app/                      React Native companion app — inherited from the fork, NOT yet ported
+app/                      React Native companion app — setup + control over the LAN
 sim/                      desktop simulator — renders the real UI to 648x480 and asserts on it
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 tools/

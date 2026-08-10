@@ -6,21 +6,9 @@ interface OnboardingContextValue extends OnboardingState {
   setSelectedNetwork: (ssid: string | null) => void
   setSelectedSecured: (secured: boolean | undefined) => void
   setPassword: (password: string) => void
-  /** Free-text watchlist the user enters on the password step; sent with /api/provision. */
-  tickers: string
-  setTickers: (tickers: string) => void
-  // Optional data-source keys/URL entered on the keys step, sent with /api/provision so they land
-  // in NVS at setup time (empty = the device keeps its compiled default). Never displayed back.
-  finnhubKey: string
-  setFinnhubKey: (key: string) => void
-  fmpKey: string
-  setFmpKey: (key: string) => void
-  econUrl: string
-  setEconUrl: (url: string) => void
-  /** Optional weather location (free-text place) sent with /api/provision; empty = weather off. */
-  location: string
-  setLocation: (location: string) => void
-  /** Identity read from the device's GET /api/info, used to seed the dashboard on completion. */
+  /** The vault snapshot URL entered on the vault step; sent with /api/provision. */
+  setVaultUrl: (url: string) => void
+  /** Identity read from the board's GET /api/info, used to seed the dashboard on completion. */
   deviceInfo: DeviceInfo | null
   setDeviceInfo: (info: DeviceInfo | null) => void
   reset: () => void
@@ -32,11 +20,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null)
   const [selectedSecured, setSelectedSecured] = useState<boolean | undefined>(undefined)
   const [password, setPassword] = useState('')
-  const [tickers, setTickers] = useState('')
-  const [finnhubKey, setFinnhubKey] = useState('')
-  const [fmpKey, setFmpKey] = useState('')
-  const [econUrl, setEconUrl] = useState('')
-  const [location, setLocation] = useState('')
+  const [vaultUrl, setVaultUrl] = useState('')
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null)
 
   const value = useMemo<OnboardingContextValue>(
@@ -44,34 +28,22 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       selectedNetwork,
       selectedSecured,
       password,
-      tickers,
-      finnhubKey,
-      fmpKey,
-      econUrl,
-      location,
+      vaultUrl,
       deviceInfo,
       setSelectedNetwork,
       setSelectedSecured,
       setPassword,
-      setTickers,
-      setFinnhubKey,
-      setFmpKey,
-      setEconUrl,
-      setLocation,
+      setVaultUrl,
       setDeviceInfo,
       reset: () => {
         setSelectedNetwork(null)
         setSelectedSecured(undefined)
         setPassword('')
-        setTickers('')
-        setFinnhubKey('')
-        setFmpKey('')
-        setEconUrl('')
-        setLocation('')
+        setVaultUrl('')
         setDeviceInfo(null)
       },
     }),
-    [selectedNetwork, selectedSecured, password, tickers, finnhubKey, fmpKey, econUrl, location, deviceInfo],
+    [selectedNetwork, selectedSecured, password, vaultUrl, deviceInfo],
   )
 
   return <OnboardingContext.Provider value={value}>{children}</OnboardingContext.Provider>

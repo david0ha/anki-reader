@@ -1,5 +1,5 @@
-// Design tokens for the Ticker Board companion app. Dark, terminal-flavored palette —
-// monochrome surfaces with a single accent and the universal up/down market colors.
+// Design tokens for the Obsidian Board companion app. Dark, terminal-flavored palette —
+// monochrome surfaces with a single accent, plus a green/red/amber status triad.
 
 export const colors = {
   bg: '#0B0E11', // app background — near-black

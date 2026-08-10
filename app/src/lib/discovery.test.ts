@@ -3,7 +3,7 @@ import { DEFAULT_BASE_URL, discoverDevice, normalizeBaseUrl, resolveBaseUrl } fr
 
 describe('normalizeBaseUrl', () => {
   it('defaults the scheme to http:// for a bare host', () => {
-    expect(normalizeBaseUrl('tickerboard.local')).toEqual({ ok: true, value: 'http://tickerboard.local' })
+    expect(normalizeBaseUrl('obsidianboard.local')).toEqual({ ok: true, value: 'http://obsidianboard.local' })
   })
 
   it('defaults the scheme for a bare IPv4', () => {
@@ -15,9 +15,9 @@ describe('normalizeBaseUrl', () => {
   })
 
   it('lower-cases the host and strips a trailing slash + path', () => {
-    expect(normalizeBaseUrl('http://TickerBoard.local/api/')).toEqual({
+    expect(normalizeBaseUrl('http://ObsidianBoard.local/api/')).toEqual({
       ok: true,
-      value: 'http://tickerboard.local',
+      value: 'http://obsidianboard.local',
     })
   })
 
@@ -85,7 +85,7 @@ describe('discoverDevice', () => {
 
   it('resolves the first candidate when the saved IP is reachable', async () => {
     const { fetchImpl, calls } = fakeFetch({ 'http://192.168.0.42/api/info': true })
-    const found = await discoverDevice(['192.168.0.42', 'http://tickerboard.local'], { fetchImpl })
+    const found = await discoverDevice(['192.168.0.42', 'http://obsidianboard.local'], { fetchImpl })
     expect(found).toBe('http://192.168.0.42')
     expect(calls).toContain('http://192.168.0.42/api/info')
   })
@@ -93,27 +93,27 @@ describe('discoverDevice', () => {
   it('falls through to the second candidate when the first fails', async () => {
     const { fetchImpl } = fakeFetch({
       'http://192.168.0.42/api/info': new TypeError('Network request failed'),
-      'http://tickerboard.local/api/info': true,
+      'http://obsidianboard.local/api/info': true,
     })
-    const found = await discoverDevice(['192.168.0.42', 'http://tickerboard.local'], { fetchImpl })
-    expect(found).toBe('http://tickerboard.local')
+    const found = await discoverDevice(['192.168.0.42', 'http://obsidianboard.local'], { fetchImpl })
+    expect(found).toBe('http://obsidianboard.local')
   })
 
   it('prefers the earlier candidate even if a later one also succeeds', async () => {
     const { fetchImpl } = fakeFetch({
       'http://192.168.0.42/api/info': true,
-      'http://tickerboard.local/api/info': true,
+      'http://obsidianboard.local/api/info': true,
     })
-    const found = await discoverDevice(['192.168.0.42', 'http://tickerboard.local'], { fetchImpl })
+    const found = await discoverDevice(['192.168.0.42', 'http://obsidianboard.local'], { fetchImpl })
     expect(found).toBe('http://192.168.0.42')
   })
 
   it('returns null when every candidate fails', async () => {
     const { fetchImpl } = fakeFetch({
       'http://192.168.0.42/api/info': new TypeError('boom'),
-      'http://tickerboard.local/api/info': false,
+      'http://obsidianboard.local/api/info': false,
     })
-    const found = await discoverDevice(['192.168.0.42', 'http://tickerboard.local'], { fetchImpl })
+    const found = await discoverDevice(['192.168.0.42', 'http://obsidianboard.local'], { fetchImpl })
     expect(found).toBeNull()
   })
 
@@ -125,12 +125,12 @@ describe('discoverDevice', () => {
   })
 
   it('de-dupes equivalent candidates so a host is probed once', async () => {
-    const { fetchImpl, calls } = fakeFetch({ 'http://tickerboard.local/api/info': true })
+    const { fetchImpl, calls } = fakeFetch({ 'http://obsidianboard.local/api/info': true })
     const found = await discoverDevice(
-      ['tickerboard.local', 'http://tickerboard.local/'],
+      ['obsidianboard.local', 'http://obsidianboard.local/'],
       { fetchImpl },
     )
-    expect(found).toBe('http://tickerboard.local')
+    expect(found).toBe('http://obsidianboard.local')
     expect(calls.length).toBe(1)
   })
 })

@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "Ticker Board",
-    "slug": "ticker-board",
-    "scheme": "tickerboard",
+    "name": "Obsidian Board",
+    "slug": "obsidian-board",
+    "scheme": "obsidianboard",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.tickerboard.app",
+      "bundleIdentifier": "com.obsidianboard.app",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Ticker Board connects to your ESP32 over your local Wi-Fi to set it up and control the on-screen ticker.",
+        "NSLocalNetworkUsageDescription": "Obsidian Board connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
         "NSBonjourServices": ["_http._tcp"],
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
@@ -19,7 +19,7 @@
     },
     "android": {
       "predictiveBackGestureEnabled": false,
-      "package": "com.tickerboard.app",
+      "package": "com.obsidianboard.app",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"
