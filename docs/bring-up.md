@@ -18,9 +18,24 @@ idf.py build
 ./tools/flash.sh                    # finds the port, flashes, opens the monitor
 ```
 
-If `flash.sh` says no port appeared, the two causes in order of likelihood are a **charge-only USB
-cable** (extremely common, and indistinguishable from a dead board — the LED still lights) and the
-board not being in download mode. For the second: hold **BOOT**, tap **RESET**, release BOOT, retry.
+If `flash.sh` says no port appeared, find out **which** of the two failures it is before touching
+anything, because they have nothing in common:
+
+```bash
+ls /dev/cu.*                 # is there a serial port?
+ioreg -p IOUSB               # is there a USB device at all?
+```
+
+A healthy board shows a `/dev/cu.usbmodem*` (native USB Serial/JTAG) and a device hanging off one of
+the `AppleT8132USBXHCI` controllers.
+
+| `ioreg` shows | meaning |
+|---|---|
+| controllers only, no child devices | the host is not seeing a device. **Charge-only USB cable** is by far the most common cause — the data pairs are absent, so the Mac cannot tell it from an empty port, and the board's LED still lights either way. Then: not plugged in, a dead hub port, or a dead board. |
+| a device, but no `/dev/cu.*` for it | it enumerates but exposes no serial interface — usually stuck in download mode from a previous attempt, or a bridge chip whose driver is missing |
+
+Swap the cable for one you have moved data over before doing anything else. If a device appears and
+flashing still fails, force download mode: hold **BOOT**, tap **RESET**, release BOOT, retry.
 
 ## 2. Read the boot log in this order
 
