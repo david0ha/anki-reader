@@ -56,6 +56,11 @@ static const char *TAG = "epd";
 
 static esp_lcd_panel_io_handle_t s_io;
 static uint8_t                  *s_fb;
+/* One row of DMA-capable scratch, for priming a plane with a constant. A static
+ * array would very probably work — .bss is internal SRAM — but "probably
+ * DMA-capable and probably word-aligned" is not a property to rely on for the
+ * buffer every full refresh passes to the DMA engine. */
+static uint8_t                  *s_scratch_row;
 static epd_pins_t                s_pins;
 static bool                      s_ready;
 static bool                      s_asleep;
@@ -119,23 +124,30 @@ static bool wait_busy(void)
     return true;
 }
 
-/* Stream `len` bytes into whichever RAM plane was last addressed. tx_color()
- * is the DMA path; the next tx_param() waits for it. */
+/* Stream `len` bytes into whichever RAM plane was last addressed.
+ *
+ * The whole 38880-byte plane goes out in one call: esp_lcd splits a large colour
+ * buffer into bus-sized chunks itself and holds CS asserted across them, so this
+ * does not need chunking here. tx_color() is the DMA path; the next tx_param()
+ * drains it before running. */
 static void wr_ram(uint8_t cmd, const uint8_t *data, size_t len)
 {
     wr_cmd(cmd);
     ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(s_io, -1, data, len));
 }
 
-/* Fill a whole plane with one byte, without a second 39KB buffer: send the
- * scratch row 480 times. Only used to prime the "previous image" plane. */
+/* Fill a whole plane with one byte, without a second 39KB buffer: send one
+ * scratch row 480 times. Only used to prime the "previous image" plane.
+ *
+ * CS toggles between rows, which is fine on this controller — Waveshare's own
+ * driver toggles it around every single byte — because the write pointer lives
+ * in the controller and only a new command moves it. */
 static void wr_ram_fill(uint8_t cmd, uint8_t value)
 {
-    static uint8_t row[EPD_STRIDE];
-    memset(row, value, sizeof(row));
+    memset(s_scratch_row, value, EPD_STRIDE);
     wr_cmd(cmd);
     for (int y = 0; y < EPD_PANEL_H; y++) {
-        ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(s_io, -1, row, sizeof(row)));
+        ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(s_io, -1, s_scratch_row, EPD_STRIDE));
     }
 }
 
@@ -189,6 +201,12 @@ static void panel_leave_partial(void)
 {
     if (!s_partial_mode) return;
     wr_cmd(CMD_PARTIAL_OUT);
+    /* Restore the full-refresh VCOM/data interval. Partial mode sets 0xA9,
+     * which leaves the un-refreshed area of the panel visibly darkened; leaving
+     * it in place means the NEXT full refresh inherits it and comes out with a
+     * grey cast that looks like a failing panel rather than a wrong register. */
+    const uint8_t vcom[2] = { 0x10, 0x07 };
+    wr_cmd_data(CMD_VCOM_INTERVAL, vcom, sizeof vcom);
     s_partial_mode = false;
 }
 
@@ -300,6 +318,9 @@ esp_err_t epd_init(const epd_pins_t *pins)
     s_fb = heap_caps_malloc(EPD_FB_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     ESP_RETURN_ON_FALSE(s_fb, ESP_ERR_NO_MEM, TAG, "framebuffer");
     memset(s_fb, 0xFF, EPD_FB_SIZE);
+
+    s_scratch_row = heap_caps_malloc(EPD_STRIDE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    ESP_RETURN_ON_FALSE(s_scratch_row, ESP_ERR_NO_MEM, TAG, "scratch row");
 
     panel_init_full();
     busy_line_probe();

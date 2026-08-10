@@ -240,6 +240,71 @@ static void test_overflow_yields_an_empty_string_not_half_a_document(void)
     CHECK_INT(device_api_json_info(buf, 0, "a", "b", "c", "d"), -1);
 }
 
+static void test_worst_case_fits_the_servers_buffer(void)
+{
+    /* device_api.c serialises into a DEVICE_API_STATE_BUF_SZ buffer. If the
+     * worst case does not fit, the serializer returns -1 and an EMPTY body —
+     * so the symptom is "the app shows nothing", with no error anywhere to
+     * suggest a length problem. Every string is therefore filled to its
+     * declared maximum here, in the widest bytes it can hold. */
+    device_state_t st;
+    memset(&st, 0, sizeof(st));
+
+    #define FILL_ASCII(field) do { \
+        size_t n = sizeof(st.field) - 1; \
+        memset(st.field, 'W', n); \
+        st.field[n] = '\0'; \
+    } while (0)
+
+    FILL_ASCII(model);
+    FILL_ASCII(fw);
+    FILL_ASCII(device_id);
+    FILL_ASCII(ip);
+    FILL_ASCII(vault_url);
+    FILL_ASCII(last_result);
+
+    /* Korean is 3 bytes a syllable, and each of those bytes passes through the
+     * escaper untouched — so a Korean field is the same length on the wire as
+     * an ASCII one. A field full of quotes is NOT: each becomes two bytes. */
+    for (size_t i = 0; i + 1 < sizeof(st.vault); i++) st.vault[i] = '"';
+    st.vault[sizeof(st.vault) - 1] = '\0';
+    for (size_t i = 0; i + 1 < sizeof(st.page_title); i++) st.page_title[i] = '\\';
+    st.page_title[sizeof(st.page_title) - 1] = '\0';
+    for (size_t i = 0; i + 1 < sizeof(st.generated_at); i++) st.generated_at[i] = '\n';
+    st.generated_at[sizeof(st.generated_at) - 1] = '\0';
+
+    #undef FILL_ASCII
+
+    st.page = 3;
+    st.vault_valid = true;
+    st.notes = st.links = 999999999;
+    st.orphans = st.tags = st.added_today = st.added_7d = 999999999;
+    st.agents_total = st.agents_running = st.recent_count = st.inbox_total = 999999999;
+    st.poll_seconds = st.age_seconds = 999999999;
+    st.battery_pct = st.battery_mv = 999999999;
+    st.partial_chain = st.full_refresh_ms = st.partial_refresh_ms = 999999999;
+
+    char buf[DEVICE_API_STATE_BUF_SZ];
+    int n = device_api_json_state(&st, buf, sizeof(buf));
+    if (n < 0) {
+        g_total++; g_fail++;
+        printf("  FAIL worst-case state does not fit DEVICE_API_STATE_BUF_SZ (%d) — "
+               "raise it\n", DEVICE_API_STATE_BUF_SZ);
+    } else {
+        g_total++;
+        printf("  worst-case state document: %d of %d bytes\n", n, DEVICE_API_STATE_BUF_SZ);
+        cJSON *r = cJSON_Parse(buf);
+        CHECK(r != NULL);
+        cJSON_Delete(r);
+    }
+
+    char ibuf[DEVICE_API_INFO_BUF_SZ];
+    char wide[DEV_MODEL_MAXLEN];
+    memset(wide, '"', sizeof(wide) - 1);
+    wide[sizeof(wide) - 1] = '\0';
+    CHECK(device_api_json_info(ibuf, sizeof(ibuf), wide, wide, wide, wide) > 0);
+}
+
 static void test_null_state_is_rejected(void)
 {
     char buf[256];
@@ -271,6 +336,7 @@ int main(void)
     test_state_shape();
     test_korean_passes_through_as_utf8();
     test_control_characters_are_escaped();
+    test_worst_case_fits_the_servers_buffer();
     test_overflow_yields_an_empty_string_not_half_a_document();
     test_null_state_is_rejected();
     test_zeroed_state_still_parses();

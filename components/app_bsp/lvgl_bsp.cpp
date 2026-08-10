@@ -58,21 +58,28 @@ void Lvgl_PortInit(int width, int height, DispFlushCb flush_cb) {
     lv_display_t * disp = lv_display_create(width, height); /* 以水平和垂直分辨率（像素）进行基本初始化 */
     lv_display_set_flush_cb(disp, flush_cb);
 	
-	// 122x250 RGB565 is 61KB per buffer — small enough that a PSRAM-less S3
-	// can hold both in internal RAM, so fall back rather than assert. (The
-	// panel is 1bpp; RGB565 is kept because the flush callback binarizes.)
+	// 648x480 RGB565 is 622KB per buffer, so PSRAM is not an optimisation here —
+	// it is a requirement, and there is no internal-RAM fallback that could hold
+	// even one of them. (The panel is 1bpp; RGB565 is kept because the flush
+	// callback binarizes, and because the desktop simulator renders through the
+	// identical threshold — see docs/graphics.md.)
+	//
+	// The failure is spelled out rather than left to a bare assert: "no PSRAM
+	// fitted" and "PSRAM not configured" are the two ways a board that looks
+	// identical to a working one refuses to boot, and the difference between a
+	// named error and `assert(buffer_1)` is an afternoon.
 	size_t buffer_size = width * height * BYTES_PER_PIXEL;
 	uint8_t *buffer_1 = (uint8_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM);
 	uint8_t *buffer_2 = (uint8_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_SPIRAM);
 	if (!buffer_1 || !buffer_2) {
-		free(buffer_1);
-		free(buffer_2);
-		ESP_LOGW(TAG, "no PSRAM for %u B draw buffers — using internal RAM", (unsigned)buffer_size);
-		buffer_1 = (uint8_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_8BIT);
-		buffer_2 = (uint8_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_8BIT);
+		ESP_LOGE(TAG, "need 2 x %u B of PSRAM for the draw buffers; %u B is free",
+		         (unsigned)buffer_size,
+		         (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+		ESP_LOGE(TAG, "this firmware needs a XIAO ESP32-S3 *Plus* (8MB octal PSRAM) "
+		              "with CONFIG_SPIRAM enabled");
 	}
-    assert(buffer_1);
-    assert(buffer_2);
+	assert(buffer_1);
+	assert(buffer_2);
 
     lv_display_set_buffers(disp, buffer_1, buffer_2, buffer_size, LV_DISPLAY_RENDER_MODE_FULL);
 

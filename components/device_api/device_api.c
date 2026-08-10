@@ -15,8 +15,9 @@
 
 static const char *TAG = "device_api";
 
-/* The state document is ~800 bytes; size with headroom. */
-#define STATE_BUF_SZ 1600
+/* Sized in device_api_json.h, where the host tests can assert the worst case
+ * actually fits. */
+#define STATE_BUF_SZ DEVICE_API_STATE_BUF_SZ
 /* Control bodies are tiny ({"page":1}); the vault URL is the largest. */
 #define POST_BUF_SZ  320
 
@@ -119,7 +120,7 @@ static esp_err_t api_info_get(httpd_req_t *req)
     char id[DEV_DEVID_MAXLEN], ip[DEV_IP_MAXLEN];
     device_id(id);
     sta_ip(ip, sizeof(ip));
-    char body[256];
+    char body[DEVICE_API_INFO_BUF_SZ];
     if (device_api_json_info(body, sizeof(body), id, DEVICE_MODEL, DEVICE_FW, ip) < 0) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "info");
     }
