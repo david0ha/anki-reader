@@ -420,6 +420,56 @@ def test_capture(tmpdir):
           f"a captured memo shows up in the board's inbox, as itself (got {titles})")
 
 
+def test_agent_status_cli(tmpdir):
+    """tools/agent_status.py is what makes the agents page non-empty."""
+    import agent_status
+
+    path = os.path.join(tmpdir, "agents-cli.json")
+
+    eq(agent_status.main(["--file", path, "set", "indexer", "running",
+                          "--note", "embedding", "--progress", "78",
+                          "--processed", "1428", "--queued", "3"]), 0, "set returns 0")
+    agents = load_agents(path)
+    eq(len(agents), 1, "one agent")
+    eq(agents[0]["name"], "indexer", "name")
+    eq(agents[0]["state"], "running", "state")
+    eq(agents[0]["progress"], 78, "progress")
+    eq(agents[0]["note"], "embedding", "note")
+    check(len(agents[0]["last_run"]) == 5, "last_run defaults to now as HH:MM")
+
+    # Updating must keep the agent where it was: the board draws the first six,
+    # so an agent that moved to the end on every status change would fall off
+    # the panel the moment a seventh existed.
+    agent_status.main(["--file", path, "set", "linker", "idle"])
+    agent_status.main(["--file", path, "set", "indexer", "done", "--progress", "100"])
+    agents = load_agents(path)
+    eq([a["name"] for a in agents], ["indexer", "linker"], "order is preserved across updates")
+    eq(agents[0]["state"], "done", "state was updated in place")
+    eq(agents[0]["note"], "embedding", "an unspecified field is left alone")
+
+    # Out-of-range progress is clamped, and -1 stays -1 (no measurable progress).
+    agent_status.main(["--file", path, "set", "linker", "running", "--progress", "500"])
+    eq(load_agents(path)[1]["progress"], 100, "progress is clamped")
+    agent_status.main(["--file", path, "set", "linker", "running", "--progress", "-1"])
+    eq(load_agents(path)[1]["progress"], -1, "-1 survives as 'no progress bar'")
+
+    eq(agent_status.main(["--file", path, "clear", "indexer"]), 0, "clear returns 0")
+    eq([a["name"] for a in load_agents(path)], ["linker"], "the agent is gone")
+    eq(agent_status.main(["--file", path, "clear", "nobody"]), 1, "clearing nothing is an error")
+
+    # A corrupt file must not stop an agent reporting: refusing to rewrite a file
+    # because it is damaged has the failure mode exactly backwards.
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("{ not json")
+    eq(agent_status.main(["--file", path, "set", "indexer", "running"]), 0,
+       "a damaged file is rewritten, not fatal")
+    eq([a["name"] for a in load_agents(path)], ["indexer"], "and the status lands")
+
+    # Written atomically — no temp file left behind for the server to trip on.
+    leftovers = [f for f in os.listdir(tmpdir) if f.startswith(".") and f.endswith(".tmp")]
+    eq(leftovers, [], "no temp file survives the write")
+
+
 def test_glyph_check(vault):
     snap = vault.snapshot(now=NOW)
     charset = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -:/")
@@ -471,6 +521,7 @@ def main():
         test_agents(tmpdir)
         test_slugify()
         test_capture(tmpdir)
+        test_agent_status_cli(tmpdir)
         test_glyph_check(vault)
         test_payload_matches_the_wire_contract(vault)
     finally:

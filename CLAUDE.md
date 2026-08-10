@@ -138,6 +138,7 @@ tools/
   mock_vault_server.py    the same contract from a fixed payload — the reference producer
   test_vault_server.py    the scanner's tests (synthetic vault in a temp dir)
   gen_fonts.py            regenerates components/vault_core/fonts/
+  agent_status.py         one line for a script to report an agent to the board
   flash.sh                find the board and flash it
 ```
 

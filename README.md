@@ -46,18 +46,7 @@ python3 tools/vault_server.py ~/Documents/MyVault   # http://<you>:8123/vault.js
 It is read-only: it opens `.md` files and writes nothing. To try the plumbing without a vault,
 `python3 tools/mock_vault_server.py` serves the same contract from a fixed payload.
 
-Add `--allow-capture` and it grows one write path, so the inbox on the panel is somewhere you can
-put things:
-
-```bash
-curl -X POST http://localhost:8123/capture -d 'ring the dentist'
-```
-
-That creates `Inbox/ring the dentist.md` and the board shows it on its next poll. It is off unless
-you ask for it — see [docs/vault-contract.md](docs/vault-contract.md#capture) for what it can and
-cannot do.
-
-and point the board at it, from the portal or over the network:
+Then point the board at it, from the portal or over the network:
 
 ```bash
 curl -X POST http://obsidianboard.local/api/vault \
@@ -66,6 +55,24 @@ curl -X POST http://obsidianboard.local/api/vault \
 
 Anything that serves that JSON works — a plugin inside Obsidian, a cron job, a shell script. The
 device cannot tell the difference. The format is [documented and tested](docs/vault-contract.md).
+
+### Making it two-way
+
+Two optional pieces turn the dashboard from something you watch into something you use:
+
+```bash
+# a memo goes into the vault's inbox, and onto the panel on the next poll
+python3 tools/vault_server.py ~/Documents/MyVault --allow-capture
+curl -X POST http://localhost:8123/capture -d 'ring the dentist'
+
+# a script reports what it is doing, and the agents page stops being empty
+python3 tools/agent_status.py --file ~/agents.json set indexer running --progress 40
+python3 tools/vault_server.py ~/Documents/MyVault --agents ~/agents.json
+```
+
+Capture is off unless asked for: it is an unauthenticated LAN service that creates files in your
+notes. Neither piece is part of the device contract — the firmware has never heard of either. See
+[docs/vault-contract.md](docs/vault-contract.md#capture).
 
 ## Verify before claiming anything works
 
@@ -79,8 +86,9 @@ cmake -S components/vault_core/test/host -B /tmp/vt && cmake --build /tmp/vt
 /tmp/vt/test_vault_parse && /tmp/vt/test_vault_service && /tmp/vt/test_graph_layout \
   && /tmp/vt/test_vault_mock && /tmp/vt/test_api_json
 
-# 2) provisioning pure logic
+# 2) provisioning pure logic, and the vault scanner
 sh components/provisioning/test/run.sh
+python3 tools/test_vault_server.py
 
 # 3) the real UI at the real resolution -> PNG, plus layout and glyph assertions
 cd sim && ./sim.sh
@@ -160,6 +168,7 @@ tools/
   vault_server.py       scans a REAL Obsidian vault and serves the contract from it
   mock_vault_server.py  the same contract from a fixed payload — the reference producer
   gen_fonts.py          regenerates components/vault_core/fonts/
+  agent_status.py       one line for a script to report an agent to the board
   flash.sh              find the board and flash it
 app/                    React Native companion app — setup + control over the LAN
 third_party/cJSON/      vendored (ESP-IDF v6 dropped cJSON from core)

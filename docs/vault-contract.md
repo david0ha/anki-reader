@@ -175,6 +175,21 @@ invent it. Point `--agents FILE` at a JSON file that your own tooling writes:
 measurable progress. No file means no agents, which the board draws as an empty board rather than
 as something pretending.
 
+`tools/agent_status.py` writes that file, so reporting is one line from any script, cron job or
+hook — which is what stops the agents page being permanently empty:
+
+```bash
+A=tools/agent_status.py
+$A set indexer running --note "reindexing" --progress 40
+./do-the-work && $A set indexer done --progress 100 || $A set indexer error --note "failed"
+$A list        # what the board would show; entries past the sixth are marked
+```
+
+It writes atomically (temp file + rename), so the server can never read a half-written file no
+matter how often it is called, and it updates an agent **in place** — the board draws the first six
+in file order, and an agent that jumped to the end on every status change would fall off the panel
+the moment a seventh existed.
+
 ### Keeping it running
 
 The board polls forever, so the server has to be up for longer than a terminal window. On macOS,
