@@ -175,6 +175,36 @@ invent it. Point `--agents FILE` at a JSON file that your own tooling writes:
 measurable progress. No file means no agents, which the board draws as an empty board rather than
 as something pretending.
 
+### Keeping it running
+
+The board polls forever, so the server has to be up for longer than a terminal window. On macOS,
+`~/Library/LaunchAgents/local.obsidianboard.vault.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>local.obsidianboard.vault</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/YOU/Documents/obsidian_board_esp32/tools/vault_server.py</string>
+    <string>/Users/YOU/Documents/MyVault</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>/tmp/obsidianboard-vault.log</string>
+</dict></plist>
+```
+
+```bash
+launchctl load ~/Library/LaunchAgents/local.obsidianboard.vault.plist
+```
+
+Two things to know before you do: the board can only reach it while the machine is **awake** — a
+sleeping laptop is a `transport` error on the panel, correctly — and the mDNS name the board is
+pointed at (`mymac.local`) has to keep resolving, so a DHCP reservation or the machine's IP is
+steadier than its hostname on some routers.
+
 ### Capture
 
 A wall display showing an inbox you cannot add to is half a loop. `--allow-capture` adds one
