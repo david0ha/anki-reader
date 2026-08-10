@@ -261,6 +261,36 @@ Two decisions inside it are worth keeping when the contract next changes, both
 recorded in `docs/app-control.md`: a missing `ageSeconds` parses to `-1`, not `0`,
 and an unrecognised `lastResult` maps to `unknown` rather than passing through.
 
-105 unit tests, `tsc --noEmit` clean. Not run on a phone — that needs a native dev
+120 unit tests, `tsc --noEmit` clean. Not run on a phone — that needs a native dev
 build, which needs Xcode/Android Studio, which is the same class of "not verified
 here" as the firmware.
+
+## 11. Two things this spec never mentioned
+
+Both came out of the brief rather than out of this document, and both sit outside
+the device contract, which is why they are recorded here rather than folded into
+§3.
+
+**A producer that reads a real vault** (`tools/vault_server.py`). §3 defined the
+wire format and §7 tested it, and `mock_vault_server.py` served a fixed payload —
+so the whole system was verifiable and the product still stopped at "demo data on
+a panel". The scanner walks a vault, works the same numbers out of the notes that
+are really there, and serves the identical contract. It found four defects that
+no fixture could: markdown and HTML tables of contents being read as tags, three
+notes called `README` rendering as three identical rows, and two empty-list cases
+— one where the simulator's check was wrong and one where the UI was.
+
+Pointing it at real content was the single most productive thing done after the
+firmware was complete, which is worth remembering: the fixtures were chosen by
+the person who wrote the parser, and they were all *shaped like the parser*.
+
+**Capture** (`--allow-capture`, and the memo box in the app). The brief asked for
+a device that helps with memos and manages them; a dashboard showing an inbox
+nobody can add to is half of that. The board has three buttons, so capture cannot
+live on it — but it can live on the machine already serving the vault, one hop
+away, and the app can derive its address from the snapshot URL the board reports.
+
+It is deliberately **not** part of the device contract: no firmware change, no new
+endpoint on the board, and a producer that does not implement it is an ordinary
+supported case. It is off unless asked for, because it is an unauthenticated LAN
+service that creates files in somebody's notes.

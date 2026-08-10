@@ -119,6 +119,11 @@ what fits would turn a backlog of forty into a comfortable eight.
 This is the page where a subset font would have failed: every title on it arrives over the network.
 See [fonts](#fonts-and-why-both-faces-are-full) below.
 
+The inbox is also the one list that can be *added to* rather than only watched, from the companion
+app's memo box or a `curl`. That write never touches the board — it goes to the machine serving the
+snapshot, which creates the note, and the board sees it on its next poll like any other change. See
+[vault-contract.md](vault-contract.md#capture).
+
 ## Fonts, and why both faces are full
 
 `ui_font_kr_16` and `ui_font_kr_20` each carry the whole 완성형 set — all 2350 KS X 1001 Hangul
