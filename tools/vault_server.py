@@ -354,7 +354,7 @@ class Vault:
             },
             "tags": self._top_tags(tag_counts),
             "agents": agents or [],
-            "graph": self._graph(notes, titles, out_links, degree),
+            "graph": self._graph(notes, out_links, degree),
             "recent": self._recent(notes, titles, out_links),
             # The device shows at most INBOX_MAX rows but prints the true total,
             # so "8 shown, 23 waiting" is a fact the panel can state.
@@ -367,7 +367,7 @@ class Vault:
         ranked = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         return [{"name": t[:TITLE_MAX], "count": c} for t, c in ranked[:TAGS_MAX]]
 
-    def _graph(self, notes, titles, out_links, degree):
+    def _graph(self, notes, out_links, degree):
         """The most-connected notes, and the links among just those.
 
         The panel has room for fourteen nodes. Which fourteen is decided by
@@ -377,6 +377,14 @@ class Vault:
         """
         ranked = sorted(notes, key=lambda rel: (-degree[rel], rel))[:NODES_MAX]
         index = {rel: i for i, rel in enumerate(ranked)}
+        # Titles are disambiguated against the fourteen nodes actually drawn, not
+        # against the whole vault. A graph label is about ten characters wide, so
+        # `provisioning/README` truncates to `provisioni…` — which keeps the
+        # folder and throws away the name, the exact opposite of the point.
+        # Collisions among the drawn nodes are rare; when they happen they still
+        # get their folder, and when they do not the label stays short and says
+        # what the note is.
+        titles = build_titles(ranked)
         nodes = [
             {"id": i, "title": titles[rel], "deg": degree[rel]}
             for i, rel in enumerate(ranked)

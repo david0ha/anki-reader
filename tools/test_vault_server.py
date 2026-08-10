@@ -241,6 +241,46 @@ def test_titles_disambiguate_on_collision():
     eq(titles["a/b/Ideas2.md"], "Ideas2", "a unique name keeps no path either")
 
 
+def test_graph_titles_disambiguate_only_against_the_drawn_nodes():
+    """A graph label is ~10 characters wide, so a path truncates to its folder.
+
+    `provisioning/README` renders as `provisioni…` — the folder kept, the name
+    thrown away, which is the opposite of the point. So the graph disambiguates
+    against the fourteen nodes it actually draws, not against the whole vault:
+    a note whose basename is unique among those keeps the short, informative
+    form even if some note elsewhere in the vault shares it.
+    """
+    root = tempfile.mkdtemp()
+    try:
+        # A hub linking to Sub/Note and thirteen fillers fills the fourteen-node
+        # cap exactly, so Archive/Note (degree 0) is scanned but never drawn.
+        # The fillers are named Z* so Sub/Note wins the degree-1 tie-break.
+        files = {"Hub.md": "[[Sub/Note]]\n" + "".join(f"[[Z{i:02d}]]\n" for i in range(13))}
+        files["Sub/Note.md"] = "nothing\n"
+        for i in range(13):
+            files[f"Z{i:02d}.md"] = "nothing\n"
+        files["Archive/Note.md"] = "nothing\n"
+        for rel, text in files.items():
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+
+        snap = Vault(root).snapshot(now=NOW)
+        drawn = {n["title"] for n in snap["graph"]["nodes"]}
+        eq(len(snap["graph"]["nodes"]), 14, "the graph is at its cap")
+        # Both Note.md files exist, so a vault-wide list would disambiguate both
+        # — but only one of them is drawn, so the graph keeps the short name.
+        check("Note" in drawn, f"the drawn node keeps its short name (got {sorted(drawn)})")
+        check("Sub/Note" not in drawn, "it is not disambiguated against a note nobody drew")
+        check("Archive/Note" not in drawn, "the degree-0 collider is not drawn at all")
+        # A vault-wide list, which has a wider column, still disambiguates.
+        vault_wide = build_titles(["Sub/Note.md", "Archive/Note.md"])
+        eq(vault_wide["Sub/Note.md"], "Sub/Note", "the vault-wide title is still qualified")
+    finally:
+        shutil.rmtree(root)
+
+
 def test_recent(vault):
     snap = vault.snapshot(now=NOW)
     eq(len(snap["recent"]), 8, "recent is capped at eight and the vault has eight")
@@ -359,6 +399,7 @@ def main():
         test_graph_is_deterministic(vault)
         test_inbox(vault)
         test_titles_disambiguate_on_collision()
+        test_graph_titles_disambiguate_only_against_the_drawn_nodes()
         test_recent(vault)
         test_incremental_rescan(vault)
         test_empty_vault()
