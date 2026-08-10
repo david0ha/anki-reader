@@ -17,11 +17,17 @@ Standard workflow after activation, run from the **repository root** (the root *
 ```bash
 idf.py set-target esp32s3      # once per checkout
 idf.py build
-idf.py -p <PORT> flash monitor # exit with Ctrl+]
+./tools/flash.sh               # finds the port, flashes, monitors (Ctrl+] to exit)
 ```
 
-- `<PORT>`: usually `/dev/cu.usbmodem*` (USB Serial/JTAG). `ls /dev/cu.*`.
+`tools/flash.sh` is `idf.py -p <PORT> flash monitor` with the two things that actually go wrong
+handled: which of `/dev/cu.usbmodem*` / `cu.usbserial-*` / `cu.wchusbserial*` this board
+enumerates as, and the second between the device node appearing and the CDC endpoint accepting a
+connection. It activates the IDF environment if you have not.
+
 - If it won't enter flash mode, **hold BOOT while pressing RESET**, release, and retry.
+- If it finds no port at all, check the USB-C cable carries data. A charge-only cable powers the
+  board — the panel will even light up — and enumerates nothing.
 
 ## Verify before claiming anything works
 
@@ -132,6 +138,7 @@ tools/
   mock_vault_server.py    the same contract from a fixed payload — the reference producer
   test_vault_server.py    the scanner's tests (synthetic vault in a temp dir)
   gen_fonts.py            regenerates components/vault_core/fonts/
+  flash.sh                find the board and flash it
 ```
 
 ## Working rules

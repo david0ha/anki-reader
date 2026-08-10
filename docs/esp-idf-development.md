@@ -70,8 +70,13 @@ Items you must verify for this board:
 
 ```bash
 idf.py build
+./tools/flash.sh                 # or, by hand:
 idf.py -p <PORT> flash monitor
 ```
+
+`tools/flash.sh` does the second line with the port worked out and a two-second settle before it
+connects, which is the difference between "this board will not flash" and "the CDC endpoint was
+not ready yet".
 
 - Exit the serial monitor: `Ctrl + ]`
 - Finding `<PORT>` (macOS):

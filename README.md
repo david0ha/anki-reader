@@ -31,7 +31,7 @@ exact binarization the device applies — see [the simulator](docs/simulator.md)
 
 idf.py set-target esp32s3           # once per checkout
 idf.py build
-idf.py -p /dev/cu.usbmodem101 flash monitor
+./tools/flash.sh                    # finds the port, flashes, monitors
 ```
 
 Then join the `Obsidian Board-XXXX` Wi-Fi network the board raises, and give it your Wi-Fi
@@ -160,6 +160,7 @@ tools/
   vault_server.py       scans a REAL Obsidian vault and serves the contract from it
   mock_vault_server.py  the same contract from a fixed payload — the reference producer
   gen_fonts.py          regenerates components/vault_core/fonts/
+  flash.sh              find the board and flash it
 app/                    React Native companion app — setup + control over the LAN
 third_party/cJSON/      vendored (ESP-IDF v6 dropped cJSON from core)
 ```
