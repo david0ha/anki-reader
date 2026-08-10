@@ -193,10 +193,18 @@ static void present_header(void)
 
 /* --- content updates (UiTask only) ---------------------------------------- */
 
+/* The snapshot is copied out from under the mutex so LVGL is never touched while
+ * holding it. The copy is static rather than automatic because vault_t is 3.4 KB
+ * — 42% of UiTask's 8 KB stack — and this frame goes on to call into LVGL, whose
+ * render (Lvgl_RenderNow -> lv_refr_now) runs on this same task. A static is safe
+ * here precisely because of the rule the whole file is built on: UiTask is the
+ * only caller. */
+static vault_t s_ui_copy;
+
 static void push_data_to_ui(void)
 {
     state_lock();
-    vault_t v = s_data;
+    s_ui_copy = s_data;
     ui_status_t st = {
         .online          = s_online,
         .stale           = false,
@@ -217,7 +225,7 @@ static void push_data_to_ui(void)
     state_unlock();
 
     if (Lvgl_lock(-1)) {
-        ui_vault_set_data(&v);
+        ui_vault_set_data(&s_ui_copy);
         ui_vault_set_status(&st);
         Lvgl_unlock();
     }
@@ -458,6 +466,11 @@ static void notify_ui(app_cmd_kind_t kind)
     xQueueSend(s_cmd_queue, &c, 0);
 }
 
+/* Static for the same reason as s_ui_copy: 3.4 KB of a 16 KB stack that an
+ * https:// URL also has to fit a synchronous TLS handshake into. VaultTask is the
+ * only caller. */
+static vault_t s_fetched;
+
 static void VaultTask(void *arg)
 {
     (void)arg;
@@ -472,20 +485,19 @@ static void VaultTask(void *arg)
         state_unlock();
 
         if (url[0]) {
-            vault_t fresh;
-            vault_fetch_result_t r = vault_service_fetch(url, &fresh);
+            vault_fetch_result_t r = vault_service_fetch(url, &s_fetched);
 
             state_lock();
             s_last_result = r;
             state_unlock();
 
             if (r == VAULT_FETCH_OK) {
-                uint32_t h = vault_hash(&fresh);
+                uint32_t h = vault_hash(&s_fetched);
 
                 state_lock();
                 bool changed = (h != s_data_hash);
                 if (changed) {
-                    s_data      = fresh;
+                    s_data      = s_fetched;
                     s_data_hash = h;
                 }
                 s_last_ok_us = esp_timer_get_time();
@@ -494,7 +506,8 @@ static void VaultTask(void *arg)
 
                 if (changed) {
                     ESP_LOGI(TAG, "vault: %d notes, %d links, %d agents — refreshing",
-                             fresh.stats.notes, fresh.stats.links, fresh.agent_count);
+                             s_fetched.stats.notes, s_fetched.stats.links,
+                             s_fetched.agent_count);
                     notify_ui(APP_CMD_DATA);
                 } else {
                     /* The single most common outcome, and the one that must not
