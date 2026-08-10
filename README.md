@@ -1,121 +1,176 @@
-# 사주·오미쿠지 보드 — a fortune slip on e-Paper
+# Obsidian Board
 
-An ESP32-S3 and a 2.13" e-Paper panel that draws you an **오미쿠지** (大吉 … 大凶), shows the day's
-**일진** (60갑자 day pillar), and the local weather. Set it up from your phone; after that it sits
-there and uses almost no power, because e-Paper only draws current while it changes.
+An always-on e-Paper dashboard for an Obsidian vault and the agents working on it. A 5.83"
+monochrome panel on a Seeed EE04 carrier and a XIAO ESP32-S3 Plus, polling one URL on your LAN and
+drawing four pages: vault statistics, the link graph, agent status, and the note queue.
 
+![the stats page](docs/images/0_stats.png)
+
+It is set up over Wi-Fi from a captive portal. **Point it at nothing and it still works** — the
+board renders a built-in demo snapshot with a `DEMO` badge, which is a complete configuration, not a
+placeholder.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/1_graph.png" alt="link graph"></td>
+<td width="50%"><img src="docs/images/2_agents.png" alt="agents"></td>
+</tr>
+<tr>
+<td><img src="docs/images/3_notes.png" alt="recent notes and inbox"></td>
+<td><img src="docs/images/0_stats.png" alt="vault statistics"></td>
+</tr>
+</table>
+
+Those are not mockups. They are what `sim/sim.sh` renders at the exact panel resolution, through the
+exact binarization the device applies — see [the simulator](docs/simulator.md).
+
+## Quick start
+
+```bash
+. ~/esp/v5.4.3/esp-idf/export.sh    # once per shell
+
+idf.py set-target esp32s3           # once per checkout
+idf.py build
+idf.py -p /dev/cu.usbmodem101 flash monitor
 ```
-╔══════════════╗   ┌──────────────┐
-║  今 日 運 勢  ║   │    16:18     │
-║ 2026. 8. 9(일)║   │ 2026.08.09 Sun│
-║┌병┐      ┌을┐ ║   ├──────────────┤
-║│오│ 中吉 │묘│ ║   │  ☀   28°     │
-║└년┘      └일┘ ║   │  Seoul, KR   │
-║ ─────◆─────  ║   ├──────────────┤
-║  즐과 소기 뻗나║   │ FR SA SU MO TU│
-║  기정 식다 어무║   │ ☁  ☀  ☁  ☂  ☀ │
-║ …세로쓰기(6열) ║   │ 22 24 20 17 21│
-║ ⊕吉           ║   ├──────────────┤
-║┌財運┬事業┬──┐║   │  오늘의 일진  │
-║└안정┴순항┴──┘║   │  乙卯 을묘    │
-╚══════════════╝   ├──────────────┤
-                   │ 16:18   84%  │
-   USER = 새로 뽑기 └──────────────┘
-   BOOT = 페이지
+
+Then join the `Obsidian Board-XXXX` Wi-Fi network the board raises, and give it your Wi-Fi
+credentials and — optionally — a snapshot URL.
+
+To feed it real data, run the reference server on your machine:
+
+```bash
+python3 tools/mock_vault_server.py          # http://<you>:8123/vault.json
 ```
 
-## What it does
+and point the board at it, from the portal or over the network:
 
-- **오미쿠지, laid out as a 만세력 slip** — seven ranks with a weighted, configurable distribution;
-  a new one at boot, at local midnight, on a button press, or from the app. The slip carries the
-  grade in large Hanja, the year and day pillars in vertical side boxes, a vertical-writing verse
-  ([흐름] from the day's element, [해석]/[조언] from the draw), a tilted 吉/凶 seal, and a
-  財運/事業/對人/健康 table — all inside a double frame, all in a serif face.
-  [docs/omikuji.md](docs/omikuji.md)
-- **오늘의 일진** — the day's 60갑자 pillar, computed from the date. The anchor is pinned against two
-  independent sources and locked down by tests, because a wrong anchor is silently wrong every day.
-  [docs/saju.md](docs/saju.md)
-- **날씨** — current conditions and a forecast strip from Open-Meteo. No API key, no account, no
-  cloud service. You type a city name; the device geocodes it and shows you what it matched.
-  [docs/weather.md](docs/weather.md)
-- **Wi-Fi setup** — a captive portal on the device's own access point, or the companion app.
-  Credentials live in NVS, never in the source.
-- **배터리** — voltage and percentage in the footer.
+```bash
+curl -X POST http://obsidianboard.local/api/vault \
+     -d '{"url":"http://mymac.local:8123/vault.json"}'
+```
+
+Anything that serves that JSON works — a plugin inside Obsidian, a cron job, a shell script. The
+device cannot tell the difference. The format is [documented and tested](docs/vault-contract.md).
+
+## Verify before claiming anything works
+
+Four layers, three of which need no hardware. Each is faster than the next and catches a different
+class of mistake.
+
+```bash
+# 1) pure logic — the wire format, the graph layout, the demo snapshot, the API JSON
+cmake -S components/vault_core/test/host -B /tmp/vt && cmake --build /tmp/vt
+/tmp/vt/test_vault_parse && /tmp/vt/test_graph_layout \
+  && /tmp/vt/test_vault_mock && /tmp/vt/test_api_json
+
+# 2) provisioning pure logic
+sh components/provisioning/test/run.sh
+
+# 3) the real UI at the real resolution -> PNG, plus layout and glyph assertions
+cd sim && ./sim.sh
+
+# 4) firmware
+idf.py build
+```
+
+The simulator is not a preview, it is a **test**: it fails on a missing glyph or on a list row that
+rendered nothing. Look at `sim/shots/*.png` after any UI change.
 
 ## Hardware
 
-ESP32-S3 (16 MB flash, 8 MB PSRAM) + a 2.13" **SSD1680** e-Paper module, 122 × 250, mono. A
-PCF85063A RTC keeps the clock — and therefore the day pillar — correct across power loss and before
-Wi-Fi comes up. Optional Li-ion cell.
+| Item | Specification |
+|------|------|
+| Board | **Seeed XIAO ePaper Display Board EE04** + **XIAO ESP32-S3 Plus** |
+| SoC | ESP32-S3 (Xtensa LX7 dual-core), 16 MB Flash / 8 MB Octal PSRAM |
+| Display | 5.83" monochrome e-Paper, **648 × 480**, **UC8179**, 4-wire SPI + BUSY, 24-pin FPC |
+| RTC | none — the clock is SNTP only |
+| Buttons | KEY0/1/2 (GPIO2/3/5) on the carrier, BOOT (GPIO0) on the XIAO |
+| Power | 5 V USB-C, optional Li-ion (JST 2.0 + slide switch) |
 
-Wiring is yours; the defaults are in `main/user_config.h` and documented in
-[docs/pinout.md](docs/pinout.md). Nothing else in the firmware hardcodes a GPIO.
+Wiring is the EE04's fixed routing, kept in `main/user_config.h`. Three traps: **BUSY is active
+LOW** on the UC8179 (the inverse of most SSD-family panels, and it fails silently), **GPIO43 gates
+the panel's power**, and **GPIO43/44 are the default UART0 pins** so the console must stay on USB
+Serial/JTAG. See [docs/pinout.md](docs/pinout.md).
 
-## Build
+## Controls
 
-```bash
-. ~/esp/v5.4.3/esp-idf/export.sh   # once per shell
-idf.py set-target esp32s3          # once per checkout
-idf.py build
-idf.py -p /dev/cu.usbmodem* flash monitor
+| | |
+|---|---|
+| KEY0 | next page |
+| KEY1 | poll the vault source now |
+| KEY2 | tap → page 1 · **hold 5 s → reboot into Wi-Fi setup** |
+| BOOT | previous page |
+
+## The thing that makes this board different
+
+**A refresh is not free.** A full refresh of this panel takes seconds and flashes the whole screen.
+So drawing and presenting are separate everywhere:
+
+```c
+...update widgets...      /* ui_vault_set_*(), cheap, no panel traffic */
+Lvgl_RenderNow();         /* synchronous render -> flush_cb -> framebuffer */
+epd_refresh_full();       /* or epd_refresh_partial_area(...) */
 ```
 
-## Develop without the hardware
+Exactly one task (`UiTask`) touches LVGL or starts a refresh; everything else posts a command.
 
-Everything above the panel driver runs on your desktop, and the interesting parts are tested there:
+And the rule that matters most for a device that mostly sits still: **a poll that returns unchanged
+content does not touch the panel at all.** Every snapshot is fingerprinted, and the poller compares
+before it notifies. Details in [docs/epaper-5in83.md](docs/epaper-5in83.md).
 
-```bash
-# pure logic — fortune distribution, the 일진 anchor, weather parsing, the app's JSON
-cmake -S components/fortune_core/test/host -B /tmp/ft && cmake --build /tmp/ft
-/tmp/ft/test_omikuji && /tmp/ft/test_saju && /tmp/ft/test_weather && /tmp/ft/test_api_json
-
-sh components/provisioning/test/run.sh
-
-# the real UI, at the real 122x250, to BMP
-cd sim && ./sim.sh                 # LOCATION="Seoul" ./sim.sh for live weather
-```
-
-The simulator compiles the same `ui_fortune.c` and the same fonts the firmware does, and it is a
-**test**, not a preview: it fails on a missing glyph or on content running off the panel. Look at
-`sim/shots/` after any UI change. [docs/simulator.md](docs/simulator.md)
-
-## The design constraint worth knowing about
-
-A full e-Paper refresh takes about two seconds and flashes the panel; a partial one is quick and
-silent but leaves ghosting behind. So drawing and presenting are separate everywhere in this
-codebase — the LVGL flush callback fills a framebuffer and never touches the panel, and exactly one
-task decides when a change is worth two seconds. [docs/epaper-2in13.md](docs/epaper-2in13.md)
-
-## Companion app
-
-`app/` is a local-network-only React Native app: it finds the device over mDNS at
-`tickerboard.local`, walks you through Wi-Fi setup, and can draw a fortune or change the city. No
-auth, no TLS, no cloud — see [docs/app-control.md](docs/app-control.md) for the contract and the
-scope decision behind it.
-
-**The app has not yet been updated for this firmware.** Onboarding and discovery work; its dashboard
-screens still call the removed stock endpoints and will 404.
-
-## Repository
+## Project structure
 
 ```
-main/                app_main — panel + LVGL bring-up, provisioning, task launch
+main/                   app_main: panel + LVGL bring-up, provisioning, task launch
 components/
-  port_bsp/          SSD1680 driver — the only file that talks to the panel
-  app_bsp/           LVGL port
-  fortune_core/      omikuji, saju, UI, icons, weather, API JSON, fonts, host tests
-  provisioning/      SoftAP + captive portal + NVS + SNTP
-  device_api/        HTTP/JSON control server + mDNS
-  board_io/          RTC + battery
-  buttons/           USER/BOOT
-app/                 React Native companion app
-sim/                 desktop simulator
-tools/gen_fonts.py   regenerates the subset CJK fonts from the source strings
+  port_bsp/             UC8179 driver (epd_panel.c) — the only file that talks to the panel
+  app_bsp/              LVGL port (RGB565 draw buffers, binarized in the flush callback)
+  vault_core/           the portable core — compiles identically on device, sim and host tests
+    vault_model.c       the snapshot struct, a UTF-8-safe copy, a content fingerprint
+    vault_parse.c       the wire contract, clamping every field
+    vault_mock.c        the built-in demo snapshot
+    vault_service.c     one fetch: http_get + parse
+    ui_vault.c          header, footer, overlay, page routing
+    ui_page_*.c         the four pages, one file each
+    ui_graph.c          deterministic concentric-ring link layout (no physics, no libm)
+    fonts/              full 완성형 Noto Sans KR faces (OFL) — generated, do not hand-edit
+    test/host/          unit tests for all of the above
+  provisioning/         SoftAP + captive portal + NVS + SNTP onboarding
+  device_api/           STA-mode HTTP/JSON control server + mDNS (obsidianboard.local)
+  board_io/             battery ADC
+  buttons/              KEY0/1/2 + BOOT edge events
+sim/                    desktop simulator — renders the real UI to 648×480 and asserts on it
+tools/
+  mock_vault_server.py  the vault contract, as a runnable server
+  gen_fonts.py          regenerates components/vault_core/fonts/
+app/                    React Native companion app — inherited, not yet ported
+third_party/cJSON/      vendored (ESP-IDF v6 dropped cJSON from core)
 ```
 
-## Licence & credits
+## Documentation
 
-Code: see [LICENSE](LICENSE). Fonts: **Noto Serif KR** under the SIL Open Font License 1.1
-(`components/fortune_core/fonts/OFL.txt`). The e-Paper command sequence is transcribed from
-[Waveshare's reference driver](https://github.com/waveshareteam/e-Paper). Weather from
-[Open-Meteo](https://open-meteo.com).
+- [docs/vault-contract.md](docs/vault-contract.md) — the JSON the device polls, and how it fails
+- [docs/pages.md](docs/pages.md) — the four pages, the layout grid, and the font decision
+- [docs/epaper-5in83.md](docs/epaper-5in83.md) — the UC8179 driver, the refresh policy, the self-test
+- [docs/pinout.md](docs/pinout.md) — GPIO assignments and the three traps
+- [docs/board-hardware.md](docs/board-hardware.md) — hardware notes
+- [docs/simulator.md](docs/simulator.md) — the desktop simulator, and what it asserts
+- [docs/app-control.md](docs/app-control.md) — the HTTP/JSON contract
+- [docs/graphics.md](docs/graphics.md) — 1-bit rendering notes
+- [docs/esp-idf-development.md](docs/esp-idf-development.md) — install / build / flash / menuconfig
+- [docs/references.md](docs/references.md) — datasheets and upstream sources
+- [docs/specs/](docs/specs/) — the design this was built from
+
+## Lineage
+
+Forked from `saju_omi_esp32`, a 2.13" fortune-slip board on an EE05. This project kept its
+structure — the draw-and-present split, the captive-portal provisioning, the device API, the
+simulator, and the habit of writing a host test before believing anything — and replaced the entire
+content axis. It shares no content code, and deliberately not its mDNS name or AP prefix: two
+devices answering one discovery probe on the same LAN is a fault nobody can diagnose.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The bundled Noto Sans KR faces are SIL OFL 1.1
+(`components/vault_core/fonts/OFL.txt`).

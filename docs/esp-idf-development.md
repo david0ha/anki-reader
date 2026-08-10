@@ -102,25 +102,22 @@ idf.py openocd gdbgui
 See [pinout.md](pinout.md) for the pin map. Components are fetched from the ESP Component Registry
 (`idf.py add-dependency "<name>"`).
 
-### Display (SSD1680 e-Paper, SPI, 122×250 monochrome)
+### Display (UC8179 e-Paper, SPI, 648×480 monochrome)
 
-Written in-house at `components/port_bsp/epd_panel.c`. There is **no** official
-`espressif/esp_lcd_ssd1680` component — do not go looking for one. It uses `esp_lcd`'s SPI panel IO
-for transport and owns its own 4000-byte framebuffer and refresh policy.
+Written in-house at `components/port_bsp/epd_panel.c`. There is no official `esp_lcd` component for
+the UC8179 — do not go looking for one. It uses `esp_lcd`'s SPI panel IO for transport and owns its
+own 38,880-byte framebuffer and refresh policy.
 
 Full rationale, the command sequence's provenance, and the refresh rules are in
-[epaper-2in13.md](epaper-2in13.md). Read that before touching the driver: on e-Paper a refresh costs
-~2 seconds and cannot be issued casually.
+[epaper-5in83.md](epaper-5in83.md). Read that before touching the driver, and note the one thing
+most likely to waste your afternoon: **BUSY is active LOW on this controller**, the inverse of the
+SSD1680 this code started as, and getting it backwards fails silently rather than loudly.
 
 ### Not present on this build
 
-No touch controller, audio codec or SD card is wired. If you add one, the I2C bus (GPIO13/14) is
-already brought up by `board_io`.
-
-### Sensors / RTC
-
-- SHTC3 (0x70), PCF85063A (0x51) — I2C0. Either a driver exists in the Component Registry,
-  or do a simple datasheet-based implementation.
+No touch controller, audio codec, SD card or RTC. There is also **no I2C bus**: on the EE04 the two
+pins the previous carrier routed to an I2C header are KEY2 and the battery divider's enable. Adding
+an I2C device means finding two free pins first — see [pinout.md](pinout.md).
 
 ## 8. Summary of frequently used commands
 
@@ -140,6 +137,5 @@ Before claiming a change works, also run the host tests and the simulator — se
 
 ## References
 
-- [references.md](references.md) — datasheets, the e-Paper driver's upstream source, and the 일진
-  anchor's two independent sources.
-- Original docs/datasheets: [references.md](references.md)
+- [references.md](references.md) — the e-Paper driver's upstream source, the EE04's pin routing as
+  published by Seeed, and the font licence.

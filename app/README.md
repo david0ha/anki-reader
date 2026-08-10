@@ -1,5 +1,16 @@
 # Ticker Board — companion app
 
+> **Not yet ported.** This directory is inherited verbatim from `saju_omi_esp32`, the fortune
+> board this project forked from. It still talks to `tickerboard.local`, still POSTs a weather
+> location, and still renders a stock ticker — none of which exists on the Obsidian board.
+>
+> The port is deliberately deferred rather than forgotten: the firmware's HTTP contract
+> ([docs/app-control.md](../docs/app-control.md)) is this app's entire surface, and porting it
+> before that contract had been exercised on real hardware would have meant doing it twice. See
+> `docs/specs/2026-08-10-obsidian-board-design.md` §Scope.
+>
+> Everything below describes the OLD device.
+
 A **local-only** React Native (Expo) app that sets up and controls the **ESP32-S3 Ticker Board**
 over your home Wi-Fi. No cloud, no accounts, no API keys — the app talks **directly** to the
 device over plain HTTP on the LAN.
