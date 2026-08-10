@@ -133,6 +133,29 @@ touch the panel at all.** `vault_hash()` fingerprints everything that reaches th
 `VaultTask` compares before it notifies. On a device that mostly sits still, this is the difference
 between a silent dashboard and one that flashes at nobody every five minutes forever.
 
+### When the numbers arrive
+
+The two constants below are placed to be *decided*, not guessed at twice. Read the measurement:
+
+```bash
+curl -s http://obsidianboard.local/api/state | jq .panel
+# {"partialChain": 3, "fullRefreshMs": ..., "partialRefreshMs": ...}
+```
+
+then watch the panel through a clock tick and a page change, and apply whichever line fits.
+
+| what you see | change | where |
+|---|---|---|
+| partial is under ~1 s and silent | `CLOCK_REFRESH_EVERY` 5 → 1 or 2 (a clock that moves) | `components/user_app/user_app.cpp` |
+| partial is over ~2 s, or it visibly flashes | `CLOCK_REFRESH_EVERY` 5 → 15, or drop the tick refresh entirely and let the clock move only when data does | same |
+| ghosting is visible before six partials | lower `EPD_PARTIAL_CHAIN_MAX` | `components/port_bsp/epd_panel.c` |
+| six partials leave no residue at all | raise it, and the clock gets cheaper | same |
+| full refresh is over ~6 s | nothing to change — but it is why a page change is optimistic in the app and why `POST /api/page` returns before the panel has caught up | — |
+
+If the clock tick stops earning its refresh, deleting it is a real option: the header would then
+move only when the vault does, which on a dashboard is defensible and costs nothing. What is not
+an option is leaving the number at 5 because that is what the 2.13" board's arithmetic implied.
+
 ## Memory
 
 | | |
