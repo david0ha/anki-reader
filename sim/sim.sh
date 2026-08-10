@@ -20,4 +20,5 @@ if command -v sips >/dev/null 2>&1; then
     sips -s format png "$f" --out "${f%.bmp}.png" >/dev/null
   done
 fi
-echo "screenshots in sim/shots/ — 4 pages, the offline header, and the setup overlay"
+echo "screenshots in sim/shots/ — 4 pages, the offline header, the setup overlay,"
+echo "and the same 4 pages again from a nearly-empty vault"
