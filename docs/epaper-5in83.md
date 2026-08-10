@@ -95,8 +95,16 @@ boundary — the controller addresses source lines in groups of eight, and a win
 comes out shifted rather than clipped — so the refreshed area may be up to 7 px wider on each side
 than asked for. Harmless, since the framebuffer there is already correct.
 
-Only one thing uses it: the header clock, via `ui_vault_clock_area()`. Everything else on this panel
-changes the whole content area.
+Only one thing uses it: the header strip, via `ui_vault_header_area()`. Everything else on this
+panel changes the whole content area.
+
+The window is the **whole** header, not just the clock's slot, and that is a correctness point
+rather than a convenience. Three things up there move without new vault data — the clock, the
+battery level, and the badge — and the badge is the important one: a board whose source has gone
+away goes stale purely by the passage of time, so if the tick only refreshed the clock's rectangle
+the 오래됨 badge would never appear at all. Nothing else in that state triggers a refresh. The cost
+is the same either way; a UC8179 partial refresh is dominated by the waveform frames, not by how
+many bytes were sent.
 
 Every `EPD_PARTIAL_CHAIN_MAX` (6) partials is promoted to a full refresh so residue still gets
 cleared. Six, not the ten this code used at 122 × 250: this panel is ten times the area, and residue

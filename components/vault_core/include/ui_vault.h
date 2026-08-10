@@ -68,10 +68,16 @@ void ui_vault_set_status(const ui_status_t *st);
  * therefore the only candidate for a partial refresh. */
 void ui_vault_tick(void);
 
-/* The rectangle ui_vault_tick() can change, in panel coordinates, so the caller
- * can refresh just that instead of the whole 648x480. Inclusive of the border
- * the clock font needs; still cheap. */
-void ui_vault_clock_area(int *x1, int *y1, int *x2, int *y2);
+/* The rectangle that can change without new vault data, in panel coordinates.
+ *
+ * It is the WHOLE header strip, not just the clock. The clock is not the only
+ * thing up there that moves on a tick: the battery level does, and so does the
+ * badge — a board whose source has gone away goes stale purely by the passage
+ * of time, and refreshing only the clock's rectangle would mean the 오래됨
+ * badge never appeared at all, because nothing else in that state triggers a
+ * refresh. The cost is the same either way: a UC8179 partial refresh is
+ * dominated by the waveform frames, not by how many bytes were sent. */
+void ui_vault_header_area(int *x1, int *y1, int *x2, int *y2);
 
 /* Full-screen message, for provisioning status and fatal states. Pass NULL to
  * dismiss it and return to the pages. */

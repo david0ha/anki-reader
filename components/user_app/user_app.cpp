@@ -130,7 +130,10 @@ static int      s_page;
 
 static vault_fetch_result_t s_last_result = VAULT_FETCH_NO_URL;
 static int64_t  s_last_ok_us;           /* 0 = never fetched successfully     */
-static bool     s_online;
+/* True until a fetch fails at the transport. Starts true because UserApp_TaskInit
+ * only runs once Wi-Fi is up, and an unconfigured board that never fetches
+ * anything is not offline — it is showing its demo screen on purpose. */
+static bool     s_online = true;
 
 static bool     s_batt_present;
 static int      s_batt_pct;
@@ -172,18 +175,18 @@ void UserApp_UiInit(void)
  *
  * `full` is not a hint: it is the difference between a multi-second flashing
  * update that clears ghosting and a shorter silent one that adds to it. Use
- * full whenever the content area changed; the windowed partial is for the clock
- * and nothing else. */
+ * full whenever the content area changed; the windowed partial is for the
+ * header strip and nothing else. */
 static void present_full(void)
 {
     Lvgl_RenderNow();
     epd_refresh_full();
 }
 
-static void present_clock(void)
+static void present_header(void)
 {
     int x1, y1, x2, y2;
-    ui_vault_clock_area(&x1, &y1, &x2, &y2);
+    ui_vault_header_area(&x1, &y1, &x2, &y2);
     Lvgl_RenderNow();
     epd_refresh_partial_area(x1, y1, x2, y2);
 }
@@ -201,10 +204,15 @@ static void push_data_to_ui(void)
         .battery_pct     = s_batt_pct,
     };
     /* Staleness is derived here rather than stored, so it becomes true on its
-     * own as time passes instead of only when a fetch fails. */
+     * own as time passes instead of only when a fetch fails. A configured board
+     * that has never once succeeded is stale from the start — otherwise the
+     * only state that says so is a transport error, and a server answering 404
+     * forever would look healthy. */
     if (s_last_ok_us != 0) {
         int64_t age_us = esp_timer_get_time() - s_last_ok_us;
         st.stale = age_us > (int64_t)POLL_SECONDS * STALE_AFTER_POLLS * 1000000;
+    } else {
+        st.stale = s_cfg.vault_url[0] != '\0';
     }
     state_unlock();
 
@@ -411,7 +419,7 @@ static void UiTask(void *arg)
             if (++s_ticks_since_clock_refresh >= CLOCK_REFRESH_EVERY) {
                 s_ticks_since_clock_refresh = 0;
                 push_data_to_ui();          /* the staleness badge may have changed */
-                present_clock();
+                present_header();
             }
         }
     }

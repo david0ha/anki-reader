@@ -115,10 +115,15 @@ const char *ui_vault_page_title(ui_page_t page)
  * from across a room can carry anyway. */
 static void refresh_badge(void)
 {
+    /* Order matters, and it is not the obvious one. DEMO is LAST because a
+     * board that has been given a URL still shows the demo snapshot until its
+     * first successful fetch — so a configured board whose server is
+     * unreachable would badge itself DEMO, which is true and useless, instead
+     * of 오프라인, which is the thing the user can act on. */
     const char *text = NULL;
-    if (s_have_data && s_data.demo) text = S_BADGE_DEMO;
-    else if (!s_status.online)      text = S_BADGE_OFFLINE;
+    if (!s_status.online)           text = S_BADGE_OFFLINE;
     else if (s_status.stale)        text = S_BADGE_STALE;
+    else if (s_have_data && s_data.demo) text = S_BADGE_DEMO;
 
     ui_show(s_badge_box, text != NULL);
     ui_show(s_badge_txt, text != NULL);
@@ -234,6 +239,8 @@ void ui_vault_create(lv_obj_t *parent)
     lv_obj_set_style_bg_color(parent, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
 
+    /* Assume online until told otherwise: ui_vault_create runs before the first
+     * poll, and a board that has not tried yet is not offline. */
     memset(&s_status, 0, sizeof(s_status));
     s_status.online = true;
 
@@ -320,12 +327,12 @@ void ui_vault_tick(void)
     ui_setf(s_clock, "%02d:%02d", lt.tm_hour, lt.tm_min);
 }
 
-void ui_vault_clock_area(int *x1, int *y1, int *x2, int *y2)
+void ui_vault_header_area(int *x1, int *y1, int *x2, int *y2)
 {
-    /* The date and the clock share the rectangle: both change on the same tick,
-     * and refreshing two windows costs two panel updates. */
-    if (x1) *x1 = H_DATE_X - 4;
+    /* The whole strip, including the rule under it — see ui_vault.h for why
+     * this is not just the clock's slot. */
+    if (x1) *x1 = 0;
     if (y1) *y1 = 0;
-    if (x2) *x2 = H_CLOCK_X + H_CLOCK_W + 4;
-    if (y2) *y2 = UI_HEADER_H;
+    if (x2) *x2 = UI_W;
+    if (y2) *y2 = UI_HEADER_H + UI_RULE;
 }
