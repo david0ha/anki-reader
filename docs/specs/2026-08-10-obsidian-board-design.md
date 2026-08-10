@@ -1,7 +1,7 @@
 # Obsidian Board — design
 
 **Date:** 2026-08-10
-**Status:** approved, implementing
+**Status:** implemented — see §9 for where the implementation departed from this
 **Hardware:** Seeed XIAO ePaper Display Board **EE04** + XIAO ESP32-S3 Plus,
 5.83" monochrome ePaper **648×480**, controller **UC8179**
 
@@ -192,3 +192,43 @@ area — it is a test, not a preview.
 The base project's mDNS name `tickerboard` and AP prefix `"Ticker Board"` are
 hardcoded in its shipped app, so they are not reusable here. This board is
 `obsidianboard.local`, AP prefix `"Obsidian Board"`. Sub-project 2 must match.
+
+
+## 9. What changed during implementation
+
+This document is the record of what was intended, kept as written. Six things came
+out differently, and the differences are worth more than the plan was:
+
+**`vault_hash.c` does not exist.** The fingerprint is thirty lines and belongs
+beside the struct it hashes, so it lives in `vault_model.c`. A file per function
+would have made the dependency graph look tidier and the code harder to follow.
+
+**There is no `ui_font_kr_28`, and `ui_font_kr_20` is not a subset.** §6 planned
+one full face for dynamic text and subsets for the fixed labels. That reintroduces
+exactly the bug the full face was chosen to eliminate — "which face can draw this
+string" — and it turned out two dynamic strings (the vault name, and agent names)
+wanted the larger size. Both faces are now full 완성형: about 450 KB of an 8 MB
+partition, against a class of bug that only shows up on the glass. The 28 px face
+was dropped entirely; the big counters are digits, and digits come from Montserrat.
+
+**The chrome is 44 px and 34 px, not 40 and 40.** Measured against the rendered
+20 px face and the 28 px clock, not guessed. Content is 648×398.
+
+**`ui_vault_clock_area()` became `ui_vault_header_area()`.** §5 said the clock
+tick was the only partial-refresh candidate, which is true, and then quietly
+implied the clock's rectangle was the right window, which is not. Staleness
+arrives by the passage of time; refreshing only the clock would have meant the
+오래됨 badge never reached the panel at all. See the commit.
+
+**The badge ranking is offline → stale → demo**, not demo first. A board that has
+been given a URL still shows the demo snapshot until its first successful fetch,
+so ranking DEMO first made a configured board with an unreachable server badge
+itself DEMO — true, and useless.
+
+**A sixth host test appeared**, `test_vault_service`, standing in as the HTTP port
+so the fetch layer's failure paths run without a server. §7 listed four; there are
+five, plus the simulator.
+
+Still deferred, exactly as §Scope said: the `app/` companion app. The HTTP contract
+it depends on is now exercised by host tests and by the simulator, but not yet by
+hardware.
