@@ -1,5 +1,15 @@
 import { useCallback, useRef, useState } from 'react'
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Screen } from '../components/Screen'
@@ -12,6 +22,7 @@ import { StatTile } from '../components/StatTile'
 import { ScreenMessage } from '../components/ScreenMessage'
 import { useDevice } from '../lib/device'
 import { Esp32Error, type DeviceState } from '../lib/esp32'
+import { captureErrorMessage, captureMemo, captureUrlFor } from '../lib/capture'
 import { DEFAULT_HOST, discoverDevice } from '../lib/discovery'
 import { getDeviceBaseUrl } from '../lib/store'
 import {
@@ -27,7 +38,7 @@ import {
   formatMs,
   formatRatio,
 } from '../lib/format'
-import { colors, layout, space } from '../theme'
+import { colors, layout, radius, space } from '../theme'
 
 // The board polls its source every few minutes and only redraws when something changed, so there
 // is nothing to gain from polling it fast. This is "keep the phone screen roughly current", not a
@@ -204,6 +215,19 @@ export default function Dashboard() {
           <StatTile label="Tags" value={formatCount(vault.tags)} />
         </View>
 
+        {/* Capture. Only offered when the board has a snapshot URL, because that URL is the
+            address this writes to — a board on demo data has nowhere to put a memo. */}
+        {captureUrlFor(source.url) ? (
+          <Section title="Quick memo">
+            <MemoBox
+              sourceUrl={source.url}
+              // The board polls every few minutes; asking it to poll now is what makes a memo
+              // typed on the sofa appear on the panel while you are still looking at it.
+              onSaved={() => command(() => client.refresh())}
+            />
+          </Section>
+        ) : null}
+
         <Section title="Agents & queue">
           <Card style={styles.rows}>
             <InfoRow
@@ -319,6 +343,64 @@ function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: (
   )
 }
 
+/**
+ * Type a memo, write it into the vault.
+ *
+ * The write goes to the machine serving the snapshot, not to the board — see src/lib/capture.ts.
+ * Most producers will not accept it, so "this server doesn't do capture" is an ordinary answer
+ * and gets its own sentence rather than a generic failure.
+ */
+function MemoBox({ sourceUrl, onSaved }: { sourceUrl: string; onSaved: () => void }) {
+  const [text, setText] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const save = async () => {
+    if (saving || !text.trim()) return
+    setSaving(true)
+    setSaved(null)
+    setError(null)
+    try {
+      const { path } = await captureMemo(sourceUrl, text)
+      setText('')
+      setSaved(path || 'Saved to your inbox.')
+      onSaved()
+    } catch (e) {
+      setError(captureErrorMessage(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <TextInput
+        value={text}
+        onChangeText={(t) => {
+          setText(t)
+          setSaved(null)
+          setError(null)
+        }}
+        placeholder="Something to deal with later…"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        style={styles.memoInput}
+        editable={!saving}
+      />
+      {error ? <Text style={styles.memoError}>{error}</Text> : null}
+      {saved ? <Text style={styles.memoSaved}>Saved · {saved}</Text> : null}
+      <Button
+        label="Add to inbox"
+        variant="secondary"
+        disabled={!text.trim()}
+        loading={saving}
+        onPress={save}
+      />
+    </KeyboardAvoidingView>
+  )
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.section}>
@@ -402,6 +484,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textFaint,
     lineHeight: 16,
+  },
+  memoInput: {
+    minHeight: 84,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 12,
+    color: colors.text,
+    fontSize: 16,
+    textAlignVertical: 'top',
+    marginBottom: 10,
+  },
+  memoError: {
+    fontSize: 12,
+    color: colors.down,
+    lineHeight: 16,
+    marginBottom: 8,
+  },
+  memoSaved: {
+    fontSize: 12,
+    color: colors.up,
+    lineHeight: 16,
+    marginBottom: 8,
   },
   sourceNote: {
     fontSize: 12,

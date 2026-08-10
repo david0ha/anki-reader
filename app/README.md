@@ -34,6 +34,15 @@ no keyboard:
 - **Panel** — the measured full/partial refresh times. The refresh policy for this panel is meant
   to be chosen from measurement, and this is how you read the measurements off a board on a shelf
   instead of holding a serial cable to it.
+- **Quick memo** — type something and it lands in the vault's inbox, so the queue on the panel is
+  somewhere you can add to from the sofa. Saving also asks the board to poll, which is what makes
+  the memo appear on the glass while you are still looking at it.
+
+The memo box is the one thing here that does **not** talk to the board. `POST /capture` is served
+by whatever is producing the snapshot — `tools/vault_server.py --allow-capture` does, most
+producers will not — so the app derives its address from the snapshot URL the board reports, and
+treats "this server doesn't do capture" as an ordinary answer with its own sentence. The boundary
+is why it lives in `src/lib/capture.ts` and not in `src/lib/esp32.ts`.
 
 ## Why not Expo Go?
 
@@ -75,6 +84,13 @@ is exercised, with only the panel missing:
 
 ```bash
 python3 ../tools/mock_vault_server.py --port 8123     # the vault contract, as a server
+curl -X POST http://localhost:8080/api/vault -d '{"url":"http://localhost:8123/vault.json"}'
+```
+
+To exercise the memo box too, serve a real (or throwaway) vault with capture enabled instead:
+
+```bash
+python3 ../tools/vault_server.py ~/some/vault --port 8123 --allow-capture
 curl -X POST http://localhost:8080/api/vault -d '{"url":"http://localhost:8123/vault.json"}'
 ```
 
@@ -149,6 +165,7 @@ app/
    │  ├─ store.ts          AsyncStorage: board base URL + onboarding flag
    │  ├─ device.tsx        app-wide board connection context
    │  ├─ vaulturl.ts       snapshot-URL validation mirroring the firmware
+   │  ├─ capture.ts        writing a memo — to the vault server, NOT the board
    │  └─ format.ts         count / age / ms / fetch-result display helpers
    └─ onboarding/      flow.ts (step logic) + OnboardingContext
 ```
