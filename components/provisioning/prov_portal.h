@@ -32,7 +32,7 @@ typedef enum {
 // field may be NULL (served as ""). The pointed-to strings are copied during prov_portal_start.
 typedef struct {
     const char *device_id;  // stable per-device id (e.g. the MAC suffix)
-    const char *model;      // e.g. "Ticker Board"
+    const char *model;      // e.g. "Obsidian Board"
     const char *ap_ssid;    // the SoftAP SSID currently broadcast
 } prov_portal_info_t;
 

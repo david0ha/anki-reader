@@ -6,12 +6,15 @@
  * so the serializer compiles in the host tests and the desktop simulator.
  * user_app fills it under its state lock; device_api_json.c serializes it.
  *
- * Every numeric field is an integer. The previous revision of this API carried
- * doubles for prices and had to defend against NaN and against "%.2f" of a huge
- * magnitude truncating on the decimal point and producing JSON that strict
- * parsers reject. Nothing here needs a fraction — temperatures are whole
- * degrees and the battery is reported in millivolts — so that whole class of
- * bug is designed out rather than guarded against.
+ * This is a SUMMARY, not the vault snapshot. The phone does not need the graph
+ * edges or eight note titles — it needs to know the board is alive, what it is
+ * showing, and whether the last poll worked. The full snapshot is available
+ * from the same source the board polls, which the phone can reach too.
+ *
+ * Every numeric field is an integer. Nothing here needs a fraction — the panel
+ * timings are whole milliseconds and the battery is millivolts — so the class
+ * of bug where "%.2f" of a huge magnitude truncates on the decimal point and
+ * emits JSON that strict parsers reject is designed out rather than guarded.
  */
 #pragma once
 
@@ -22,19 +25,11 @@
 #define DEV_FW_MAXLEN        16
 #define DEV_DEVID_MAXLEN     16
 #define DEV_IP_MAXLEN        16
-#define DEV_CITY_MAXLEN      64   /* resolved "City, CC"         */
-#define DEV_LOCATION_MAXLEN  48   /* == PROV_LOCATION_MAX_LEN    */
-#define DEV_HANJA_MAXLEN      8
-#define DEV_HANGUL_MAXLEN    12
-#define DEV_MESSAGE_MAXLEN   64
-#define DEV_FORECAST_MAX      7   /* == WX_FORECAST_MAX          */
-
-typedef struct {
-    char dow[4];    /* "FRI" */
-    int  wx;        /* wx_kind_t */
-    int  lo;
-    int  hi;
-} dev_forecast_t;
+#define DEV_PAGE_MAXLEN      32
+#define DEV_VAULT_MAXLEN     32
+#define DEV_TIME_MAXLEN      24
+#define DEV_URL_MAXLEN      129   /* == PROV_URL_MAX_LEN + 1 */
+#define DEV_RESULT_MAXLEN    16
 
 typedef struct {
     char model[DEV_MODEL_MAXLEN];
@@ -42,35 +37,42 @@ typedef struct {
     char device_id[DEV_DEVID_MAXLEN];
     char ip[DEV_IP_MAXLEN];
 
-    int  page;              /* ui_page_t: 0 = omikuji, 1 = home  */
+    int  page;                          /* ui_page_t */
+    char page_title[DEV_PAGE_MAXLEN];   /* the same name the footer shows */
 
-    /* The drawn fortune. valid=false before the first draw. */
-    bool fortune_valid;
-    int  rank;              /* omikuji_rank_t, 0 = 大凶 .. 6 = 大吉 */
-    char rank_hanja[DEV_HANJA_MAXLEN];
-    char rank_hangul[DEV_HANGUL_MAXLEN];
-    char message[DEV_MESSAGE_MAXLEN];
+    /* --- the vault snapshot on the glass --- */
+    bool vault_valid;
+    bool demo;                          /* rendered from the built-in sample */
+    char vault[DEV_VAULT_MAXLEN];
+    char generated_at[DEV_TIME_MAXLEN];
+    int  notes;
+    int  links;
+    int  orphans;
+    int  tags;
+    int  added_today;
+    int  added_7d;
+    int  agents_total;
+    int  agents_running;
+    int  recent_count;
+    int  inbox_total;
 
-    /* Today's 일진. */
-    int  iljin_index;       /* 0..59, 0 = 甲子 */
-    char iljin_hanja[DEV_HANJA_MAXLEN];
-    char iljin_hangul[DEV_HANGUL_MAXLEN];
+    /* --- how it got there --- */
+    char vault_url[DEV_URL_MAXLEN];
+    char last_result[DEV_RESULT_MAXLEN];  /* vault_fetch_result_name()        */
+    int  poll_seconds;
+    int  age_seconds;                     /* since the last SUCCESSFUL fetch  */
+    bool stale;
 
-    /* Weather (Open-Meteo). */
-    char location[DEV_LOCATION_MAXLEN + 1];   /* what the user typed  */
-    bool wx_valid;
-    int  wx_kind;                             /* wx_kind_t            */
-    int  wx_temp_c;
-    char city[DEV_CITY_MAXLEN];               /* geocoded confirmation */
-    int  forecast_count;
-    dev_forecast_t forecast[DEV_FORECAST_MAX];
-
-    /* Power. */
-    bool battery_valid;
+    /* --- power --- */
+    bool battery_present;
     int  battery_pct;
     int  battery_mv;
 
-    /* e-Paper: partial refreshes since the last full one. Exposed so the
-     * refresh policy can be observed without a serial cable. */
+    /* --- e-Paper ---
+     * The refresh timings are here because the panel's refresh policy is meant
+     * to be set from measurement on real hardware, and reading them off a phone
+     * beats holding a serial cable to a board on a shelf. */
     int  partial_chain;
+    int  full_refresh_ms;
+    int  partial_refresh_ms;
 } device_state_t;

@@ -1,20 +1,28 @@
 /*
- * epd_panel.h — SSD1680 122x250 monochrome e-Paper panel port.
+ * epd_panel.h — UC8179 648x480 monochrome e-Paper panel port.
  *
- * Replaces the ST7305/ST7306 reflective-LCD port this project started from.
- * The command sequence follows Waveshare's own 2.13" V4 reference driver
- * (waveshareteam/e-Paper, EPD_2in13_V4.c) — see docs/epaper-2in13.md for why
- * that source was chosen over the esp_lcd_ssd1681 component.
+ * The panel is the Seeed 5.83" monochrome (648x480) on an EE04 driver board.
+ * Its controller is the UC8179 — the same part, at the same resolution, as
+ * Waveshare's 5.83inch e-Paper V2, so the command sequence here is transcribed
+ * from that vendor driver (waveshareteam/e-Paper, EPD_5in83_V2.c) rather than
+ * guessed from the datasheet. Deviations are marked "NOTE:".
  *
- * The important behavioural difference from an LCD: **a refresh is not free.**
- * A full refresh takes ~2s and flashes the panel; a partial refresh is ~0.3s
- * and silent but leaves ghosting that accumulates. So drawing and presenting
- * are separate here: the LVGL flush callback only fills the framebuffer, and
- * the application decides when (and how) to push it to the glass.
+ * Two traps carried over from the 2.13"/SSD1680 board this code came from, both
+ * of which change here:
+ *
+ *   1. BUSY is **active LOW** on the UC8179 — idle is HIGH. That is the exact
+ *      opposite of the SSD1680. Getting it backwards does not fail loudly; it
+ *      makes every wait return instantly and every refresh come out torn.
+ *   2. 648 is a multiple of 8, so unlike 122 there is no off-panel padding in
+ *      the last byte of a row. The stride arithmetic is plain.
+ *
+ * The important behavioural property is unchanged: **a refresh is not free.**
+ * Drawing and presenting are separate. The LVGL flush callback only fills the
+ * framebuffer; the application decides when to spend a refresh and which kind:
  *
  *   ... update widgets ...
- *   lv_refr_now(NULL);        // renders -> flush_cb -> epd_set_pixel()
- *   epd_refresh_full();       // or epd_refresh_partial()
+ *   Lvgl_RenderNow();         // renders -> flush_cb -> epd_set_pixel()
+ *   epd_refresh_full();       // or epd_refresh_partial_area(...)
  */
 #pragma once
 
@@ -27,23 +35,25 @@
 extern "C" {
 #endif
 
-#define EPD_PANEL_W   122
-#define EPD_PANEL_H   250
+#define EPD_PANEL_W   648
+#define EPD_PANEL_H   480
 
-/* The controller's RAM row is byte-granular and 122 px needs 16 bytes; the
- * high 6 bits of the last byte in every row are off-panel padding. */
-#define EPD_STRIDE    ((EPD_PANEL_W + 7) / 8)      /* 16 */
-#define EPD_FB_SIZE   (EPD_STRIDE * EPD_PANEL_H)   /* 4000 */
+/* 648 / 8 = 81 exactly — every bit in the framebuffer is a real pixel. */
+#define EPD_STRIDE    ((EPD_PANEL_W + 7) / 8)      /* 81    */
+#define EPD_FB_SIZE   (EPD_STRIDE * EPD_PANEL_H)   /* 38880 */
 
-/* Framebuffer bit convention, matching the controller: 1 = white, 0 = black. */
+/* Framebuffer bit convention, matching the controller's 0x13 plane:
+ * 1 = white, 0 = black. (Waveshare's Clear() writes 0xFF to make it white.) */
 typedef enum {
     EPD_BLACK = 0,
     EPD_WHITE = 1,
 } epd_color_t;
 
 /* Ghosting accumulates across partial refreshes, so every Nth partial is
- * silently promoted to a full one. */
-#define EPD_PARTIAL_CHAIN_MAX  10
+ * promoted to a full one. Lower than the 2.13" board's 10: this panel is ten
+ * times the area, and residue on a big white dashboard is far more visible
+ * than on a dense fortune slip. */
+#define EPD_PARTIAL_CHAIN_MAX  6
 
 typedef struct {
     int sck;
@@ -71,27 +81,46 @@ uint8_t *epd_framebuffer(void);
 
 /* --- presenting ---------------------------------------------------------- */
 
-/* Full update: ~2s, flashes, clears ghosting. Also re-arms the panel's
- * "previous image" RAM so subsequent partial updates have a correct base.
- * Resets the partial chain counter. */
+/* Full update: flashes, clears ghosting, re-bases the panel for later partial
+ * updates. Resets the partial chain counter. Expect seconds, not milliseconds
+ * — epd_last_full_ms() reports what it actually took on this board. */
 void epd_refresh_full(void);
 
-/* Partial update: ~0.3s, no flash, leaves faint ghosting. Automatically
- * promotes itself to a full refresh once EPD_PARTIAL_CHAIN_MAX partials have
- * accumulated since the last full one. */
+/* Partial update of one rectangle. No flash, leaves faint ghosting.
+ *
+ * x is snapped outward to a byte boundary (the controller addresses source
+ * lines in groups of 8), so the refreshed area may be up to 7 px wider on each
+ * side than asked for. That is harmless — the framebuffer content there is
+ * already correct — but it is why callers should not rely on the rectangle
+ * being exact.
+ *
+ * Promotes itself to a full refresh once EPD_PARTIAL_CHAIN_MAX partials have
+ * accumulated, so ghosting still gets cleared without anyone tracking it. */
+void epd_refresh_partial_area(int x1, int y1, int x2, int y2);
+
+/* Partial update of the whole panel. */
 void epd_refresh_partial(void);
 
-/* How many partial refreshes have run since the last full one (0..N-1).
- * Exposed so the UI task can log/verify the refresh policy. */
+/* How many partial refreshes have run since the last full one (0..N-1). */
 int epd_partial_chain(void);
+
+/* How long the last refresh of each kind actually took, in milliseconds; 0 if
+ * that kind has not run yet.
+ *
+ * These exist because the refresh policy for this panel is meant to be decided
+ * from measurement, not from what was true on a panel a tenth the size — and
+ * exposing them through /api/info means the measurement can be read off a
+ * phone instead of a serial cable. */
+int epd_last_full_ms(void);
+int epd_last_partial_ms(void);
 
 /* Deep sleep (~1uA). The next refresh transparently re-initialises. */
 void epd_sleep(void);
 
 /* Cycle a set of test patterns — white, black, 1px checkerboard, dither ramp,
  * and a border+diagonal frame — each with a full refresh, then restore white.
- * Verifies wiring, pixel addressing and orientation. Blocks for ~10s, so call
- * it from a task, never from an HTTP handler. */
+ * Verifies wiring, pixel addressing and orientation. Blocks for tens of
+ * seconds, so call it from a task, never from an HTTP handler. */
 void epd_selftest(void);
 
 #ifdef __cplusplus

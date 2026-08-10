@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# LVGL simulator: build -> render every screen at 122x250 -> BMP + PNG.
-# Usage:  ./sim.sh            (sample weather)
-#         LOCATION="Seoul" ./sim.sh   (live Open-Meteo, the device's own path)
+# LVGL simulator: build -> render every page at 648x480 -> BMP + PNG, and assert
+# on the pixels. Exits non-zero if any layout or glyph check fails.
+#
+# Usage:  ./sim.sh                                            # built-in demo data
+#         VAULT_URL=http://localhost:8123/vault.json ./sim.sh # the device's own fetch path
 set -e
 cd "$(dirname "$0")"
 
@@ -18,4 +20,4 @@ if command -v sips >/dev/null 2>&1; then
     sips -s format png "$f" --out "${f%.bmp}.png" >/dev/null
   done
 fi
-echo "screenshots in sim/shots/ — 7 omikuji ranks, home, setup overlay"
+echo "screenshots in sim/shots/ — 4 pages, the offline header, and the setup overlay"

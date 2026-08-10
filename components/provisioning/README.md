@@ -14,7 +14,7 @@ load config (NVS)
       │                          │
       no                        fail
       ▼                          ▼
-  start SoftAP "Ticker Board-XXXX" (open) + captive portal
+  start SoftAP "Obsidian Board-XXXX" (open) + captive portal
       │
   user submits SSID / password / location  →  save to NVS  →  reboot
 ```

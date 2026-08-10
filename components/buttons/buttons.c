@@ -15,14 +15,10 @@
 
 static const char *TAG = "buttons";
 
-/* USER = the EE05 board's side button 1 (net BOTTON1, XIAO D1, 10K external
- * pull-up). BOOT = the button on the XIAO module itself. The EE05's other two
- * side buttons (GPIO3, GPIO8) are unused. */
-#define BUTTON_USER_GPIO  GPIO_NUM_2
-#define BUTTON_BOOT_GPIO  GPIO_NUM_0
 #define DEBOUNCE_US       (200 * 1000)   /* 200 ms */
 
 static QueueHandle_t     s_queue;
+static int               s_gpio[BUTTON_COUNT];
 static volatile int64_t  s_last_us[BUTTON_COUNT];
 
 static void IRAM_ATTR button_isr(void *arg)
@@ -44,12 +40,22 @@ static void IRAM_ATTR button_isr(void *arg)
     }
 }
 
-void buttons_init(QueueHandle_t out_queue)
+void buttons_init(QueueHandle_t out_queue, const int gpios[BUTTON_COUNT])
 {
     s_queue = out_queue;
 
+    uint64_t mask = 0;
+    for (int i = 0; i < BUTTON_COUNT; i++) {
+        s_gpio[i] = gpios ? gpios[i] : -1;
+        if (s_gpio[i] >= 0) mask |= 1ULL << s_gpio[i];
+    }
+    if (!mask) {
+        ESP_LOGW(TAG, "no buttons configured");
+        return;
+    }
+
     gpio_config_t io = {
-        .pin_bit_mask = (1ULL << BUTTON_USER_GPIO) | (1ULL << BUTTON_BOOT_GPIO),
+        .pin_bit_mask = mask,
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -63,15 +69,22 @@ void buttons_init(QueueHandle_t out_queue)
         ESP_ERROR_CHECK(err);
     }
 
-    ESP_ERROR_CHECK(gpio_isr_handler_add(BUTTON_USER_GPIO, button_isr, (void *)BUTTON_USER));
-    ESP_ERROR_CHECK(gpio_isr_handler_add(BUTTON_BOOT_GPIO, button_isr, (void *)BUTTON_BOOT));
+    for (int i = 0; i < BUTTON_COUNT; i++) {
+        if (s_gpio[i] < 0) continue;
+        ESP_ERROR_CHECK(gpio_isr_handler_add((gpio_num_t)s_gpio[i], button_isr,
+                                             (void *)(uintptr_t)i));
+    }
 
-    ESP_LOGI(TAG, "ready: USER=GPIO%d, BOOT=GPIO%d",
-             BUTTON_USER_GPIO, BUTTON_BOOT_GPIO);
+    ESP_LOGI(TAG, "ready: KEY0=GPIO%d KEY1=GPIO%d KEY2=GPIO%d BOOT=GPIO%d",
+             s_gpio[BUTTON_KEY0], s_gpio[BUTTON_KEY1],
+             s_gpio[BUTTON_KEY2], s_gpio[BUTTON_BOOT]);
 }
 
-bool buttons_both_pressed(void)
+bool buttons_is_pressed(button_id_t id)
 {
+    if (id < 0 || id >= BUTTON_COUNT || s_gpio[id] < 0) {
+        return false;
+    }
     /* Active-low: a held button reads 0. */
-    return gpio_get_level(BUTTON_USER_GPIO) == 0 && gpio_get_level(BUTTON_BOOT_GPIO) == 0;
+    return gpio_get_level((gpio_num_t)s_gpio[id]) == 0;
 }

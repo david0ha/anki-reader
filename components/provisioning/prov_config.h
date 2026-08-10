@@ -1,4 +1,4 @@
-// Pure (host-testable) configuration model for Wi-Fi + weather-location provisioning.
+// Pure (host-testable) configuration model for Wi-Fi + vault-source provisioning.
 // This header MUST NOT depend on ESP-IDF so it can be unit-tested on the host.
 #pragma once
 
@@ -7,16 +7,20 @@
 
 #define PROV_SSID_MAX_LEN     32   // 802.11 SSID limit
 #define PROV_PASS_MAX_LEN     64   // WPA2 passphrase limit
-#define PROV_LOCATION_MAX_LEN 48   // free-text weather location ("Seoul", "Paris, FR")
+#define PROV_URL_MAX_LEN     128   // where the vault snapshot is fetched from
 
 typedef struct {
     char ssid[PROV_SSID_MAX_LEN + 1];
     char password[PROV_PASS_MAX_LEN + 1];
-    // Free-text place the user typed for weather. The device geocodes it to a
-    // coordinate (Open-Meteo) once online — the portal/AP has no internet to do
-    // so itself — and shows the resolved "City, CC" as confirmation. Empty -> no
-    // weather widget.
-    char location[PROV_LOCATION_MAX_LEN + 1];
+    // The URL the device polls for its vault snapshot, e.g.
+    // "http://macbook.local:8123/vault.json". Plain HTTP is the normal case:
+    // this is a link between two machines on the user's own LAN, and requiring
+    // a certificate for it would mean requiring a certificate authority.
+    //
+    // Empty is a supported, complete configuration — the board then renders the
+    // built-in demo snapshot with a DEMO badge, which is what makes it a
+    // finished object with no PC running.
+    char vault_url[PROV_URL_MAX_LEN + 1];
 } prov_config_t;
 
 #ifdef __cplusplus
@@ -36,6 +40,14 @@ typedef enum {
 // Validate submitted Wi-Fi credentials without storing them. NULL ssid/password is treated as
 // empty. An empty password is allowed (open networks); only an empty SSID is rejected.
 prov_cred_result_t prov_validate_credentials(const char *ssid, const char *password);
+
+// True if `url` is something the device can actually fetch: empty (meaning "use the demo
+// snapshot"), or an http:// or https:// URL with a host, within PROV_URL_MAX_LEN.
+//
+// Deliberately permissive about the rest — a hostname, an IP, a port, a path, a query string
+// are all fine. The point is to catch the two mistakes people actually make, which are pasting
+// a bare hostname with no scheme and pasting a whole file:// path.
+bool prov_validate_vault_url(const char *url);
 
 #ifdef __cplusplus
 }

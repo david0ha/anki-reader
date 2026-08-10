@@ -1,29 +1,33 @@
 #!/usr/bin/env python3
 """
-Regenerate the subset CJK fonts in components/fortune_core/fonts/.
+Regenerate the Korean fonts in components/vault_core/fonts/.
 
-Why this exists
----------------
-The panel is 1-bit and 122x250. A full Korean font is ~11k glyphs and megabytes;
-we need about seventy. Subsetting is therefore mandatory — but a hand-maintained
-`--symbols` list rots the moment someone edits a message, and the failure mode is
-a tofu box (U+FFFD-ish blank) that only shows up once the firmware is on the
-glass.
+Why this is different from a subset generator
+---------------------------------------------
+The board this project forked from could subset its fonts down to seventy
+glyphs, because every string it drew was a literal in its own source. This board
+draws note titles, tag names, agent names and inbox items that arrive from the
+network at runtime. There is no symbol list that can be derived ahead of time,
+and the failure mode of guessing is a tofu box on somebody's note title — on the
+glass, after a two-second refresh, where nobody is watching.
 
-So the symbol list is not maintained. It is *derived*, here, from the same
-sources the firmware compiles:
+So both faces carry the whole 완성형 set: the 2350 Hangul syllables of
+KS X 1001, plus ASCII, plus the punctuation the UI composes at runtime.
 
-    components/fortune_core/include/omikuji_messages.h   fortune text + labels
-    components/fortune_core/saju.c                       the 60갑자 name tables
+The 2350 are not a hardcoded table. They are exactly the syllables reachable
+through the EUC-KR encoding's Hangul rows (0xB0A1-0xC8FE), so Python's own codec
+generates them — 25 lead bytes x 94 trail bytes = 2350, no data file to rot.
 
-Change a message, re-run this, and the fonts follow. Nothing else to remember.
+At 1 bpp this costs roughly 100 KB of flash per face against an 8 MB app
+partition. 1 bpp and not 4: the panel binarizes everything anyway, so
+anti-aliasing would cost four times the flash to produce pixels that are then
+thresholded straight back to black and white.
 
 Usage
 -----
-    python3 tools/gen_fonts.py --font /path/to/NotoSerifKR-Regular.otf
-
-    # or let it fetch the OFL source itself into a temp dir:
-    python3 tools/gen_fonts.py --download
+    python3 tools/gen_fonts.py --download          # fetch Noto Sans KR itself
+    python3 tools/gen_fonts.py --font /path/NotoSansKR-Regular.otf \\
+                               --font-medium /path/NotoSansKR-Medium.otf
 
 Needs node/npx (it shells out to lv_font_conv). The generated .c files are
 committed, so a normal build never runs this.
@@ -38,167 +42,81 @@ import tempfile
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CORE = os.path.join(ROOT, "components", "fortune_core")
+CORE = os.path.join(ROOT, "components", "vault_core")
 FONTDIR = os.path.join(CORE, "fonts")
+STRINGS_H = os.path.join(CORE, "include", "ui_strings.h")
 
-MESSAGES_H = os.path.join(CORE, "include", "omikuji_messages.h")
-SAJU_C = os.path.join(CORE, "saju.c")
-
-# Noto Serif KR — SIL Open Font License 1.1, so the generated bitmaps are
-# redistributable with this repo. A serif/명조 face is also the right look: real
-# omikuji slips are printed in a brush-derived serif, not a UI sans. The 만세력
-# page additionally uses the Bold weight where the mockup asks for weight 700
-# (the grade Hanja, the seal, the fortune-table headers).
-FONT_URL_BASE = "https://github.com/notofonts/noto-cjk/raw/main/Serif/SubsetOTF/KR/"
+# Noto Sans KR — SIL Open Font License 1.1, so the generated bitmaps are
+# redistributable with this repo. A sans face on purpose: this panel is a
+# dashboard, and at 16 px after binarization a serif's thin strokes drop out.
+FONT_URL_BASE = "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/KR/"
 FONT_URLS = {
-    "regular": FONT_URL_BASE + "NotoSerifKR-Regular.otf",
-    "bold":    FONT_URL_BASE + "NotoSerifKR-Bold.otf",
+    "regular": FONT_URL_BASE + "NotoSansKR-Regular.otf",
+    "medium":  FONT_URL_BASE + "NotoSansKR-Medium.otf",
 }
-LICENSE_URL = "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/LICENSE"
-
-STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
-# The rank table: X(id, hanja, hangul, message, haeseok, joeon, jae, sa, dae,
-# geon). Rows are long enough to spill across '\'-continued lines now, so the
-# gap between arguments has to admit the continuation backslash too — plain
-# \s* stops dead at it.
-GAP = r'[\s\\]*'
-XROW_RE = re.compile(r'X\(' + GAP + r'(\w+)' + (GAP + ',' + GAP + r'"([^"]*)"') * 9 + GAP + r'\)')
-# The five-element 흐름 table: X(id, text). One string, so it can never swallow a
-# rank row — a rank row has a comma after its first string where this needs ')'.
-FLOWROW_RE = re.compile(r'X\(' + GAP + r'(\w+)' + GAP + ',' + GAP + r'"([^"]*)"' + GAP + r'\)')
-
-# One alternation pass over the source: string/char literals are matched (and
-# kept) before the comment patterns get a chance, so a "//" inside a literal is
-# safe. Comments must go — saju.c's header quotes its sources verbatim, and
-# without this every accented letter and Hanja in a code comment would silently
-# get a glyph baked into the firmware.
-TOKEN_RE = re.compile(
-    r'"(?:\\.|[^"\\])*"'      # string literal
-    r"|'(?:\\.|[^'\\])*'"     # char literal
-    r"|/\*.*?\*/"             # block comment
-    r"|//[^\n]*",             # line comment
-    re.S,
-)
+LICENSE_URL = "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/LICENSE"
 
 
-def read(path):
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+def wansung_syllables():
+    """The 2350 KS X 1001 완성형 Hangul syllables.
 
-
-def unescape(raw):
-    return raw.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"').replace("\\\\", "\\")
-
-
-def strip_noise(src):
-    """Remove comments and #include lines.
-
-    Includes matter because `#include "saju.h"` is a string literal as far as a
-    regex is concerned, and it would otherwise put s/a/j/u/./h into a Korean
-    font that never draws a Latin letter.
+    Derived from the EUC-KR codec rather than tabulated: the encoding's Hangul
+    block is lead 0xB0..0xC8 x trail 0xA1..0xFE, and every one of those pairs
+    decodes to exactly one syllable. If this ever returns something other than
+    2350 the assumption has broken and the caller says so loudly.
     """
-    src = TOKEN_RE.sub(lambda m: "" if m.group(0)[0] == "/" else m.group(0), src)
-    return re.sub(r'^\s*#\s*include\s+.*$', "", src, flags=re.M)
+    out = []
+    for lead in range(0xB0, 0xC9):
+        for trail in range(0xA1, 0xFF):
+            try:
+                out.append(bytes([lead, trail]).decode("euc-kr"))
+            except UnicodeDecodeError:
+                pass
+    return out
 
 
-def strings_in(path):
-    """Every string literal in a C source (comments/includes excluded)."""
-    return [unescape(raw) for raw in STRING_RE.findall(strip_noise(read(path)))]
+def ui_string_chars():
+    """Every character in a #define'd string literal in ui_strings.h.
 
-
-def renderable(s):
-    """The characters of a literal that actually reach the glass.
-
-    ASCII is included — the first version of this script kept only non-ASCII
-    and every space in a Korean message came out as a tofu box, because the
-    space is drawn from the *label's* font, not a fallback. Control characters
-    are excluded ('\\n' is a layout instruction), and printf-style literals are
-    dropped whole by the caller.
+    The 완성형 set covers the Hangul, but not the typography the UI composes at
+    runtime — the interpunct between footer hints, the ↔ after a link count, the
+    percent sign. Those live in ui_strings.h (S_COMPOSED_CHARS exists precisely
+    to hold the ones no other literal contains), so they are collected from
+    there instead of being remembered here.
     """
-    return {c for c in s if c.isprintable()}
+    with open(STRINGS_H, encoding="utf-8") as f:
+        src = f.read()
+    # Comments first: the header explains itself in prose that contains Hangul
+    # and typography which must NOT end up in the font.
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    src = re.sub(r"//[^\n]*", "", src)
+
+    chars = set()
+    for lit in re.findall(r'"((?:[^"\\]|\\.)*)"', src):
+        lit = lit.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+        chars |= {c for c in lit if c.isprintable()}
+    return chars
 
 
-# The fortune-table headers (財運/事業/對人/健康) and the masthead (今日運勢)
-# get their own Bold faces, so they are matched by name rather than fished out
-# of the general string soup — by Unicode range they would be
-# indistinguishable from the 60갑자 Hanja.
-CAT_RE = re.compile(r'#\s*define\s+MANSE_CAT_\w+\s+"([^"]*)"')
-TITLE_RE = re.compile(r'#\s*define\s+MANSE_TITLE\s+"([^"]*)"')
+def symbol_set():
+    syll = wansung_syllables()
+    if len(syll) != 2350:
+        sys.exit(f"expected 2350 완성형 syllables, generated {len(syll)} — "
+                 "Python's euc-kr codec is not what this script assumes")
 
-HAN_LO, HAN_HI = 0x4E00, 0x9FFF   # CJK Unified Ideographs
+    chars = set(syll)
+    chars |= {chr(c) for c in range(0x20, 0x7F)}        # printable ASCII
+    chars |= ui_string_chars()
+    chars.discard("\n")
+    chars.discard("\t")
+    return chars
 
 
-def is_han(c):
-    return HAN_LO <= ord(c) <= HAN_HI
-
-
-def collect():
-    """Return {font_key: (size, weight, set_of_chars)}."""
-    msg_src = strip_noise(read(MESSAGES_H))
-    rows = XROW_RE.findall(msg_src)
-    if len(rows) != 7:
-        sys.exit(f"expected 7 ranks in {MESSAGES_H}, found {len(rows)} — "
-                 "the X-macro shape changed; fix this script too")
-    if len(FLOWROW_RE.findall(msg_src)) != 5:
-        sys.exit(f"expected 5 flow rows in {MESSAGES_H} — "
-                 "the OMIKUJI_FLOW_TABLE shape changed; fix this script too")
-
-    rank_hanja = set()
-    rank_hangul = set()
-    body = set()
-    for row in rows:
-        rank_hanja |= renderable(unescape(row[1]))
-        rank_hangul |= renderable(unescape(row[2]))
-
-    # Everything else — messages, verses, table values, fixed labels, the 흐름
-    # table, and the 60갑자 name tables from saju.c. The X-macro columns land
-    # here too via the generic literal scan, which is fine: `body` is the
-    # superset the 16 px face carries.
-    #
-    # Format strings are skipped: "%s %s" would otherwise bake a '%' and an 's'
-    # into the font, and neither is ever drawn.
-    for path in (MESSAGES_H, SAJU_C):
-        for s in strings_in(path):
-            if "%" in s:
-                continue
-            body |= renderable(s)
-
-    # Characters that exist only in runtime-composed strings, never in a source
-    # literal (the class of bug that once turned every space into a tofu box):
-    # the space in "<hanja> <hangul>", and the date line "2026. 8. 8 (토)",
-    # whose digits and punctuation come from snprintf.
-    body.add(" ")
-    body |= set("0123456789().")
-
-    cat_han = set()
-    for s in CAT_RE.findall(msg_src):
-        cat_han |= renderable(unescape(s))
-
-    title = set()
-    for s in TITLE_RE.findall(msg_src):
-        title |= renderable(unescape(s))
-
-    # The seal stamps 吉 on auspicious ranks and 凶 on the rest — always a
-    # character the rank table already contains.
-    seal = {c for c in rank_hanja if c in "吉凶"}
-
-    # The 12 px workhorse draws Hangul and ASCII only (verse, meta line, side
-    # pillars, table values, foot); its Han characters all render from the
-    # dedicated Bold faces, so they are excluded here.
-    kr12 = {c for c in body | rank_hangul if not is_han(c)}
-
-    return {
-        # The grade (大吉 … 大凶) — single size for every rank, like the mockup.
-        "ui_font_kr_hanja_34": (34, "bold", rank_hanja),
-        # The seal glyph and the masthead 今日運勢.
-        "ui_font_kr_hanja_16": (16, "bold", seal | title),
-        # Two-char fortune-table headers (財運 …) at table-column width.
-        "ui_font_kr_hanja_12": (12, "bold", cat_han),
-        # Body of the 만세력 page.
-        "ui_font_kr_12": (12, "regular", kr12),
-        # Head band, page-1 labels, the composed 일진 line, and the overlay.
-        "ui_font_kr_16": (16, "regular", body | rank_hangul | rank_hanja),
-    }
+# name -> (size, weight). Both faces are full; see the module docstring.
+FACES = {
+    "ui_font_kr_16": (16, "regular"),
+    "ui_font_kr_20": (20, "medium"),
+}
 
 
 def run_conv(font, name, size, chars):
@@ -215,33 +133,34 @@ def run_conv(font, name, size, chars):
         "--lv-font-name", name,
         "-o", out,
     ]
-    print(f"  {name}: {len(chars)} glyph(s) @ {size}px")
+    print(f"  {name}: {len(chars)} glyphs @ {size}px ...", flush=True)
     subprocess.run(cmd, check=True, cwd=ROOT)
-    return out, len(chars)
+    return out
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--font", help="path to the Regular .otf/.ttf")
-    ap.add_argument("--font-bold", help="path to the Bold .otf/.ttf")
+    ap.add_argument("--font-medium", help="path to the Medium .otf/.ttf")
     ap.add_argument("--download", action="store_true",
-                    help="fetch missing Noto Serif KR weights into a temp dir")
+                    help="fetch the Noto Sans KR weights into a temp dir")
     ap.add_argument("--dry-run", action="store_true",
-                    help="print the derived symbol sets and stop")
+                    help="report the symbol set and stop")
     args = ap.parse_args()
 
-    sets = collect()
-
+    chars = symbol_set()
     if args.dry_run:
-        for name, (size, weight, chars) in sets.items():
-            print(f"{name} ({size}px {weight}, {len(chars)}): {''.join(sorted(chars))}")
+        extra = sorted(c for c in chars if not ("가" <= c <= "힣") and ord(c) > 0x7E)
+        print(f"{len(chars)} symbols "
+              f"(2350 완성형 + {len(chars) - 2350} ASCII/punctuation)")
+        print("non-ASCII, non-Hangul:", "".join(extra))
         return
 
-    fonts = {"regular": args.font, "bold": args.font_bold}
+    fonts = {"regular": args.font, "medium": args.font_medium}
     missing = [w for w, p in fonts.items() if not p]
     if missing:
         if not args.download:
-            sys.exit("give --font and --font-bold, or --download")
+            sys.exit("give --font and --font-medium, or --download")
         tmp = tempfile.mkdtemp()
         for w in missing:
             fonts[w] = os.path.join(tmp, os.path.basename(FONT_URLS[w]))
@@ -251,10 +170,10 @@ def main():
 
     os.makedirs(FONTDIR, exist_ok=True)
     total = 0
-    for name, (size, weight, chars) in sets.items():
-        path, _ = run_conv(fonts[weight], name, size, chars)
+    for name, (size, weight) in FACES.items():
+        path = run_conv(fonts[weight], name, size, chars)
         total += os.path.getsize(path)
-    print(f"generated {len(sets)} fonts, {total // 1024} KiB of C source")
+    print(f"generated {len(FACES)} faces, {total // 1024} KiB of C source")
 
 
 if __name__ == "__main__":

@@ -15,10 +15,10 @@
 
 static const char *TAG = "device_api";
 
-/* The state document is ~700 bytes with a full forecast; size with headroom. */
+/* The state document is ~800 bytes; size with headroom. */
 #define STATE_BUF_SZ 1600
-/* Control bodies are tiny ({"page":1}); the location string is the largest. */
-#define POST_BUF_SZ  256
+/* Control bodies are tiny ({"page":1}); the vault URL is the largest. */
+#define POST_BUF_SZ  320
 
 // ---------------------------------------------------------------------------
 // Small response helpers
@@ -144,14 +144,15 @@ static esp_err_t api_state_get(httpd_req_t *req)
 // POST handlers — drive the app via the user_app_api bridge
 // ---------------------------------------------------------------------------
 
-// POST /api/fortune/draw — no body. Draws a new omikuji (full panel refresh).
-static esp_err_t api_draw_post(httpd_req_t *req)
+// POST /api/refresh — no body. Poll the vault source now instead of waiting out
+// the interval. The panel is only refreshed if what comes back differs from what
+// is already on the glass, so this is safe to call repeatedly.
+static esp_err_t api_refresh_post(httpd_req_t *req)
 {
-    (void)req;
-    return user_app_draw_fortune() ? send_ok(req) : send_err(req, "busy");
+    return user_app_refresh_now() ? send_ok(req) : send_err(req, "busy");
 }
 
-// POST /api/page { page: 0 = omikuji, 1 = home }
+// POST /api/page { page: 0..3 }
 static esp_err_t api_page_post(httpd_req_t *req)
 {
     esp_err_t sent;
@@ -169,29 +170,32 @@ static esp_err_t api_page_post(httpd_req_t *req)
     return rc;
 }
 
-// POST /api/location { location } — set the weather location live (persisted to NVS; the
-// device re-geocodes it via Open-Meteo). An empty string turns the weather block off.
-static esp_err_t api_location_post(httpd_req_t *req)
+// POST /api/vault { url } — point the device at a different snapshot URL. Persisted to NVS and
+// applied live; an empty string switches to the built-in demo snapshot.
+static esp_err_t api_vault_post(httpd_req_t *req)
 {
     esp_err_t sent;
     cJSON *root = parse_body(req, &sent);
     if (root == NULL) return sent;
 
-    cJSON *loc = cJSON_GetObjectItem(root, "location");
+    cJSON *url = cJSON_GetObjectItem(root, "url");
     esp_err_t rc;
-    if (!cJSON_IsString(loc) || loc->valuestring == NULL) {
+    if (!cJSON_IsString(url) || url->valuestring == NULL) {
         rc = send_err(req, "bad_json");
-    } else if (strlen(loc->valuestring) > DEV_LOCATION_MAXLEN) {
-        rc = send_err(req, "location_too_long");
+    } else if (!user_app_set_vault_url(url->valuestring)) {
+        // One code for both "not a usable URL" and "queue full": the first is by
+        // far the likelier, and the app cannot do anything different about the
+        // second anyway.
+        rc = send_err(req, "vault_url_invalid");
     } else {
-        rc = user_app_set_location(loc->valuestring) ? send_ok(req) : send_err(req, "busy");
+        rc = send_ok(req);
     }
     cJSON_Delete(root);
     return rc;
 }
 
-// POST /api/display/test — no body. Runs the panel self-test sweep (~10s of full
-// refreshes) on the UI task; replies as soon as it is queued, not when it finishes.
+// POST /api/display/test — no body. Runs the panel self-test sweep (tens of seconds
+// of full refreshes) on the UI task; replies as soon as it is queued, not when it finishes.
 static esp_err_t api_display_test_post(httpd_req_t *req)
 {
     return user_app_display_test() ? send_ok(req) : send_err(req, "busy");
@@ -218,9 +222,9 @@ static void start_http(void)
     const httpd_uri_t routes[] = {
         {.uri = "/api/info",         .method = HTTP_GET,  .handler = api_info_get},
         {.uri = "/api/state",        .method = HTTP_GET,  .handler = api_state_get},
-        {.uri = "/api/fortune/draw", .method = HTTP_POST, .handler = api_draw_post},
+        {.uri = "/api/refresh",      .method = HTTP_POST, .handler = api_refresh_post},
         {.uri = "/api/page",         .method = HTTP_POST, .handler = api_page_post},
-        {.uri = "/api/location",     .method = HTTP_POST, .handler = api_location_post},
+        {.uri = "/api/vault",        .method = HTTP_POST, .handler = api_vault_post},
         {.uri = "/api/display/test", .method = HTTP_POST, .handler = api_display_test_post},
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
@@ -236,13 +240,14 @@ static void start_mdns(void)
         ESP_LOGW(TAG, "mdns_init failed: %s", esp_err_to_name(err));
         return;
     }
-    // Kept as "tickerboard" deliberately: app/src/lib/discovery.ts hardcodes
-    // tickerboard.local as its fallback host. Renaming this without an app
-    // release would make the device undiscoverable off the AP.
-    mdns_hostname_set("tickerboard");
+    // NOT "tickerboard": that name belongs to the fortune board this project
+    // forked from, whose shipped app resolves tickerboard.local. Two devices
+    // answering the same discovery probe on one LAN is a support ticket nobody
+    // can debug from the outside.
+    mdns_hostname_set("obsidianboard");
     mdns_instance_name_set(DEVICE_MODEL);
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-    ESP_LOGI(TAG, "mDNS advertising http://tickerboard.local");
+    ESP_LOGI(TAG, "mDNS advertising http://obsidianboard.local");
 }
 
 void device_api_start(void)

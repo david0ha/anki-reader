@@ -1,4 +1,4 @@
-// NVS-backed persistence for the provisioning config (Wi-Fi credentials + weather location).
+// NVS-backed persistence for the provisioning config (Wi-Fi credentials + vault URL).
 #pragma once
 
 #include <stdbool.h>
@@ -12,7 +12,7 @@ extern "C" {
 // Load the saved config into `cfg` (zeroed first). Returns true if a network SSID is stored.
 bool prov_store_load(prov_config_t *cfg);
 
-// Persist `cfg` (SSID, password, weather location). Also erases the keys the
+// Persist `cfg` (SSID, password, vault URL). Also erases the keys the
 // stock-ticker firmware used to write — one of which held an API secret.
 // Returns true if the write committed; false if opening or committing NVS failed.
 bool prov_store_save(const prov_config_t *cfg);

@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-project(fortune_core_tests C)
+project(vault_core_tests C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Paths relative to this file.
-set(CORE   ${CMAKE_CURRENT_SOURCE_DIR}/../..)         # components/fortune_core
+set(CORE   ${CMAKE_CURRENT_SOURCE_DIR}/../..)         # components/vault_core
 set(CJSON  ${CORE}/../../third_party/cJSON)           # <root>/third_party/cJSON
 
 # Opt-in sanitizer build:  cmake -S . -B build -DSANITIZE=ON
@@ -25,19 +25,25 @@ function(add_host_test name)
     endif()
 endfunction()
 
-# The fortune itself: pure, no cJSON, no network.
-add_host_test(test_omikuji test_omikuji.c ${CORE}/omikuji.c)
-add_host_test(test_saju    test_saju.c    ${CORE}/saju.c)
+# The wire format. Everything the network can do wrong lands here.
+add_host_test(test_vault_parse test_vault_parse.c
+              ${CORE}/vault_parse.c ${CORE}/vault_model.c ${CJSON}/cJSON.c)
 
-# Weather parse (Open-Meteo geocoding + forecast), fixtures in ./fixtures.
-add_host_test(test_weather test_weather.c ${CORE}/weather_parse.c ${CJSON}/cJSON.c)
+# Where the link-graph nodes go. Pure integer geometry, no LVGL.
+add_host_test(test_graph_layout test_graph_layout.c
+              ${CORE}/ui_graph.c ${CORE}/vault_model.c)
+
+# The built-in demo snapshot, tied to the reference producer's committed output.
+add_host_test(test_vault_mock test_vault_mock.c
+              ${CORE}/vault_mock.c ${CORE}/vault_parse.c ${CORE}/vault_model.c
+              ${CJSON}/cJSON.c)
 
 # The companion-app JSON. cJSON is linked only to validate the output — the
 # serializer itself writes bytes directly.
 add_host_test(test_api_json test_api_json.c ${CORE}/device_api_json.c ${CJSON}/cJSON.c)
 
 enable_testing()
-add_test(NAME omikuji  COMMAND test_omikuji)
-add_test(NAME saju     COMMAND test_saju)
-add_test(NAME weather  COMMAND test_weather)
-add_test(NAME api_json COMMAND test_api_json)
+add_test(NAME vault_parse  COMMAND test_vault_parse)
+add_test(NAME graph_layout COMMAND test_graph_layout)
+add_test(NAME vault_mock   COMMAND test_vault_mock)
+add_test(NAME api_json     COMMAND test_api_json)

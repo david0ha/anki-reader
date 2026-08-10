@@ -3,214 +3,276 @@
  *
  * These bytes go straight onto the wire to a phone, so the tests check two
  * different things: that the document parses (via the vendored cJSON the
- * firmware itself uses) and that the *field names* are what the app reads.
- * A serializer that emits valid JSON with a renamed key is still a broken API.
+ * firmware itself uses) and that the *field names* are what the app reads. A
+ * serializer that emits valid JSON with a renamed key is still a broken API,
+ * and nothing else in the build would notice.
  */
-#include <stdio.h>
-#include <string.h>
+#include "th.h"
 
 #include "cJSON.h"
 #include "device_api_json.h"
 
-static int g_total = 0, g_fail = 0;
-
-#define CHECK(cond) do { g_total++; if (!(cond)) { g_fail++; \
-    printf("  FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); } } while (0)
-
-#define CHECK_STR(a, b) do { g_total++; const char *_a = (a); \
-    if (_a == NULL || strcmp(_a, (b)) != 0) { g_fail++; \
-    printf("  FAIL %s:%d  %s == \"%s\"  got \"%s\"\n", __FILE__, __LINE__, #a, (b), _a ? _a : "(null)"); } } while (0)
-
 static void fill(device_state_t *st)
 {
     memset(st, 0, sizeof(*st));
-    snprintf(st->model, sizeof(st->model), "Ticker Board");
-    snprintf(st->fw, sizeof(st->fw), "0.2.0");
+    snprintf(st->model, sizeof(st->model), "Obsidian Board");
+    snprintf(st->fw, sizeof(st->fw), "0.1.0");
     snprintf(st->device_id, sizeof(st->device_id), "1A2B");
     snprintf(st->ip, sizeof(st->ip), "192.168.0.42");
-    st->page = 1;
-    st->partial_chain = 3;
+    st->page = 2;
+    snprintf(st->page_title, sizeof(st->page_title), "에이전트");
 
-    st->fortune_valid = true;
-    st->rank = 6;
-    snprintf(st->rank_hanja, sizeof(st->rank_hanja), "大吉");
-    snprintf(st->rank_hangul, sizeof(st->rank_hangul), "대길");
-    snprintf(st->message, sizeof(st->message), "바라던 일이\n이루어집니다");
+    st->vault_valid = true;
+    st->demo = false;
+    snprintf(st->vault, sizeof(st->vault), "second-brain");
+    snprintf(st->generated_at, sizeof(st->generated_at), "21:04");
+    st->notes = 1428;
+    st->links = 3910;
+    st->orphans = 37;
+    st->tags = 212;
+    st->added_today = 6;
+    st->added_7d = 41;
+    st->agents_total = 5;
+    st->agents_running = 2;
+    st->recent_count = 8;
+    st->inbox_total = 11;
 
-    st->iljin_index = 50;
-    snprintf(st->iljin_hanja, sizeof(st->iljin_hanja), "甲寅");
-    snprintf(st->iljin_hangul, sizeof(st->iljin_hangul), "갑인");
+    snprintf(st->vault_url, sizeof(st->vault_url), "http://mac.local:8123/vault.json");
+    snprintf(st->last_result, sizeof(st->last_result), "ok");
+    st->poll_seconds = 300;
+    st->age_seconds = 42;
+    st->stale = false;
 
-    snprintf(st->location, sizeof(st->location), "Seoul");
-    st->wx_valid = true;
-    st->wx_kind = 1;
-    st->wx_temp_c = 28;
-    snprintf(st->city, sizeof(st->city), "Seoul, KR");
-    st->forecast_count = 3;
-    const char *dows[3] = { "FRI", "SAT", "SUN" };
-    for (int i = 0; i < 3; i++) {
-        snprintf(st->forecast[i].dow, sizeof(st->forecast[i].dow), "%s", dows[i]);
-        st->forecast[i].wx = i;
-        st->forecast[i].lo = 15 + i;
-        st->forecast[i].hi = 24 + i;
-    }
-
-    st->battery_valid = true;
+    st->battery_present = true;
     st->battery_pct = 84;
     st->battery_mv = 4012;
+
+    st->partial_chain = 3;
+    st->full_refresh_ms = 4120;
+    st->partial_refresh_ms = 780;
+}
+
+static cJSON *obj(cJSON *root, const char *key)
+{
+    cJSON *o = cJSON_GetObjectItem(root, key);
+    if (!cJSON_IsObject(o)) {
+        g_total++; g_fail++;
+        printf("  FAIL missing object \"%s\"\n", key);
+        return NULL;
+    }
+    g_total++;
+    return o;
+}
+
+static void check_int(cJSON *o, const char *key, int want)
+{
+    cJSON *v = o ? cJSON_GetObjectItem(o, key) : NULL;
+    g_total++;
+    if (!cJSON_IsNumber(v)) {
+        g_fail++;
+        printf("  FAIL \"%s\" missing or not a number\n", key);
+    } else if ((int)cJSON_GetNumberValue(v) != want) {
+        g_fail++;
+        printf("  FAIL \"%s\" == %d  got %d\n", key, want, (int)cJSON_GetNumberValue(v));
+    }
+}
+
+static void check_str(cJSON *o, const char *key, const char *want)
+{
+    cJSON *v = o ? cJSON_GetObjectItem(o, key) : NULL;
+    g_total++;
+    if (!cJSON_IsString(v)) {
+        g_fail++;
+        printf("  FAIL \"%s\" missing or not a string\n", key);
+    } else if (strcmp(cJSON_GetStringValue(v), want) != 0) {
+        g_fail++;
+        printf("  FAIL \"%s\" == \"%s\"  got \"%s\"\n", key, want, cJSON_GetStringValue(v));
+    }
+}
+
+static void check_bool(cJSON *o, const char *key, bool want)
+{
+    cJSON *v = o ? cJSON_GetObjectItem(o, key) : NULL;
+    g_total++;
+    if (!cJSON_IsBool(v)) {
+        g_fail++;
+        printf("  FAIL \"%s\" missing or not a bool\n", key);
+    } else if (cJSON_IsTrue(v) != want) {
+        g_fail++;
+        printf("  FAIL \"%s\" == %s\n", key, want ? "true" : "false");
+    }
 }
 
 static void test_info(void)
 {
-    printf("test_info\n");
     char buf[256];
-    int n = device_api_json_info(buf, sizeof(buf), "1A2B", "Ticker Board", "0.2.0", "192.168.0.42");
+    int n = device_api_json_info(buf, sizeof(buf), "1A2B", "Obsidian Board",
+                                 "0.1.0", "192.168.0.42");
     CHECK(n > 0);
-    CHECK((size_t)n == strlen(buf));
+    CHECK_INT((int)strlen(buf), n);
 
-    cJSON *r = cJSON_Parse(buf);
-    CHECK(r != NULL);
-    if (!r) return;
-    /* These four names are load-bearing: app/src/lib/discovery.ts probes this
-     * endpoint on every candidate host and picks by `ip`. */
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(r, "deviceId")), "1A2B");
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(r, "model")), "Ticker Board");
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(r, "fw")), "0.2.0");
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(r, "ip")), "192.168.0.42");
-    cJSON_Delete(r);
-
-    /* An empty ip (not yet associated) is still a valid document. */
-    CHECK(device_api_json_info(buf, sizeof(buf), "1A2B", "M", "1", "") > 0);
-    cJSON *r2 = cJSON_Parse(buf);
-    CHECK(r2 != NULL);
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(r2, "ip")), "");
-    cJSON_Delete(r2);
+    /* The discovery probe reads these four names off every candidate host on
+     * the LAN. Renaming one is an app release, not a firmware change. */
+    CHECK_STR(buf, "{\"deviceId\":\"1A2B\",\"model\":\"Obsidian Board\","
+                   "\"fw\":\"0.1.0\",\"ip\":\"192.168.0.42\"}");
 }
 
-static void test_state(void)
+static void test_state_shape(void)
 {
-    printf("test_state\n");
     device_state_t st;
     fill(&st);
 
     char buf[2048];
     int n = device_api_json_state(&st, buf, sizeof(buf));
     CHECK(n > 0);
-    CHECK((size_t)n == strlen(buf));
+    CHECK_INT((int)strlen(buf), n);
 
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
-    if (!r) { printf("  document was: %s\n", buf); return; }
+    if (!r) return;
 
-    CHECK(cJSON_GetObjectItem(r, "page")->valueint == 1);
-    CHECK(cJSON_GetObjectItem(r, "partialChain")->valueint == 3);
+    check_str(r, "deviceId", "1A2B");
+    check_str(r, "model", "Obsidian Board");
+    check_str(r, "fw", "0.1.0");
+    check_str(r, "ip", "192.168.0.42");
+    check_int(r, "page", 2);
+    check_str(r, "pageTitle", "에이전트");
 
-    cJSON *f = cJSON_GetObjectItem(r, "fortune");
-    CHECK(cJSON_IsTrue(cJSON_GetObjectItem(f, "valid")));
-    CHECK(cJSON_GetObjectItem(f, "rank")->valueint == 6);
-    /* Korean passes through as UTF-8, not \u escapes — and survives the
-     * round trip byte for byte, including the embedded newline. */
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(f, "hanja")), "大吉");
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(f, "hangul")), "대길");
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(f, "message")),
-              "바라던 일이\n이루어집니다");
-    CHECK(strstr(buf, "\\n") != NULL);       /* the newline was escaped */
-    CHECK(strstr(buf, "\\u") == NULL);       /* the Korean was not      */
+    cJSON *v = obj(r, "vault");
+    check_bool(v, "valid", true);
+    check_bool(v, "demo", false);
+    check_str(v, "name", "second-brain");
+    check_str(v, "generatedAt", "21:04");
+    check_int(v, "notes", 1428);
+    check_int(v, "links", 3910);
+    check_int(v, "orphans", 37);
+    check_int(v, "tags", 212);
+    check_int(v, "addedToday", 6);
+    check_int(v, "added7d", 41);
+    check_int(v, "agents", 5);
+    check_int(v, "agentsRunning", 2);
+    check_int(v, "recent", 8);
+    check_int(v, "inbox", 11);
 
-    cJSON *ij = cJSON_GetObjectItem(r, "iljin");
-    CHECK(cJSON_GetObjectItem(ij, "index")->valueint == 50);
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(ij, "hanja")), "甲寅");
+    cJSON *s = obj(r, "source");
+    check_str(s, "url", "http://mac.local:8123/vault.json");
+    check_str(s, "lastResult", "ok");
+    check_int(s, "pollSeconds", 300);
+    check_int(s, "ageSeconds", 42);
+    check_bool(s, "stale", false);
 
-    cJSON *w = cJSON_GetObjectItem(r, "weather");
-    CHECK(cJSON_IsTrue(cJSON_GetObjectItem(w, "valid")));
-    CHECK(cJSON_GetObjectItem(w, "tempC")->valueint == 28);
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(w, "city")), "Seoul, KR");
-    cJSON *fc = cJSON_GetObjectItem(w, "forecast");
-    CHECK(cJSON_IsArray(fc));
-    CHECK(cJSON_GetArraySize(fc) == 3);
-    cJSON *d0 = cJSON_GetArrayItem(fc, 0);
-    CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(d0, "dow")), "FRI");
-    CHECK(cJSON_GetObjectItem(d0, "hi")->valueint == 24);
+    cJSON *b = obj(r, "battery");
+    check_bool(b, "present", true);
+    check_int(b, "percent", 84);
+    check_int(b, "millivolts", 4012);
 
-    cJSON *b = cJSON_GetObjectItem(r, "battery");
-    CHECK(cJSON_GetObjectItem(b, "percent")->valueint == 84);
-    CHECK(cJSON_GetObjectItem(b, "millivolts")->valueint == 4012);
+    /* The panel timings are the whole reason the refresh policy can be decided
+     * from measurement rather than guessed, so they are part of the contract. */
+    cJSON *p = obj(r, "panel");
+    check_int(p, "partialChain", 3);
+    check_int(p, "fullRefreshMs", 4120);
+    check_int(p, "partialRefreshMs", 780);
+
     cJSON_Delete(r);
 }
 
-static void test_edges(void)
+static void test_korean_passes_through_as_utf8(void)
 {
-    printf("test_edges\n");
+    /* Vault names and note titles are Korean. JSON strings are defined over
+     * Unicode, so escaping them to \u would be legal and pointless — but the
+     * escaper must not mangle them either. */
     device_state_t st;
-    char buf[2048];
+    fill(&st);
+    snprintf(st.vault, sizeof(st.vault), "두번째 뇌");
+    snprintf(st.page_title, sizeof(st.page_title), "최근 노트");
 
-    /* Zeroed state (before the first draw / first forecast) is still valid. */
-    memset(&st, 0, sizeof(st));
+    char buf[2048];
+    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+    CHECK(strstr(buf, "두번째 뇌") != NULL);
+
+    cJSON *r = cJSON_Parse(buf);
+    CHECK(r != NULL);
+    if (r) {
+        check_str(r, "pageTitle", "최근 노트");
+        check_str(obj(r, "vault"), "name", "두번째 뇌");
+        cJSON_Delete(r);
+    }
+}
+
+static void test_control_characters_are_escaped(void)
+{
+    /* A note title with a newline in it is not exotic — Obsidian will happily
+     * let you make one, and an unescaped 0x0A is invalid JSON that would break
+     * the app's parser rather than just looking odd. */
+    device_state_t st;
+    fill(&st);
+    snprintf(st.vault, sizeof(st.vault), "a\"b\\c\nd\te");
+
+    char buf[2048];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        cJSON *fc = cJSON_GetObjectItem(cJSON_GetObjectItem(r, "weather"), "forecast");
-        CHECK(cJSON_IsArray(fc) && cJSON_GetArraySize(fc) == 0);
-        CHECK(cJSON_IsFalse(cJSON_GetObjectItem(cJSON_GetObjectItem(r, "fortune"), "valid")));
+        check_str(obj(r, "vault"), "name", "a\"b\\c\nd\te");
         cJSON_Delete(r);
     }
+}
 
-    /* An out-of-range forecast_count is clamped, not trusted. */
+static void test_overflow_yields_an_empty_string_not_half_a_document(void)
+{
+    /* Half a JSON document is worse than none: the app would try to parse it,
+     * fail somewhere in the middle, and report a confusing error. The contract
+     * is -1 and out[0] == '\0'. */
+    device_state_t st;
     fill(&st);
-    st.forecast_count = 99;
+
+    char buf[64];
+    CHECK_INT(device_api_json_state(&st, buf, sizeof(buf)), -1);
+    CHECK_STR(buf, "");
+
+    char tiny[4];
+    CHECK_INT(device_api_json_info(tiny, sizeof(tiny), "1A2B", "Obsidian Board",
+                                   "0.1.0", "1.2.3.4"), -1);
+    CHECK_STR(tiny, "");
+
+    /* Zero capacity must not write at all. */
+    CHECK_INT(device_api_json_state(&st, buf, 0), -1);
+    CHECK_INT(device_api_json_info(buf, 0, "a", "b", "c", "d"), -1);
+}
+
+static void test_null_state_is_rejected(void)
+{
+    char buf[256];
+    CHECK_INT(device_api_json_state(NULL, buf, sizeof(buf)), -1);
+    CHECK_STR(buf, "");
+}
+
+static void test_zeroed_state_still_parses(void)
+{
+    /* This is what /api/state returns before the first poll — every string
+     * empty, every number zero. It must still be a valid document. */
+    device_state_t st;
+    memset(&st, 0, sizeof(st));
+
+    char buf[2048];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
-    r = cJSON_Parse(buf);
+    cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        CHECK(cJSON_GetArraySize(cJSON_GetObjectItem(cJSON_GetObjectItem(r, "weather"),
-                                                     "forecast")) == DEV_FORECAST_MAX);
+        check_bool(obj(r, "vault"), "valid", false);
+        check_str(r, "deviceId", "");
         cJSON_Delete(r);
     }
-    st.forecast_count = -5;
-    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
-
-    /* Quotes and backslashes in a city name (Open-Meteo returns free text) are
-     * escaped rather than breaking the document. */
-    fill(&st);
-    snprintf(st.city, sizeof(st.city), "A\"B\\C\tD");
-    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
-    r = cJSON_Parse(buf);
-    CHECK(r != NULL);
-    if (r) {
-        CHECK_STR(cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(r, "weather"),
-                                                           "city")), "A\"B\\C\tD");
-        cJSON_Delete(r);
-    }
-
-    /* Every truncation point: a buffer one byte short at any stage must report
-     * failure AND leave an empty string, never a half-written document that a
-     * caller might send anyway. */
-    fill(&st);
-    int full = device_api_json_state(&st, buf, sizeof(buf));
-    CHECK(full > 0);
-    for (int cap = 1; cap < full; cap++) {
-        char small[2048];
-        memset(small, 'X', sizeof(small));
-        int rc = device_api_json_state(&st, small, (size_t)cap);
-        if (rc != -1 || small[0] != '\0') {
-            g_fail++;
-            printf("  FAIL cap=%d: rc=%d first byte=%d (want -1 and '')\n", cap, rc, small[0]);
-            break;
-        }
-        g_total++;
-    }
-    CHECK(device_api_json_state(&st, buf, 0) == -1);
-    CHECK(device_api_json_state(NULL, buf, sizeof(buf)) == -1);
-    CHECK(device_api_json_info(buf, 4, "1A2B", "Ticker Board", "0.2.0", "1.2.3.4") == -1);
-    CHECK(buf[0] == '\0');
 }
 
 int main(void)
 {
     test_info();
-    test_state();
-    test_edges();
-    printf("%s  %d checks, %d failed\n", g_fail ? "FAILED" : "ok", g_total, g_fail);
-    return g_fail ? 1 : 0;
+    test_state_shape();
+    test_korean_passes_through_as_utf8();
+    test_control_characters_are_escaped();
+    test_overflow_yields_an_empty_string_not_half_a_document();
+    test_null_state_is_rejected();
+    test_zeroed_state_still_parses();
+    TH_REPORT("api_json");
 }

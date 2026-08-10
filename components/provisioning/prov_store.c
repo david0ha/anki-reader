@@ -31,8 +31,8 @@ bool prov_store_load(prov_config_t *cfg)
     len = sizeof(cfg->password);
     nvs_get_str(h, "pass", cfg->password, &len);
 
-    len = sizeof(cfg->location);
-    nvs_get_str(h, "loc", cfg->location, &len);
+    len = sizeof(cfg->vault_url);
+    nvs_get_str(h, "vurl", cfg->vault_url, &len);
 
     nvs_close(h);
     return cfg->ssid[0] != '\0';
@@ -49,7 +49,7 @@ bool prov_store_save(const prov_config_t *cfg)
 
     nvs_set_str(h, "ssid", cfg->ssid);
     nvs_set_str(h, "pass", cfg->password);
-    nvs_set_str(h, "loc", cfg->location);
+    nvs_set_str(h, "vurl", cfg->vault_url);
 
     for (size_t i = 0; i < sizeof(kObsoleteKeys) / sizeof(kObsoleteKeys[0]); i++) {
         nvs_erase_key(h, kObsoleteKeys[i]);   // ESP_ERR_NVS_NOT_FOUND is fine
@@ -61,7 +61,7 @@ bool prov_store_save(const prov_config_t *cfg)
         ESP_LOGE(TAG, "nvs_commit failed: %s", esp_err_to_name(err));
         return false;
     }
-    ESP_LOGI(TAG, "saved ssid='%s' loc='%s'", cfg->ssid, cfg->location);
+    ESP_LOGI(TAG, "saved ssid='%s' vault_url='%s'", cfg->ssid, cfg->vault_url);
     return true;
 }
 

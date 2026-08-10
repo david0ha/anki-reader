@@ -8,8 +8,8 @@
 
 #include "epd_panel.h"
 #include "lvgl_bsp.h"
-#include "saju.h"          /* saju_jdn — see utc_tm_to_epoch below           */
-#include "ui_fortune.h"    /* the setup overlay doubles as the status screen */
+#include "ui_vault.h"      /* the setup overlay doubles as the status screen */
+#include "ui_strings.h"
 #include "user_app.h"
 #include "user_config.h"
 #include "provisioning.h"
@@ -23,12 +23,12 @@ static const char *TAG = "main";
 /*
  * LVGL renders RGB565 into its own buffer; this callback binarizes into the
  * panel's 1-bit framebuffer. Keeping LVGL on RGB565 rather than its I1 format
- * costs 122KB of PSRAM and buys every widget, font and anti-aliased shape
- * working exactly as it does in the desktop simulator, which renders through
- * this same threshold.
+ * costs about 1.2 MB of PSRAM for the two full-screen draw buffers and buys
+ * every widget, font and anti-aliased shape working exactly as it does in the
+ * desktop simulator, which renders through this same threshold.
  *
- * It does NOT refresh the panel. On e-Paper that is a ~2s flashing operation
- * and belongs to whoever knows what changed — see present() in user_app.cpp.
+ * It does NOT refresh the panel. On e-Paper that is a multi-second flashing
+ * operation and belongs to whoever knows what changed — see user_app.cpp.
  */
 static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t *color_map)
 {
@@ -42,12 +42,12 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 	lv_disp_flush_ready(drv);
 }
 
-// --- Provisioning status, shown on the fortune UI's overlay ----------------
+// --- Provisioning status, shown on the vault UI's overlay ------------------
 
 static void SetStatus(const char *title, const char *body)
 {
 	if (Lvgl_lock(-1)) {
-		ui_fortune_set_overlay(title, body);
+		ui_vault_set_overlay(title, body);
 		Lvgl_unlock();
 	}
 	Lvgl_RenderNow();
@@ -61,49 +61,22 @@ static void OnProvisioningEvent(prov_event_t event, const char *info, void *user
 	switch (event) {
 	case PROV_EVENT_STA_CONNECTING:
 		snprintf(body, sizeof(body), "Connecting to\n%s", info ? info : "");
-		SetStatus(FORTUNE_WIFI_LABEL, body);
+		SetStatus(S_WIFI_TITLE, body);
 		break;
 	case PROV_EVENT_STA_CONNECTED:
 		snprintf(body, sizeof(body), "Connected\n%s", info ? info : "");
-		SetStatus(FORTUNE_WIFI_LABEL, body);
+		SetStatus(S_WIFI_TITLE, body);
 		break;
 	case PROV_EVENT_PORTAL_STARTED:
 		snprintf(body, sizeof(body),
-		         "1. Join Wi-Fi:\n%s\n\n2. Stay connected,\nthen open the app",
+		         "1. Join Wi-Fi:\n%s\n\n2. Stay connected,\nthen open the page it offers",
 		         info ? info : "");
-		SetStatus(FORTUNE_WIFI_LABEL, body);
+		SetStatus(S_WIFI_TITLE, body);
 		break;
 	case PROV_EVENT_CONFIG_SAVED:
-		snprintf(body, sizeof(body), "Saved \"%s\"\nrestarting...", info ? info : "");
-		SetStatus(FORTUNE_WIFI_LABEL, body);
+		snprintf(body, sizeof(body), "Saved \"%s\"\n%s", info ? info : "", S_RESTARTING);
+		SetStatus(S_WIFI_TITLE, body);
 		break;
-	}
-}
-
-// struct tm (UTC) -> epoch seconds.
-//
-// This is what timegm() would do, but newlib keeps timegm() behind
-// __GNU_VISIBLE and does not expose it to C++ even with -D_GNU_SOURCE. Rather
-// than fight the feature-test macros, reuse saju_jdn(): it is the same
-// Fliegel/Van Flandern conversion, and test_saju.c already pins
-// saju_jdn(1970,1,1) == 2440588 against published values.
-static time_t utc_tm_to_epoch(const struct tm *utc)
-{
-	long days = saju_jdn(utc->tm_year + 1900, utc->tm_mon + 1, utc->tm_mday) - 2440588L;
-	return (time_t)days * 86400 + utc->tm_hour * 3600 + utc->tm_min * 60 + utc->tm_sec;
-}
-
-// Seed the system clock from the battery-backed RTC (UTC) so the screen shows
-// the right time — and the right 일진 — immediately, before WiFi/SNTP and
-// across brief power loss.
-static void SeedClockFromRtc(void)
-{
-	struct tm utc;
-	if (board_io_rtc_get(&utc)) {
-		time_t t = utc_tm_to_epoch(&utc);
-		struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
-		settimeofday(&tv, NULL);
-		ESP_LOGI(TAG, "clock seeded from RTC");
 	}
 }
 
@@ -111,14 +84,14 @@ extern "C" void app_main(void)
 {
 	UserApp_AppInit();
 
-	// Local timezone for the clock and, more importantly, for the 일진: the
-	// day pillar rolls at LOCAL midnight, so the wrong TZ shows the wrong
-	// fortune for up to a day.
-	setenv("TZ", CONFIG_FORTUNE_TIMEZONE, 1);
+	// Local timezone for the header clock. There is no RTC on the EE04 — the
+	// two pins the previous carrier routed to an I2C header are a user button
+	// and the battery divider's enable here — so the clock is SNTP alone, and
+	// this is the only thing that turns it into local time.
+	setenv("TZ", CONFIG_OBSIDIAN_TIMEZONE, 1);
 	tzset();
 
-	board_io_init();        // I2C bus + RTC + battery ADC
-	SeedClockFromRtc();
+	board_io_init(BATT_ADC_PIN, BATT_ENABLE_PIN);
 
 	const epd_pins_t pins = {
 		.sck  = EPD_SCK_PIN,
@@ -141,29 +114,29 @@ extern "C" void app_main(void)
 	}
 
 	prov_options_t opts;
-	provisioning_default_options(&opts);   // AP prefix "Ticker Board", 15s timeout
+	provisioning_default_options(&opts);   // AP prefix "Obsidian Board", 15s timeout
 	opts.event_cb = OnProvisioningEvent;
 
 	prov_config_t cfg;
 	bool connected = provisioning_run(&opts, &cfg);  // blocks (and reboots) until configured
 
 	if (connected) {
-		ESP_LOGI(TAG, "online — location '%s'", cfg.location);
-		net_time_sync(10000);   // set the clock before the first 일진 is computed
-		time_t now = time(NULL);
-		if (now > 1700000000) {  // sane epoch -> SNTP succeeded
-			struct tm utc;
-			gmtime_r(&now, &utc);
-			board_io_rtc_set(&utc);
-		}
+		ESP_LOGI(TAG, "online — vault URL '%s'",
+		         cfg.vault_url[0] ? cfg.vault_url : "(none: demo snapshot)");
+		net_time_sync(10000);   // the header clock has no other source
 		if (Lvgl_lock(-1)) {
-			ui_fortune_set_overlay(NULL, NULL);   // dismiss the setup overlay
+			ui_vault_set_overlay(NULL, NULL);   // dismiss the setup overlay
 			Lvgl_unlock();
 		}
-		UserApp_TaskInit(&cfg);
+		// The pinout lives here and nowhere else; user_app takes the buttons
+		// as data for the same reason epd_init takes the panel's pins.
+		const int btn_gpios[] = {
+			BTN_KEY0_PIN, BTN_KEY1_PIN, BTN_KEY2_PIN, BTN_BOOT_PIN,
+		};
+		UserApp_TaskInit(&cfg, btn_gpios, (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
 
 		// Companion-app control server on the home LAN (HTTP + mDNS
-		// "tickerboard.local"), reading and driving the app through the
+		// "obsidianboard.local"), reading and driving the app through the
 		// user_app_api bridge.
 		device_api_start();
 	}

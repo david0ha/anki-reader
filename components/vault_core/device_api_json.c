@@ -40,10 +40,10 @@ static void put_int(sink_t *s, int v)
 
 /* Append `in` escaped as the body of a JSON string (no surrounding quotes).
  *
- * UTF-8 passes through byte for byte: the fortune messages and 갑자 names are
- * Korean, and JSON strings are defined over Unicode, so escaping them to \u
- * would be legal but pointless. Only the seven mandatory escapes and the C0
- * controls are rewritten. */
+ * UTF-8 passes through byte for byte: vault names and note titles are Korean,
+ * and JSON strings are defined over Unicode, so escaping them to \u would be
+ * legal but pointless. Only the seven mandatory escapes and the C0 controls are
+ * rewritten. */
 static void put_escaped(sink_t *s, const char *in)
 {
     if (!s->ok) {
@@ -147,48 +147,45 @@ int device_api_json_state(const device_state_t *st, char *out, size_t out_size)
     put_str_field(&s, "fw", st->fw, false);
     put_str_field(&s, "ip", st->ip, false);
     put_int_field(&s, "page", st->page, false);
-    put_int_field(&s, "partialChain", st->partial_chain, false);
+    put_str_field(&s, "pageTitle", st->page_title, false);
 
-    put(&s, ",\"fortune\":{");
-    put_bool_field(&s, "valid", st->fortune_valid, true);
-    put_int_field(&s, "rank", st->rank, false);
-    put_str_field(&s, "hanja", st->rank_hanja, false);
-    put_str_field(&s, "hangul", st->rank_hangul, false);
-    put_str_field(&s, "message", st->message, false);
+    put(&s, ",\"vault\":{");
+    put_bool_field(&s, "valid", st->vault_valid, true);
+    put_bool_field(&s, "demo", st->demo, false);
+    put_str_field(&s, "name", st->vault, false);
+    put_str_field(&s, "generatedAt", st->generated_at, false);
+    put_int_field(&s, "notes", st->notes, false);
+    put_int_field(&s, "links", st->links, false);
+    put_int_field(&s, "orphans", st->orphans, false);
+    put_int_field(&s, "tags", st->tags, false);
+    put_int_field(&s, "addedToday", st->added_today, false);
+    put_int_field(&s, "added7d", st->added_7d, false);
+    put_int_field(&s, "agents", st->agents_total, false);
+    put_int_field(&s, "agentsRunning", st->agents_running, false);
+    put_int_field(&s, "recent", st->recent_count, false);
+    put_int_field(&s, "inbox", st->inbox_total, false);
     put(&s, "}");
 
-    put(&s, ",\"iljin\":{");
-    put_int_field(&s, "index", st->iljin_index, true);
-    put_str_field(&s, "hanja", st->iljin_hanja, false);
-    put_str_field(&s, "hangul", st->iljin_hangul, false);
+    put(&s, ",\"source\":{");
+    put_str_field(&s, "url", st->vault_url, true);
+    put_str_field(&s, "lastResult", st->last_result, false);
+    put_int_field(&s, "pollSeconds", st->poll_seconds, false);
+    put_int_field(&s, "ageSeconds", st->age_seconds, false);
+    put_bool_field(&s, "stale", st->stale, false);
     put(&s, "}");
-
-    put(&s, ",\"weather\":{");
-    put_bool_field(&s, "valid", st->wx_valid, true);
-    put_int_field(&s, "kind", st->wx_kind, false);
-    put_int_field(&s, "tempC", st->wx_temp_c, false);
-    put_str_field(&s, "city", st->city, false);
-    put_str_field(&s, "location", st->location, false);
-    put(&s, ",\"forecast\":[");
-    {
-        int n = st->forecast_count;
-        if (n < 0) n = 0;
-        if (n > DEV_FORECAST_MAX) n = DEV_FORECAST_MAX;
-        for (int i = 0; i < n; i++) {
-            put(&s, i ? ",{" : "{");
-            put_str_field(&s, "dow", st->forecast[i].dow, true);
-            put_int_field(&s, "kind", st->forecast[i].wx, false);
-            put_int_field(&s, "lo", st->forecast[i].lo, false);
-            put_int_field(&s, "hi", st->forecast[i].hi, false);
-            put(&s, "}");
-        }
-    }
-    put(&s, "]}");
 
     put(&s, ",\"battery\":{");
-    put_bool_field(&s, "valid", st->battery_valid, true);
+    put_bool_field(&s, "present", st->battery_present, true);
     put_int_field(&s, "percent", st->battery_pct, false);
     put_int_field(&s, "millivolts", st->battery_mv, false);
+    put(&s, "}");
+
+    /* The panel block is not decoration: the refresh policy for this 648x480
+     * UC8179 is meant to be chosen from measured timings, and these are them. */
+    put(&s, ",\"panel\":{");
+    put_int_field(&s, "partialChain", st->partial_chain, true);
+    put_int_field(&s, "fullRefreshMs", st->full_refresh_ms, false);
+    put_int_field(&s, "partialRefreshMs", st->partial_refresh_ms, false);
     put(&s, "}");
 
     put(&s, "}");

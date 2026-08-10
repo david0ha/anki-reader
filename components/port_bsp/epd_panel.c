@@ -1,14 +1,16 @@
 /*
- * epd_panel.c — SSD1680 122x250 e-Paper driver.
+ * epd_panel.c — UC8179 648x480 e-Paper driver.
  *
- * Command sequence transcribed from Waveshare's reference implementation
- * (waveshareteam/e-Paper @ RaspberryPi_JetsonNano/c/lib/e-Paper/EPD_2in13_V4.c).
- * Deviations from it are deliberate and marked "NOTE:".
+ * Command sequence transcribed from Waveshare's reference implementation for
+ * the panel that shares this controller and resolution
+ * (waveshareteam/e-Paper @ RaspberryPi_JetsonNano/c/lib/e-Paper/EPD_5in83_V2.c),
+ * cross-checked against Seeed's own UC8179 tables in
+ * Seeed_GFX/TFT_Drivers/UC8179_{Init,Defines}.h. Deviations are marked "NOTE:".
  *
  * Transport is esp_lcd's SPI panel-IO rather than bit-banged GPIO: it drives
  * CS/DC for us and, importantly, esp_lcd_panel_io_tx_param() drains any
  * in-flight tx_color() DMA before it runs — which is what makes it safe to
- * follow a 4000-byte RAM burst immediately with the 0x22/0x20 update trigger.
+ * follow a 38880-byte RAM burst immediately with the 0x12 update trigger.
  */
 #include <string.h>
 
@@ -25,35 +27,42 @@
 
 static const char *TAG = "epd";
 
-/* --- SSD1680 command set (only what we use) ------------------------------ */
-#define CMD_DRIVER_OUTPUT      0x01
-#define CMD_DEEP_SLEEP         0x10
-#define CMD_DATA_ENTRY         0x11
-#define CMD_SW_RESET           0x12
-#define CMD_TEMP_SENSOR        0x18
-#define CMD_UPDATE_CTRL1       0x21
-#define CMD_UPDATE_CTRL2       0x22
-#define CMD_UPDATE_ACTIVATE    0x20
-#define CMD_WRITE_RAM_BW       0x24
-#define CMD_WRITE_RAM_PREV     0x26
-#define CMD_BORDER_WAVEFORM    0x3C
-#define CMD_RAM_X_RANGE        0x44
-#define CMD_RAM_Y_RANGE        0x45
-#define CMD_RAM_X_COUNTER      0x4E
-#define CMD_RAM_Y_COUNTER      0x4F
+/* --- UC8179 command set (only what we use) ------------------------------- */
+#define CMD_PANEL_SETTING      0x00
+#define CMD_POWER_SETTING      0x01
+#define CMD_POWER_OFF          0x02
+#define CMD_POWER_ON           0x04
+#define CMD_BOOSTER_SOFT_START 0x06
+#define CMD_DEEP_SLEEP         0x07
+#define CMD_WRITE_RAM_OLD      0x10   /* "previous image" plane */
+#define CMD_DISPLAY_REFRESH    0x12
+#define CMD_WRITE_RAM_NEW      0x13   /* the plane our framebuffer maps to */
+#define CMD_DUAL_SPI           0x15
+#define CMD_VCOM_INTERVAL      0x50
+#define CMD_TCON_SETTING       0x60
+#define CMD_RESOLUTION         0x61
+#define CMD_GET_STATUS         0x71
+#define CMD_PARTIAL_WINDOW     0x90
+#define CMD_PARTIAL_IN         0x91
+#define CMD_PARTIAL_OUT        0x92
+#define CMD_CASCADE_SETTING    0xE0
+#define CMD_FORCE_TEMP         0xE5
 
-/* 0x22 payloads: which phases the update sequence runs. */
-#define UPD2_FULL              0xF7
-#define UPD2_PARTIAL           0xFF
+#define DEEP_SLEEP_MAGIC       0xA5
 
-#define BUSY_TIMEOUT_MS        8000
+/* A 5.83" full refresh is seconds, and the controller holds BUSY low for all of
+ * it. 30s is "the panel is not there", not "the panel is slow". */
+#define BUSY_TIMEOUT_MS        30000
 
 static esp_lcd_panel_io_handle_t s_io;
 static uint8_t                  *s_fb;
 static epd_pins_t                s_pins;
 static bool                      s_ready;
 static bool                      s_asleep;
+static bool                      s_partial_mode;
 static int                       s_partial_chain;
+static int                       s_last_full_ms;
+static int                       s_last_partial_ms;
 
 /* --- low-level ----------------------------------------------------------- */
 
@@ -72,112 +81,130 @@ static void wr_cmd_u8(uint8_t cmd, uint8_t v)
     wr_cmd_data(cmd, &v, 1);
 }
 
-/* Stream the framebuffer into the addressed RAM. tx_color() is the DMA path;
- * the next tx_param() waits for it. */
-static void wr_ram(uint8_t cmd)
-{
-    wr_cmd(cmd);
-    ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(s_io, -1, s_fb, EPD_FB_SIZE));
-}
-
 static void hw_reset(void)
 {
     gpio_set_level((gpio_num_t)s_pins.rst, 1);
     vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level((gpio_num_t)s_pins.rst, 0);
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(pdMS_TO_TICKS(4));
     gpio_set_level((gpio_num_t)s_pins.rst, 1);
     vTaskDelay(pdMS_TO_TICKS(20));
 }
 
-/* BUSY is active HIGH on this controller.
- * NOTE: Waveshare spins forever here. A stuck BUSY means the panel is not
- * wired (or not powered), and hanging the UI task on that is worse than
- * carrying on with a warning — the self-test exists to surface it loudly. */
+/*
+ * BUSY is active LOW on this controller — the inverse of the SSD1680 this
+ * project's driver started as. Waveshare pokes 0x71 (GET STATUS) before each
+ * sample; the UC8179 refreshes its BUSY output on that command, and polling the
+ * pin alone can sit on a stale level.
+ *
+ * NOTE: Waveshare spins forever here. A stuck BUSY means the panel is not wired
+ * (or not powered), and hanging the UI task on that is worse than carrying on
+ * with a warning — the self-test exists to surface it loudly.
+ */
 static bool wait_busy(void)
 {
     int64_t deadline = esp_timer_get_time() + (int64_t)BUSY_TIMEOUT_MS * 1000;
-    while (gpio_get_level((gpio_num_t)s_pins.busy) == 1) {
+    for (;;) {
+        wr_cmd(CMD_GET_STATUS);
+        if (gpio_get_level((gpio_num_t)s_pins.busy) == 1) break;   /* idle */
         if (esp_timer_get_time() > deadline) {
-            ESP_LOGE(TAG, "BUSY stuck high for %dms — panel wired/powered?", BUSY_TIMEOUT_MS);
+            ESP_LOGE(TAG, "BUSY stuck low for %dms — panel wired/powered?", BUSY_TIMEOUT_MS);
             return false;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    vTaskDelay(pdMS_TO_TICKS(10));
+    /* Waveshare's 200ms settle. It is not politeness: the panel's charge pump
+     * is still winding down and an immediate next command can be swallowed. */
+    vTaskDelay(pdMS_TO_TICKS(200));
     return true;
 }
 
-/* Address the whole panel. X is byte-granular (hence >>3), Y is 16-bit. */
-static void set_window_full(void)
+/* Stream `len` bytes into whichever RAM plane was last addressed. tx_color()
+ * is the DMA path; the next tx_param() waits for it. */
+static void wr_ram(uint8_t cmd, const uint8_t *data, size_t len)
 {
-    const uint8_t x[2] = { 0, (EPD_PANEL_W - 1) >> 3 };
-    wr_cmd_data(CMD_RAM_X_RANGE, x, sizeof x);
-
-    const uint8_t y[4] = { 0, 0, (EPD_PANEL_H - 1) & 0xFF, ((EPD_PANEL_H - 1) >> 8) & 0xFF };
-    wr_cmd_data(CMD_RAM_Y_RANGE, y, sizeof y);
-
-    wr_cmd_u8(CMD_RAM_X_COUNTER, 0);
-    const uint8_t yc[2] = { 0, 0 };
-    wr_cmd_data(CMD_RAM_Y_COUNTER, yc, sizeof yc);
+    wr_cmd(cmd);
+    ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(s_io, -1, data, len));
 }
 
-static void driver_output_control(void)
+/* Fill a whole plane with one byte, without a second 39KB buffer: send the
+ * scratch row 480 times. Only used to prime the "previous image" plane. */
+static void wr_ram_fill(uint8_t cmd, uint8_t value)
 {
-    /* MUX = HEIGHT-1 (249 = 0x00F9), gate scan order default. */
-    const uint8_t d[3] = { (EPD_PANEL_H - 1) & 0xFF, ((EPD_PANEL_H - 1) >> 8) & 0xFF, 0x00 };
-    wr_cmd_data(CMD_DRIVER_OUTPUT, d, sizeof d);
+    static uint8_t row[EPD_STRIDE];
+    memset(row, value, sizeof(row));
+    wr_cmd(cmd);
+    for (int y = 0; y < EPD_PANEL_H; y++) {
+        ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(s_io, -1, row, sizeof(row)));
+    }
 }
 
 static void panel_init_full(void)
 {
     hw_reset();
+
+    const uint8_t power[4] = { 0x07, 0x07, 0x3F, 0x3F };  /* VGH20 VGL-20 VDH15 VDL-15 */
+    wr_cmd_data(CMD_POWER_SETTING, power, sizeof power);
+
+    /* "Enhanced display drive" — Waveshare added this to stop the larger
+     * panels ghosting at the far end of the source lines. */
+    const uint8_t boost[4] = { 0x17, 0x17, 0x28, 0x17 };
+    wr_cmd_data(CMD_BOOSTER_SOFT_START, boost, sizeof boost);
+
+    wr_cmd(CMD_POWER_ON);
+    vTaskDelay(pdMS_TO_TICKS(100));
     wait_busy();
 
-    wr_cmd(CMD_SW_RESET);
-    wait_busy();
+    wr_cmd_u8(CMD_PANEL_SETTING, 0x1F);        /* KW mode, LUT from OTP */
 
-    driver_output_control();
-    wr_cmd_u8(CMD_DATA_ENTRY, 0x03);        /* X++, Y++ */
-    set_window_full();
+    const uint8_t res[4] = {
+        (EPD_PANEL_W >> 8) & 0xFF, EPD_PANEL_W & 0xFF,     /* 0x02 0x88 = 648 */
+        (EPD_PANEL_H >> 8) & 0xFF, EPD_PANEL_H & 0xFF,     /* 0x01 0xE0 = 480 */
+    };
+    wr_cmd_data(CMD_RESOLUTION, res, sizeof res);
 
-    wr_cmd_u8(CMD_BORDER_WAVEFORM, 0x05);
+    wr_cmd_u8(CMD_DUAL_SPI, 0x00);             /* single-SPI source data */
 
-    const uint8_t upd1[2] = { 0x00, 0x80 };
-    wr_cmd_data(CMD_UPDATE_CTRL1, upd1, sizeof upd1);
+    const uint8_t vcom[2] = { 0x10, 0x07 };
+    wr_cmd_data(CMD_VCOM_INTERVAL, vcom, sizeof vcom);
 
-    wr_cmd_u8(CMD_TEMP_SENSOR, 0x80);       /* use the internal sensor */
-    wait_busy();
+    wr_cmd_u8(CMD_TCON_SETTING, 0x22);
 
-    s_asleep = false;
+    s_asleep       = false;
+    s_partial_mode = false;
 }
 
-/* Re-arm for a partial update without a SW reset — a SWRESET would wipe the
- * "previous image" RAM that the partial waveform diffs against. */
-static void panel_init_partial(void)
+/* Re-arm for partial updates. Unlike the SSD1680 port this replaces, the panel
+ * is NOT reset here — a reset would drop the "previous image" plane the partial
+ * waveform diffs against, which is the whole point. */
+static void panel_enter_partial(void)
 {
-    gpio_set_level((gpio_num_t)s_pins.rst, 0);
-    vTaskDelay(pdMS_TO_TICKS(2));
-    gpio_set_level((gpio_num_t)s_pins.rst, 1);
-    vTaskDelay(pdMS_TO_TICKS(2));
-
-    wr_cmd_u8(CMD_BORDER_WAVEFORM, 0x80);
-    driver_output_control();
-    wr_cmd_u8(CMD_DATA_ENTRY, 0x03);
-    set_window_full();
+    if (s_partial_mode) return;
+    wr_cmd_u8(CMD_CASCADE_SETTING, 0x02);
+    wr_cmd_u8(CMD_FORCE_TEMP, 0x6E);           /* fixed waveform temperature */
+    s_partial_mode = true;
 }
 
-static void turn_on(uint8_t mode)
+static void panel_leave_partial(void)
 {
-    wr_cmd_u8(CMD_UPDATE_CTRL2, mode);
-    wr_cmd(CMD_UPDATE_ACTIVATE);
+    if (!s_partial_mode) return;
+    wr_cmd(CMD_PARTIAL_OUT);
+    s_partial_mode = false;
+}
+
+static void turn_on(void)
+{
+    wr_cmd(CMD_DISPLAY_REFRESH);
+    /* Waveshare: "The delay here is necessary, 200uS at least" — the controller
+     * needs to raise BUSY before we start believing the pin. */
+    vTaskDelay(pdMS_TO_TICKS(100));
     wait_busy();
 }
 
 /* One-shot connectivity probe. A floating input follows whatever weak pull is
  * applied; a controller output (either polarity) overrides the ~45k internal
- * pulls. Distinguishes "FPC not seated" from "controller present but not the
- * SSD1680 we expect" — both of which look like a dead screen. */
+ * pulls. Distinguishes "FPC not seated" from "a controller is there but it is
+ * not idling the way a UC8179 does" — both of which look like a dead screen. */
 static void busy_line_probe(void)
 {
     const gpio_num_t b = (gpio_num_t)s_pins.busy;
@@ -194,13 +221,13 @@ static void busy_line_probe(void)
 
     if (up == 1 && dn == 0) {
         ESP_LOGE(TAG, "BUSY follows the weak pulls — nothing is driving it. "
-                      "Panel not connected: check FPC orientation and latch.");
-    } else if (up == 0) {
-        ESP_LOGI(TAG, "BUSY driven LOW (SSD1680 idle — or a JD79xxx-family "
-                      "panel stuck busy; BWRY panels are NOT SSD1680)");
+                      "Panel not connected: check the 24-pin FPC orientation and latch.");
+    } else if (up == 1 && dn == 1) {
+        ESP_LOGI(TAG, "BUSY driven HIGH — UC8179 idle, as expected");
     } else {
-        ESP_LOGE(TAG, "BUSY driven HIGH after init — an SSD1680 idles low. "
-                      "BWRY/JD79xxx panel fitted instead of the monochrome one?");
+        ESP_LOGW(TAG, "BUSY driven LOW after init — the controller thinks it is "
+                      "still busy. Wrong panel on the FPC, or the 5.83\" ordered "
+                      "as a colour variant?");
     }
 }
 
@@ -243,11 +270,11 @@ esp_err_t epd_init(const epd_pins_t *pins)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&out), TAG, "rst gpio");
 
-    /* Boards like the Seeed EE05 gate the panel's 3.3V behind a load switch
-     * with a pulldown on its enable — the panel is dead until this goes HIGH.
-     * Power stays on for the life of the app: cutting it would wipe the
-     * "previous image" RAM that partial refreshes diff against, and the
-     * controller's own deep sleep already gets the panel to ~1uA. */
+    /* The EE04 gates the panel's 3.3V behind a load switch with a pulldown on
+     * its enable — the panel is dead until this goes HIGH. Power stays on for
+     * the life of the app: cutting it would wipe the "previous image" plane
+     * that partial refreshes diff against, and the controller's own deep sleep
+     * already gets the panel to ~1uA. */
     if (s_pins.power >= 0) {
         gpio_config_t pwr = {
             .pin_bit_mask = 1ULL << s_pins.power,
@@ -256,7 +283,7 @@ esp_err_t epd_init(const epd_pins_t *pins)
         };
         ESP_RETURN_ON_ERROR(gpio_config(&pwr), TAG, "power gpio");
         gpio_set_level((gpio_num_t)s_pins.power, 1);
-        vTaskDelay(pdMS_TO_TICKS(10));      /* let the panel rail settle */
+        vTaskDelay(pdMS_TO_TICKS(20));      /* let the panel rail settle */
     }
 
     gpio_config_t in = {
@@ -268,7 +295,8 @@ esp_err_t epd_init(const epd_pins_t *pins)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&in), TAG, "busy gpio");
 
-    /* DMA-capable: the RAM burst goes out via tx_color(). */
+    /* DMA-capable: the whole plane goes out in one tx_color(). 39KB of the
+     * S3's internal SRAM, which is the one thing PSRAM cannot stand in for. */
     s_fb = heap_caps_malloc(EPD_FB_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     ESP_RETURN_ON_FALSE(s_fb, ESP_ERR_NO_MEM, TAG, "framebuffer");
     memset(s_fb, 0xFF, EPD_FB_SIZE);
@@ -277,7 +305,7 @@ esp_err_t epd_init(const epd_pins_t *pins)
     busy_line_probe();
     s_ready = true;
 
-    ESP_LOGI(TAG, "SSD1680 %dx%d up (stride %d, fb %d B)",
+    ESP_LOGI(TAG, "UC8179 %dx%d up (stride %d, fb %d B)",
              EPD_PANEL_W, EPD_PANEL_H, EPD_STRIDE, EPD_FB_SIZE);
 
     epd_refresh_full();     /* land on a known-clean white panel */
@@ -312,27 +340,31 @@ uint8_t *epd_framebuffer(void)
 
 void epd_refresh_full(void)
 {
-    if (!s_ready && !s_fb) {
+    if (!s_fb) {
         return;
     }
     if (s_asleep) {
         panel_init_full();
     }
+    panel_leave_partial();
     int64_t t0 = esp_timer_get_time();
 
-    /* Write the image to both the working and the "previous" RAM so the next
-     * partial update diffs against what is actually on the glass. */
-    wr_ram(CMD_WRITE_RAM_BW);
-    wr_ram(CMD_WRITE_RAM_PREV);
-    turn_on(UPD2_FULL);
+    /* NOTE: Waveshare primes the "previous image" plane with 0x00 rather than
+     * with the outgoing frame. That forces every pixel through the full
+     * black->target transition, which is exactly what makes a full refresh
+     * clear ghosting instead of merely repainting. */
+    wr_ram_fill(CMD_WRITE_RAM_OLD, 0x00);
+    wr_ram(CMD_WRITE_RAM_NEW, s_fb, EPD_FB_SIZE);
+    turn_on();
 
     s_partial_chain = 0;
-    ESP_LOGI(TAG, "full refresh %lldms", (esp_timer_get_time() - t0) / 1000);
+    s_last_full_ms  = (int)((esp_timer_get_time() - t0) / 1000);
+    ESP_LOGI(TAG, "full refresh %dms", s_last_full_ms);
 }
 
-void epd_refresh_partial(void)
+void epd_refresh_partial_area(int x1, int y1, int x2, int y2)
 {
-    if (!s_ready && !s_fb) {
+    if (!s_fb) {
         return;
     }
     if (s_asleep) {
@@ -343,28 +375,78 @@ void epd_refresh_partial(void)
         epd_refresh_full();
         return;
     }
+
+    /* Clamp, then snap x outward to byte boundaries: the controller addresses
+     * source lines in groups of eight, and a window that starts mid-byte comes
+     * out shifted rather than clipped. */
+    if (x1 < 0) x1 = 0;
+    if (y1 < 0) y1 = 0;
+    if (x2 > EPD_PANEL_W) x2 = EPD_PANEL_W;
+    if (y2 > EPD_PANEL_H) y2 = EPD_PANEL_H;
+    x1 &= ~7;
+    x2 = (x2 + 7) & ~7;
+    if (x2 <= x1 || y2 <= y1) {
+        return;
+    }
+
     int64_t t0 = esp_timer_get_time();
 
-    panel_init_partial();
-    wr_ram(CMD_WRITE_RAM_BW);
-    turn_on(UPD2_PARTIAL);
+    /* 0xA9/0x07: the partial-mode VCOM and data interval Waveshare uses. It
+     * differs from the full-refresh 0x10/0x07 — with the full-refresh value the
+     * un-refreshed area of the panel visibly darkens. */
+    const uint8_t vcom[2] = { 0xA9, 0x07 };
+    wr_cmd_data(CMD_VCOM_INTERVAL, vcom, sizeof vcom);
+
+    panel_enter_partial();
+    wr_cmd(CMD_PARTIAL_IN);
+
+    const uint8_t win[9] = {
+        (uint8_t)((x1 >> 8) & 0xFF), (uint8_t)(x1 & 0xF8),
+        (uint8_t)(((x2 - 1) >> 8) & 0xFF), (uint8_t)((x2 - 1) | 0x07),
+        (uint8_t)((y1 >> 8) & 0xFF), (uint8_t)(y1 & 0xFF),
+        (uint8_t)(((y2 - 1) >> 8) & 0xFF), (uint8_t)((y2 - 1) & 0xFF),
+        0x01,
+    };
+    wr_cmd_data(CMD_PARTIAL_WINDOW, win, sizeof win);
+
+    /* Only the window's bytes go out, row by row — a partial that streamed the
+     * whole framebuffer would land the wrong pixels in the window. */
+    const int byte_x = x1 >> 3;
+    const int byte_w = (x2 - x1) >> 3;
+    wr_cmd(CMD_WRITE_RAM_NEW);
+    for (int y = y1; y < y2; y++) {
+        ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(
+            s_io, -1, &s_fb[(size_t)y * EPD_STRIDE + byte_x], byte_w));
+    }
+    turn_on();
 
     s_partial_chain++;
-    ESP_LOGD(TAG, "partial refresh %lldms (%d/%d)",
-             (esp_timer_get_time() - t0) / 1000, s_partial_chain, EPD_PARTIAL_CHAIN_MAX);
+    s_last_partial_ms = (int)((esp_timer_get_time() - t0) / 1000);
+    ESP_LOGI(TAG, "partial refresh %dms  x[%d..%d) y[%d..%d)  (%d/%d)",
+             s_last_partial_ms, x1, x2, y1, y2, s_partial_chain, EPD_PARTIAL_CHAIN_MAX);
 }
 
-int epd_partial_chain(void)
+void epd_refresh_partial(void)
 {
-    return s_partial_chain;
+    epd_refresh_partial_area(0, 0, EPD_PANEL_W, EPD_PANEL_H);
 }
+
+int epd_partial_chain(void)  { return s_partial_chain; }
+int epd_last_full_ms(void)   { return s_last_full_ms; }
+int epd_last_partial_ms(void){ return s_last_partial_ms; }
 
 void epd_sleep(void)
 {
     if (!s_ready || s_asleep) {
         return;
     }
-    wr_cmd_u8(CMD_DEEP_SLEEP, 0x01);
+    panel_leave_partial();
+    /* Float the border before powering down, or the panel edge holds a charge
+     * and prints a grey frame over the next few hours. */
+    wr_cmd_u8(CMD_VCOM_INTERVAL, 0xF7);
+    wr_cmd(CMD_POWER_OFF);
+    wait_busy();
+    wr_cmd_u8(CMD_DEEP_SLEEP, DEEP_SLEEP_MAGIC);
     vTaskDelay(pdMS_TO_TICKS(100));
     s_asleep = true;
 }
@@ -401,8 +483,9 @@ static void pattern_ramp(void)
     }
 }
 
-/* Border + both diagonals: proves the last column (x=121, the padded byte) and
- * the last row are reachable, and shows at a glance if the axes are swapped. */
+/* Border + both diagonals: proves the last column and the last row are
+ * reachable, and shows at a glance if the axes are swapped or the source
+ * lines are reversed. */
 static void pattern_frame(void)
 {
     epd_clear(EPD_WHITE);
@@ -416,6 +499,11 @@ static void pattern_frame(void)
     for (int y = 0; y < EPD_PANEL_H; y++) {
         epd_set_pixel(0, y, EPD_BLACK);
         epd_set_pixel(EPD_PANEL_W - 1, y, EPD_BLACK);
+    }
+    /* A solid block in the top-left quadrant only: an unambiguous "this corner
+     * is the origin", which the symmetric patterns above cannot give. */
+    for (int y = 20; y < 60; y++) {
+        for (int x = 20; x < 100; x++) epd_set_pixel(x, y, EPD_BLACK);
     }
 }
 
@@ -441,11 +529,20 @@ void epd_selftest(void)
     pattern_ramp();
     epd_refresh_full();
 
-    ESP_LOGI(TAG, "selftest: frame + diagonals");
+    ESP_LOGI(TAG, "selftest: frame + diagonals + origin block");
     pattern_frame();
     epd_refresh_full();
 
-    ESP_LOGI(TAG, "selftest: done, restoring white");
+    /* The partial path gets exercised too, and timed — this is where the
+     * refresh policy's numbers come from. */
+    ESP_LOGI(TAG, "selftest: partial (centre band)");
+    for (int y = 200; y < 280; y++) {
+        for (int x = 0; x < EPD_PANEL_W; x++) epd_set_pixel(x, y, EPD_WHITE);
+    }
+    epd_refresh_partial_area(0, 200, EPD_PANEL_W, 280);
+
+    ESP_LOGI(TAG, "selftest: done — full %dms, partial %dms; restoring white",
+             s_last_full_ms, s_last_partial_ms);
     epd_clear(EPD_WHITE);
     epd_refresh_full();
 }
