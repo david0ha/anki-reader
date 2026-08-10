@@ -172,6 +172,7 @@ tools/
 
 ## Documentation
 
+- [docs/bring-up.md](docs/bring-up.md) — first power-on: the boot log line by line, and the numbers to record
 - [docs/vault-contract.md](docs/vault-contract.md) — the JSON the device polls, and how it fails
 - [docs/pages.md](docs/pages.md) — the four pages, the layout grid, the font decision
 - [docs/epaper-5in83.md](docs/epaper-5in83.md) — the UC8179 driver, the refresh policy, the self-test

@@ -37,6 +37,10 @@ idf.py build
 Then join the `Obsidian Board-XXXX` Wi-Fi network the board raises, and give it your Wi-Fi
 credentials and — optionally — a snapshot URL.
 
+Doing this for the **first** time on a given board, follow [docs/bring-up.md](docs/bring-up.md)
+instead: the three things most likely to be wrong on a first power-on all look like a blank screen,
+and the boot log is the only place they are told apart.
+
 To feed it your actual vault, run the scanner on the machine that holds it:
 
 ```bash
@@ -176,6 +180,7 @@ third_party/cJSON/      vendored (ESP-IDF v6 dropped cJSON from core)
 
 ## Documentation
 
+- [docs/bring-up.md](docs/bring-up.md) — first power-on: reading the boot log, and the numbers to record
 - [docs/vault-contract.md](docs/vault-contract.md) — the JSON the device polls, and how it fails
 - [docs/pages.md](docs/pages.md) — the four pages, the layout grid, and the font decision
 - [docs/epaper-5in83.md](docs/epaper-5in83.md) — the UC8179 driver, the refresh policy, the self-test
