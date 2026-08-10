@@ -37,11 +37,14 @@ idf.py -p /dev/cu.usbmodem101 flash monitor
 Then join the `Obsidian Board-XXXX` Wi-Fi network the board raises, and give it your Wi-Fi
 credentials and — optionally — a snapshot URL.
 
-To feed it real data, run the reference server on your machine:
+To feed it your actual vault, run the scanner on the machine that holds it:
 
 ```bash
-python3 tools/mock_vault_server.py          # http://<you>:8123/vault.json
+python3 tools/vault_server.py ~/Documents/MyVault   # http://<you>:8123/vault.json
 ```
+
+It is read-only: it opens `.md` files and writes nothing. To try the plumbing without a vault,
+`python3 tools/mock_vault_server.py` serves the same contract from a fixed payload.
 
 and point the board at it, from the portal or over the network:
 
@@ -143,7 +146,8 @@ components/
   buttons/              KEY0/1/2 + BOOT edge events
 sim/                    desktop simulator — renders the real UI to 648×480 and asserts on it
 tools/
-  mock_vault_server.py  the vault contract, as a runnable server
+  vault_server.py       scans a REAL Obsidian vault and serves the contract from it
+  mock_vault_server.py  the same contract from a fixed payload — the reference producer
   gen_fonts.py          regenerates components/vault_core/fonts/
 app/                    React Native companion app — setup + control over the LAN
 third_party/cJSON/      vendored (ESP-IDF v6 dropped cJSON from core)

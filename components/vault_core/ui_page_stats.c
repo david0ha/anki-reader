@@ -71,6 +71,11 @@ static lv_obj_t *s_bar_val[VAULT_DAILY_DAYS];
 static lv_obj_t *s_tag_name[VAULT_TAGS_MAX];
 static lv_obj_t *s_tag_bar[VAULT_TAGS_MAX];
 static lv_obj_t *s_tag_cnt[VAULT_TAGS_MAX];
+/* Shown instead of six blank rows when the vault has no tags at all — which a
+ * real vault very often does, and which otherwise leaves a heading standing
+ * over dead space that reads as a page that failed to render. The agents and
+ * notes pages already do this; this column was the one that did not. */
+static lv_obj_t *s_tag_empty;
 
 static lv_obj_t *s_health_val[HEALTH_ROWS];
 
@@ -118,6 +123,11 @@ lv_obj_t *ui_page_stats_create(lv_obj_t *par)
         s_tag_cnt[i]  = ui_lab_w(s_root, TAG_CNT_X, y, TAG_CNT_W, UI_F_NUM_SM,
                                  LV_TEXT_ALIGN_RIGHT, "");
     }
+    /* Centred across the tag column, on the row the list's middle would be. */
+    s_tag_empty = ui_lab_w(s_root, TAG_X, ROW_C_FIRST + 2 * ROW_C_ROW_H,
+                           SPLIT_X - TAG_X - 8, UI_F_BODY,
+                           LV_TEXT_ALIGN_CENTER, S_NO_DATA);
+    ui_show(s_tag_empty, false);
 
     /* --- vault health ----------------------------------------------------- */
     ui_fill(s_root, SPLIT_X, ROW_C_Y, 1, UI_CONTENT_H - ROW_C_Y - 6);
@@ -151,6 +161,7 @@ static void blank(void)
         ui_set(s_tag_cnt[i], "");
         lv_obj_set_width(s_tag_bar[i], 1);
     }
+    ui_show(s_tag_empty, true);
     for (int i = 0; i < HEALTH_ROWS; i++) ui_set(s_health_val[i], "");
     ui_set(s_health_val[0], S_NO_DATA);
 }
@@ -202,6 +213,7 @@ void ui_page_stats_update(const vault_t *v)
             ui_show(s_tag_bar[i], false);
         }
     }
+    ui_show(s_tag_empty, v->tag_count == 0);
 
     int density = vault_link_density_x100(v);
     ui_setf(s_health_val[0], "%d.%02d %s", density / 100, density % 100, S_PER_NOTE);

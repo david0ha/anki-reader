@@ -10,6 +10,9 @@ The whole contract has exactly three implementations, and they are checked again
 | `components/vault_core/vault_parse.c` | the consumer |
 | `components/vault_core/vault_mock.c` | the built-in demo snapshot |
 
+(`tools/vault_server.py` is a fourth, but it produces whatever a real vault happens to contain, so
+it cannot be pinned against a fixture the way these three are. It has its own tests instead.)
+
 `test_vault_mock.c` parses the server's committed output
 (`components/vault_core/test/host/fixtures/vault.json`) and asserts it fingerprints identically to
 the C demo snapshot. The wire format and the screen an unconfigured board shows therefore cannot
@@ -136,7 +139,51 @@ VAULT_URL=http://localhost:8123/vault.json ./sim/sim.sh
 `--live` exists to exercise the one behaviour a static payload cannot: watching the board refresh
 when the numbers move, and *stay silent* when they do not.
 
-## Writing a real producer
+## Serving a real vault
+
+`tools/vault_server.py` walks an actual vault on disk and serves this contract from it. It is
+read-only — it opens `.md` files and writes nothing.
+
+```bash
+python3 tools/vault_server.py ~/Documents/MyVault        # serve on :8123
+python3 tools/vault_server.py ~/Documents/MyVault --dump # print the payload
+python3 tools/test_vault_server.py                       # its tests
+```
+
+The definitions it uses are Obsidian's where Obsidian has one, and stated in the script's docstring
+where it does not. The two worth knowing here:
+
+- **`links` counts distinct directed pairs between notes that exist.** Two `[[B]]`s in A are one
+  link, and a link to a note nobody has created yet is zero — the graph on the panel has nowhere to
+  draw it. `![[embeds]]` count. On the panel, a reciprocal pair is one line.
+- **A colliding note name is prefixed with its folder** (`docs/README`), because a real vault has
+  three `README`s and three identical rows on a 648-pixel panel say nothing.
+
+Rescanning is incremental — an unchanged file is not reopened — because the board polls forever.
+
+### Agents
+
+The board's agent page reports on work that something *else* is doing, so this server does not
+invent it. Point `--agents FILE` at a JSON file that your own tooling writes:
+
+```json
+[ { "name": "indexer", "state": "running", "last_run": "20:55",
+    "processed": 1428, "queued": 3, "progress": 78, "note": "embedding 6 new notes" } ]
+```
+
+`state` is `running | idle | error | done`; `progress` is `0..100`, or `-1` for a task with no
+measurable progress. No file means no agents, which the board draws as an empty board rather than
+as something pretending.
+
+### Glyphs
+
+On startup and on every request the server checks the payload against the character set the shipped
+fonts were built from (it imports `gen_fonts.symbol_set()` — not a second list to keep in step) and
+warns about anything the board cannot draw. The faces carry the full 완성형 set plus ASCII, so a
+Korean or English title is safe; an emoji or a hanja in a note title is not, and would otherwise
+reach you as a tofu box on the glass. `--no-glyph-check` turns it off.
+
+## Writing your own producer
 
 Anything that can serve JSON over HTTP. The shape above is the whole interface — there is no
 authentication, no handshake and no versioning beyond `schema`, which the parser currently ignores

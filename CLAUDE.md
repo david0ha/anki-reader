@@ -35,8 +35,9 @@ cmake -S components/vault_core/test/host -B /tmp/vt && cmake --build /tmp/vt
 /tmp/vt/test_vault_parse && /tmp/vt/test_vault_service && /tmp/vt/test_graph_layout \
   && /tmp/vt/test_vault_mock && /tmp/vt/test_api_json
 
-# 2) provisioning pure logic
+# 2) provisioning pure logic, and the vault scanner
 sh components/provisioning/test/run.sh
+python3 tools/test_vault_server.py
 
 # 3) the real UI at the real resolution -> PNG, plus layout/glyph assertions
 cd sim && ./sim.sh          # VAULT_URL=http://localhost:8123/vault.json ./sim.sh
@@ -127,7 +128,9 @@ app/                      React Native companion app — setup + control over th
 sim/                      desktop simulator — renders the real UI to 648x480 and asserts on it
 third_party/cJSON/        vendored (ESP-IDF v6 dropped cJSON from core)
 tools/
-  mock_vault_server.py    the vault contract, as a runnable reference server
+  vault_server.py         scans a REAL Obsidian vault and serves the contract from it
+  mock_vault_server.py    the same contract from a fixed payload — the reference producer
+  test_vault_server.py    the scanner's tests (synthetic vault in a temp dir)
   gen_fonts.py            regenerates components/vault_core/fonts/
 ```
 

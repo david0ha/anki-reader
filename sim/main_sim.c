@@ -399,12 +399,19 @@ static void check_page_stats(const vault_t *v)
     }
 
     /* A vault with fewer than six tags must leave the rest of the column empty,
-     * not showing the previous snapshot's. */
-    for (int i = v->tag_count; i < VAULT_TAGS_MAX; i++) {
-        int y = Y + ROW_C_FIRST + i * ROW_C_ROW_H;
-        char what[48];
-        snprintf(what, sizeof(what), "unused tag row %d", i);
-        want_blank(what, UI_PAD, y + 1, UI_PAD + 304, y + ROW_C_ROW_H - 1);
+     * not showing the previous snapshot's. NO tags is the placeholder case, as
+     * on the agents and notes pages: a heading standing over dead space reads
+     * as a page that failed to render. */
+    if (v->tag_count == 0) {
+        want_ink("tags empty placeholder", UI_PAD, Y + ROW_C_FIRST + 2 * ROW_C_ROW_H,
+                 UI_PAD + 304, Y + ROW_C_FIRST + 3 * ROW_C_ROW_H);
+    } else {
+        for (int i = v->tag_count; i < VAULT_TAGS_MAX; i++) {
+            int y = Y + ROW_C_FIRST + i * ROW_C_ROW_H;
+            char what[48];
+            snprintf(what, sizeof(what), "unused tag row %d", i);
+            want_blank(what, UI_PAD, y + 1, UI_PAD + 304, y + ROW_C_ROW_H - 1);
+        }
     }
 
     want_ink("health heading", HEALTH_X, Y + ROW_C_Y, HEALTH_X + 200, Y + ROW_C_Y + 26);
@@ -524,7 +531,18 @@ static void check_page_agents(const vault_t *v)
     }
 
     /* Rows beyond the agent count must be empty, not left showing the previous
-     * snapshot's contents. */
+     * snapshot's contents.
+     *
+     * NO agents at all is a different case, exactly as it is on the notes page:
+     * the page is given over to a centred placeholder, and demanding blankness
+     * across the rows would be demanding the bug. Found by pointing the
+     * simulator at tools/vault_server.py, which serves no agents unless
+     * something is actually running them — the one input the built-in fixtures
+     * never produced. */
+    if (v->agent_count == 0) {
+        want_ink("agents empty placeholder", UI_PAD, Y + 140, UI_W - UI_PAD, Y + 190);
+        return;
+    }
     for (int i = v->agent_count; i < VAULT_AGENTS_MAX; i++) {
         int y = Y + AG_ROW_Y + i * AG_ROW_H;
         char what[48];
@@ -687,6 +705,63 @@ static void check_sparse_state(const char *outdir)
     }
 }
 
+/* --- brand-new-vault pass --------------------------------------------------
+ *
+ * Notes, but nothing else: no tags, no agents, nothing in the inbox. This is
+ * what a vault someone started last week looks like, and what
+ * tools/vault_server.py serves from one — the demo and sparse fixtures both
+ * carry at least one tag and one agent, so the "list is completely empty"
+ * placeholders on the stats and agents pages had no coverage at all until a
+ * real scan produced them.
+ *
+ * Only those two pages are rendered: the notes page's empty columns are already
+ * covered by the sparse pass, and the graph page by its single-node case. */
+static void check_new_vault_state(const char *outdir)
+{
+    vault_t v;
+    memset(&v, 0, sizeof(v));
+    v.valid = true;
+    vault_str_copy(v.vault, sizeof(v.vault), "빈 볼트");
+    vault_str_copy(v.generated_at, sizeof(v.generated_at), "10:05");
+
+    v.stats.notes = 12;
+    v.stats.links = 3;
+    v.stats.orphans = 9;
+    v.stats.tags = 0;
+    v.stats.added_today = 12;
+    v.stats.added_7d = 12;
+    v.stats.daily[6] = 12;
+
+    v.node_count = 2;
+    vault_str_copy(v.nodes[0].title, sizeof(v.nodes[0].title), "시작");
+    v.nodes[0].deg = 1;
+    vault_str_copy(v.nodes[1].title, sizeof(v.nodes[1].title), "메모");
+    v.nodes[1].deg = 1;
+    v.edge_count = 1;
+    v.edges[0].a = 0;
+    v.edges[0].b = 1;
+
+    v.recent_count = 1;
+    vault_str_copy(v.recent[0].time, sizeof(v.recent[0].time), "10:04");
+    vault_str_copy(v.recent[0].title, sizeof(v.recent[0].title), "시작");
+
+    check_data_strings(&v);
+    ui_vault_set_data(&v);
+
+    static const struct { ui_page_t page; const char *name; } PAGES[] = {
+        { UI_PAGE_STATS,  "10_new_stats"  },
+        { UI_PAGE_AGENTS, "11_new_agents" },
+    };
+    for (size_t i = 0; i < sizeof(PAGES) / sizeof(PAGES[0]); i++) {
+        ui_vault_show_page(PAGES[i].page);
+        run_refresh(8);
+        shot(outdir, PAGES[i].name);
+        check_chrome(PAGES[i].name, (int)PAGES[i].page, false);
+        if (PAGES[i].page == UI_PAGE_STATS) check_page_stats(&v);
+        else                                check_page_agents(&v);
+    }
+}
+
 /* --- empty-state pass ----------------------------------------------------- */
 
 static void check_empty_state(void)
@@ -795,6 +870,7 @@ int main(int argc, char **argv)
     ui_vault_set_overlay(NULL, NULL);
 
     check_sparse_state(outdir);
+    check_new_vault_state(outdir);
     check_empty_state();
 
     printf("%s — %d layout/glyph problem(s)\n", g_fail ? "FAILED" : "ok", g_fail);
