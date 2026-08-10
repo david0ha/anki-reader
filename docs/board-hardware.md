@@ -40,6 +40,16 @@ noise. `board_io_init()` drives it and leaves it on. A reading below 2.5 V is re
 fitted" rather than as a flat battery — a Li-ion whose protection has cut off never presents that
 voltage, so it means USB-only operation, and an empty battery icon there is a false alarm.
 
+**`BATT_DIVIDER` is 3.0 on the strength of the documentation, not a measurement.** It has never been
+checked against this board, and it is the kind of constant that fails quietly: a wrong ratio gives a
+percentage that looks entirely plausible and is wrong every single time you glance at the panel —
+the same failure shape as a wrong calendar anchor in the project this forked from.
+
+Check it once, the first time a cell is fitted: read `battery.millivolts` from `GET /api/state`,
+compare against the cell measured with a multimeter, and scale `BATT_DIVIDER` in
+`components/board_io/board_io.c` by the ratio. If the two agree, write that down here and the
+question is closed.
+
 **Battery reading is defensive.** Every `board_io` getter returns 0 rather than blocking if the ADC
 is unavailable, so a depopulated part never wedges the render loop.
 
