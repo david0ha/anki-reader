@@ -255,12 +255,29 @@ static void action_set_url(const char *url)
 {
     state_lock();
     strlcpy(s_cfg.vault_url, url, sizeof(s_cfg.vault_url));
+    /* Clearing the URL means "go back to the demo screen", and it has to happen
+     * here rather than by waiting for a poll — with no URL there is no poll, so
+     * the board would otherwise sit on the last real snapshot indefinitely and
+     * then quietly badge it 오래됨, which is the opposite of what was asked. */
+    bool to_demo = (url[0] == '\0');
+    if (to_demo) {
+        vault_mock(&s_data);
+        s_data_hash  = vault_hash(&s_data);
+        s_last_ok_us = 0;
+        s_last_result = VAULT_FETCH_NO_URL;
+        s_online     = true;
+    }
     state_unlock();
 
     if (!prov_store_save(&s_cfg)) {
         ESP_LOGW(TAG, "vault URL change: NVS save failed (will not survive reboot)");
     }
-    ESP_LOGI(TAG, "vault URL set to '%s'", url);
+    ESP_LOGI(TAG, "vault URL set to '%s'%s", url, to_demo ? " (demo snapshot)" : "");
+
+    if (to_demo) {
+        push_data_to_ui();
+        present_full();
+    }
     if (s_poll_wake) {
         xSemaphoreGive(s_poll_wake);
     }

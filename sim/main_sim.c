@@ -275,8 +275,35 @@ static void check_data_strings(const vault_t *v)
 #define F_DOT_GAP    16
 #define F_LEGEND_X  (F_DOT_X + UI_PAGE_COUNT * F_DOT_GAP + 12)
 
+/* The header is seven fixed slots in 620 px with 4–8 px between them, and every
+ * one of them holds text whose length depends on data. Nothing enforces the
+ * arithmetic — the slots are constants in ui_vault.c — so the gaps are checked
+ * directly: ink in a gutter means two slots have grown into each other, which on
+ * a 1-bit panel looks like a rendering fault rather than a layout one.
+ *
+ * The core of each gap is sampled rather than its whole width, because a glyph's
+ * anti-aliased edge can legitimately binarize into the first pixel outside a
+ * slot. Mirrors the slot table in ui_vault.c. */
+static void check_header_gaps(const char *page)
+{
+    static const struct { int x0, x1; const char *what; } GAPS[] = {
+        { 119, 121, "brand / vault name" },
+        { 239, 243, "vault name / badge" },
+        { 333, 335, "badge / date" },
+        { 471, 477, "date / clock" },
+        { 571, 577, "clock / wifi" },
+        { 601, 605, "wifi / battery" },
+    };
+    for (size_t i = 0; i < sizeof(GAPS) / sizeof(GAPS[0]); i++) {
+        char what[80];
+        snprintf(what, sizeof(what), "%s: header gap %s", page, GAPS[i].what);
+        want_blank(what, GAPS[i].x0, 2, GAPS[i].x1 + 1, UI_HEADER_H - 2);
+    }
+}
+
 static void check_chrome(const char *page, int page_index, bool expect_badge)
 {
+    check_header_gaps(page);
     want_ink("brand", UI_PAD, 8, UI_PAD + 226, 40);
     want_ink("date", 356, 10, 500, 38);
     want_ink("clock", H_CLOCK_X, 4, H_CLOCK_X + H_CLOCK_W, 40);
