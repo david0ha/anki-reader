@@ -166,7 +166,7 @@ hand-edit `fonts/*.c`, never hand-maintain a glyph list.**
 ```bash
 # 1) pure logic
 cmake -S components/vault_core/test/host -B /tmp/vt && cmake --build /tmp/vt
-/tmp/vt/test_vault_parse && /tmp/vt/test_graph_layout \
+/tmp/vt/test_vault_parse && /tmp/vt/test_vault_service && /tmp/vt/test_graph_layout \
   && /tmp/vt/test_vault_mock && /tmp/vt/test_api_json
 
 # 2) provisioning pure logic

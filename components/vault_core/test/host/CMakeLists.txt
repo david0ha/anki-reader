@@ -38,6 +38,13 @@ add_host_test(test_vault_mock test_vault_mock.c
               ${CORE}/vault_mock.c ${CORE}/vault_parse.c ${CORE}/vault_model.c
               ${CJSON}/cJSON.c)
 
+# The fetch layer, with the test itself standing in for the HTTP port. Covers
+# which failures are distinguished from each other and — the product
+# requirement — that none of them disturbs the caller's snapshot.
+add_host_test(test_vault_service test_vault_service.c
+              ${CORE}/vault_service.c ${CORE}/vault_parse.c ${CORE}/vault_model.c
+              ${CJSON}/cJSON.c)
+
 # The companion-app JSON. cJSON is linked only to validate the output — the
 # serializer itself writes bytes directly.
 add_host_test(test_api_json test_api_json.c ${CORE}/device_api_json.c ${CJSON}/cJSON.c)
@@ -46,4 +53,5 @@ enable_testing()
 add_test(NAME vault_parse  COMMAND test_vault_parse)
 add_test(NAME graph_layout COMMAND test_graph_layout)
 add_test(NAME vault_mock   COMMAND test_vault_mock)
-add_test(NAME api_json     COMMAND test_api_json)
+add_test(NAME vault_service COMMAND test_vault_service)
+add_test(NAME api_json      COMMAND test_api_json)

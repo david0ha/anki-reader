@@ -29,9 +29,10 @@ Four layers, three of them runnable without hardware. Run them in this order —
 the next and catches a different class of mistake.
 
 ```bash
-# 1) pure logic — the wire format, the graph layout, the demo snapshot, the API JSON
+# 1) pure logic — the wire format, the fetch layer, the graph layout,
+#    the demo snapshot, the API JSON
 cmake -S components/vault_core/test/host -B /tmp/vt && cmake --build /tmp/vt
-/tmp/vt/test_vault_parse && /tmp/vt/test_graph_layout \
+/tmp/vt/test_vault_parse && /tmp/vt/test_vault_service && /tmp/vt/test_graph_layout \
   && /tmp/vt/test_vault_mock && /tmp/vt/test_api_json
 
 # 2) provisioning pure logic
