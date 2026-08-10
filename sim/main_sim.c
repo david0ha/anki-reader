@@ -398,6 +398,15 @@ static void check_page_stats(const vault_t *v)
         want_ink(what, TAG_BAR_X + TAG_BAR_W + 6, y, UI_PAD + 304, y + ROW_C_ROW_H);
     }
 
+    /* A vault with fewer than six tags must leave the rest of the column empty,
+     * not showing the previous snapshot's. */
+    for (int i = v->tag_count; i < VAULT_TAGS_MAX; i++) {
+        int y = Y + ROW_C_FIRST + i * ROW_C_ROW_H;
+        char what[48];
+        snprintf(what, sizeof(what), "unused tag row %d", i);
+        want_blank(what, UI_PAD, y + 1, UI_PAD + 304, y + ROW_C_ROW_H - 1);
+    }
+
     want_ink("health heading", HEALTH_X, Y + ROW_C_Y, HEALTH_X + 200, Y + ROW_C_Y + 26);
     for (int i = 0; i < 4; i++) {
         int y = Y + ROW_C_FIRST + i * ROW_C_ROW_H;
@@ -564,6 +573,118 @@ static void check_page_notes(const vault_t *v)
         snprintf(what, sizeof(what), "inbox %d age", i);
         want_ink(what, IB_AGE_X, y, IB_AGE_X + 56, y + 26);
     }
+
+    /* Rows past the end of either list must be empty. A checkbox left drawn
+     * under an empty row is the most likely version of this bug, because the
+     * box is a frame rather than a label and is easy to forget when hiding a
+     * row. Both lists are checked separately: they have different lengths.
+     *
+     * A list with NOTHING in it is a different case: the whole column is given
+     * over to a placeholder, and requiring blankness there would be requiring
+     * the bug. So an empty list is checked for the placeholder instead — a blank
+     * column beside a populated one reads as a rendering failure, not as
+     * "nothing here". */
+    if (v->recent_count == 0) {
+        want_ink("recent empty placeholder", UI_PAD, Y + 140, NT_SPLIT_X - 4, Y + 180);
+    } else {
+        for (int i = v->recent_count; i < VAULT_RECENT_MAX; i++) {
+            int y = Y + NT_ROW_Y + i * NT_ROW_H;
+            char what[48];
+            snprintf(what, sizeof(what), "unused recent row %d", i);
+            want_blank(what, UI_PAD, y, NT_SPLIT_X - 4, y + NT_ROW_H - 2);
+        }
+    }
+    if (v->inbox_count == 0) {
+        want_ink("inbox empty placeholder", IB_X, Y + 140, UI_W - UI_PAD, Y + 180);
+    } else {
+        for (int i = v->inbox_count; i < VAULT_INBOX_MAX; i++) {
+            int y = Y + NT_ROW_Y + i * NT_ROW_H;
+            char what[48];
+            snprintf(what, sizeof(what), "unused inbox row %d", i);
+            want_blank(what, IB_X, y, UI_W - UI_PAD, y + NT_ROW_H - 2);
+        }
+    }
+}
+
+/* --- sparse-data pass -----------------------------------------------------
+ *
+ * The demo snapshot fills every list to its cap, which exercises the widest the
+ * pages can get but never the partial-fill paths: hiding the rows that have no
+ * data, and the empty-list placeholders. A real vault is far more likely to look
+ * like this one — a couple of agents, a handful of notes, an empty inbox.
+ *
+ * The page checks are all data-driven, so they can be reused verbatim: they
+ * assert ink for the rows that exist and blankness for the rows that do not. */
+static void check_sparse_state(const char *outdir)
+{
+    vault_t v;
+    memset(&v, 0, sizeof(v));
+    v.valid = true;
+    vault_str_copy(v.vault, sizeof(v.vault), "새 볼트");
+    vault_str_copy(v.generated_at, sizeof(v.generated_at), "09:12");
+
+    v.stats.notes = 7;
+    v.stats.links = 3;
+    v.stats.orphans = 4;
+    v.stats.tags = 1;
+    v.stats.added_today = 2;
+    v.stats.added_7d = 7;
+    v.stats.daily[5] = 5;
+    v.stats.daily[6] = 2;
+
+    v.tag_count = 1;
+    vault_str_copy(v.tags[0].name, sizeof(v.tags[0].name), "메모");
+    v.tags[0].count = 4;
+
+    v.agent_count = 2;
+    vault_str_copy(v.agents[0].name, sizeof(v.agents[0].name), "indexer");
+    v.agents[0].state = AGENT_RUNNING;
+    vault_str_copy(v.agents[0].last_run, sizeof(v.agents[0].last_run), "09:10");
+    v.agents[0].processed = 7;
+    v.agents[0].progress = 30;
+    vault_str_copy(v.agents[0].note, sizeof(v.agents[0].note), "첫 인덱싱");
+    vault_str_copy(v.agents[1].name, sizeof(v.agents[1].name), "linker");
+    v.agents[1].state = AGENT_IDLE;
+    vault_str_copy(v.agents[1].last_run, sizeof(v.agents[1].last_run), "—");
+    v.agents[1].progress = -1;
+
+    /* A single node: the graph's degenerate case, where there is a centre and
+     * no ring at all. */
+    v.node_count = 1;
+    vault_str_copy(v.nodes[0].title, sizeof(v.nodes[0].title), "시작");
+    v.nodes[0].deg = 1;
+
+    v.recent_count = 2;
+    vault_str_copy(v.recent[0].time, sizeof(v.recent[0].time), "09:11");
+    vault_str_copy(v.recent[0].title, sizeof(v.recent[0].title), "첫 노트");
+    v.recent[0].links = 1;
+    vault_str_copy(v.recent[1].time, sizeof(v.recent[1].time), "08:40");
+    vault_str_copy(v.recent[1].title, sizeof(v.recent[1].title), "환영합니다");
+    v.recent[1].links = 0;
+
+    /* Inbox deliberately empty, to exercise the placeholder. */
+    v.inbox_count = 0;
+    v.inbox_total = 0;
+
+    check_data_strings(&v);
+    ui_vault_set_data(&v);
+
+    static const char *names[UI_PAGE_COUNT] = {
+        "6_sparse_stats", "7_sparse_graph", "8_sparse_agents", "9_sparse_notes"
+    };
+    for (int p = 0; p < UI_PAGE_COUNT; p++) {
+        ui_vault_show_page((ui_page_t)p);
+        run_refresh(8);
+        shot(outdir, names[p]);
+        check_chrome(names[p], p, false);
+        switch (p) {
+        case UI_PAGE_STATS:  check_page_stats(&v);  break;
+        case UI_PAGE_GRAPH:  check_page_graph(&v);  break;
+        case UI_PAGE_AGENTS: check_page_agents(&v); break;
+        case UI_PAGE_NOTES:  check_page_notes(&v);  break;
+        default: break;
+        }
+    }
 }
 
 /* --- empty-state pass ----------------------------------------------------- */
@@ -673,6 +794,7 @@ int main(int argc, char **argv)
     want_blank("overlay covers the footer", UI_PAD, F_Y, UI_W - UI_PAD, UI_H);
     ui_vault_set_overlay(NULL, NULL);
 
+    check_sparse_state(outdir);
     check_empty_state();
 
     printf("%s — %d layout/glyph problem(s)\n", g_fail ? "FAILED" : "ok", g_fail);

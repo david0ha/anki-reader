@@ -59,8 +59,19 @@ at 0%", which is a different and more alarming thing.
 **The overlay is opaque.** On e-Paper a hidden page is still physically on the glass until something
 covers it, so the provisioning overlay is checked to actually cover the footer.
 
+**Sparse data.** Every page is rendered a second time from a deliberately small snapshot — two
+agents, two notes, one tag, an empty inbox, a single graph node. The demo snapshot fills every list
+to its cap, which is the widest the pages can get but never exercises hiding the rows that have no
+data. A real vault is far more likely to look like the sparse one. The same page checks run
+unchanged, because they are data-driven: ink for the rows that exist, blankness for the rows that do
+not, and a placeholder for a list that is entirely empty.
+
 **The empty state.** Every page is rendered again with no data at all. A blank e-Paper panel is
 indistinguishable from a dead one, so each page must still draw its chrome and say something.
+
+**Header slot collisions.** The header is seven fixed slots in 620 px with 4–8 px between them, all
+holding text whose length depends on data, and nothing enforces the arithmetic. The six gaps are
+checked for ink directly.
 
 ## Output
 
@@ -71,6 +82,7 @@ sim/shots/2_agents.png    에이전트
 sim/shots/3_notes.png     최근 노트
 sim/shots/4_offline.png   the offline/stale header
 sim/shots/5_setup.png     the provisioning overlay
+sim/shots/6..9_sparse_*   the same four pages from a nearly-empty vault
 ```
 
 Each line of output carries an ink percentage. A page that renders nothing comes out near 0%; one
