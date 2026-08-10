@@ -22,7 +22,7 @@ void prov_store_clear(void);
 
 // Set a one-shot flag that makes the NEXT boot skip the Wi-Fi connect and go straight to the
 // setup portal (AP mode), while keeping the saved config so the portal pre-fills. Backs the
-// USER+BOOT long-press escape hatch for when the device is stuck on an unreachable network.
+// KEY2-held-5s escape hatch for when the device is stuck on an unreachable network.
 void prov_store_set_force_portal(void);
 
 // Read and clear (consume) the force-portal flag. Returns true if it was set.

@@ -3,7 +3,7 @@ import { colors, radius } from '../theme'
 
 /**
  * A horizontal segmented selector — used by the dashboard to switch the on-screen page
- * (Home / Chart / News / Metrics). The selected segment is highlighted; `onChange` fires the
+ * (Stats / Graph / Agents / Notes). The selected segment is highlighted; `onChange` fires the
  * index. `disabled` blocks interaction while a command is in flight.
  */
 export function SegmentedControl({

@@ -3,8 +3,12 @@
  *
  * WiFi bring-up (station connect + SoftAP captive-portal provisioning) is owned
  * by the `provisioning` component. Once we are online this syncs the system
- * clock, which the news screen needs for its 7-day query window and which the
- * chart uses for exchange-local time labels.
+ * clock, which is the only source the header clock has: there is no RTC on the
+ * EE04, so until this succeeds the header reads `--:--`.
+ *
+ * Nothing else depends on it. Snapshot staleness is measured with
+ * `esp_timer_get_time()` precisely so that a board which never reaches an NTP
+ * server still ages its own data correctly.
  */
 #pragma once
 

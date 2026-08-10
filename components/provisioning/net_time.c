@@ -19,7 +19,7 @@ void net_time_sync(int timeout_ms) {
         return;
     }
     if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeout_ms)) != ESP_OK)
-        ESP_LOGW(TAG, "sntp sync timeout (news dates may be off)");
+        ESP_LOGW(TAG, "sntp sync timeout — header clock stays blank (--:--)");
     else
         ESP_LOGI(TAG, "time synced");
 
