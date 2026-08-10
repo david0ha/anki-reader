@@ -261,9 +261,25 @@ Two decisions inside it are worth keeping when the contract next changes, both
 recorded in `docs/app-control.md`: a missing `ageSeconds` parses to `-1`, not `0`,
 and an unrecognised `lastResult` maps to `unknown` rather than passing through.
 
-120 unit tests, `tsc --noEmit` clean. Not run on a phone — that needs a native dev
-build, which needs Xcode/Android Studio, which is the same class of "not verified
-here" as the firmware.
+120 unit tests, `tsc --noEmit` clean.
+
+**And it has been run.** Not on a phone — that needs a native dev build — but the
+web target is the same React tree, and it was exercised against the mock board
+and a real vault scan behind one origin (a scratch proxy served the exported
+bundle and forwarded `/api/*` to the board and `/vault.json` + `/capture` to the
+vault server, so the browser's CORS rules were never in the way; putting CORS
+headers into the mock would have been fixing a problem the product does not
+have, since React Native has no CORS).
+
+What that confirmed, rather than inferred: the dashboard renders the real
+snapshot; the board's Korean `pageTitle` reaches the phone intact; and the memo
+box completes its whole loop — typed in the browser, written as
+`Inbox/폰트 서브셋 다시 생성하기.md`, picked up by the board's poll, and back as
+notes 6 → 7, inbox 2 → 3, orphans 2 → 3, tags 3 → 4, all within one screen
+refresh. No console errors.
+
+What is still untested: iOS/Android native rendering, and every path that needs
+the board itself.
 
 ## 11. Two things this spec never mentioned
 

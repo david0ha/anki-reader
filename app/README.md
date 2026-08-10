@@ -139,6 +139,13 @@ complete ─ save board base URL
 | `npm run android`  | native dev build + run on Android emulator/device   |
 | `npm test`         | Jest unit tests (no network — pure logic + client)  |
 | `npm run typecheck`| `tsc --noEmit`                                       |
+| `npx expo export --platform web` | bundle everything — catches what `tsc` cannot |
+
+The web export is also the cheapest way to actually *look* at the app without a native build: serve
+the bundle and the mock board behind one origin (a small proxy forwarding `/api/*` to the board and
+`/vault.json` + `/capture` to the vault server) and the whole dashboard runs in a browser. Doing it
+that way rather than adding CORS headers to the mock keeps a browser-only problem out of the repo —
+React Native has no CORS.
 
 ## Project layout
 
