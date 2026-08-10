@@ -12,9 +12,10 @@ stops showing a demo and starts showing your vault.
     curl -X POST http://obsidianboard.local/api/vault \\
          -d '{"url":"http://mymac.local:8123/vault.json"}'
 
-Read-only, always: it opens `.md` files and nothing else, and never writes into
-the vault. The one file it will write is the agents file, and only if you ask
-another program to write it.
+Read-only by default: it opens `.md` files and nothing else. `--allow-capture`
+adds one write path, `POST /capture`, which appends a memo to the vault's inbox
+so the board's queue is somewhere you can actually put things — see "Capture"
+below. It stays off unless you ask for it.
 
 What the numbers mean
 ---------------------
@@ -46,6 +47,23 @@ Rescanning is incremental: a file whose mtime and size are unchanged is not
 reopened. A 3,000-note vault costs a second the first time and milliseconds
 after that, which matters because the board polls forever.
 
+Capture
+-------
+A wall display showing an inbox you cannot add to is half a loop. With
+`--allow-capture`, one endpoint closes it:
+
+    curl -X POST http://localhost:8123/capture -d 'ring the dentist'
+
+That writes `Inbox/ring the dentist.md` into the vault, and the board shows it
+on its next poll. Bind it to a keyboard shortcut and the board becomes somewhere
+to put things, not just somewhere to look.
+
+It is off by default and has to be asked for, because it writes into somebody's
+notes and this is an unauthenticated service on a LAN. When it is on, it can do
+exactly one thing: create a new `.md` file inside the capture folder. The
+filename is built here from a sanitised slug, so a request cannot name a path;
+an existing file is never overwritten; and the body is capped.
+
 Usage
 -----
     python3 tools/vault_server.py VAULT                  # serve on :8123
@@ -53,6 +71,7 @@ Usage
     python3 tools/vault_server.py VAULT --dump           # print the payload
     python3 tools/vault_server.py VAULT --inbox Inbox --inbox-tag '#todo'
     python3 tools/vault_server.py VAULT --agents ~/agents.json
+    python3 tools/vault_server.py VAULT --allow-capture  # enable POST /capture
 """
 
 import argparse
@@ -473,6 +492,80 @@ def build_titles(notes):
 
 
 # ---------------------------------------------------------------------------
+# Capture
+# ---------------------------------------------------------------------------
+
+CAPTURE_MAX_BYTES = 8192
+SLUG_MAX = 40
+# Characters no filesystem, sync client or Obsidian link should have to deal
+# with. '/' and '\' are in here for the obvious reason: the filename is built
+# from user text, and it must not be able to name a directory.
+SLUG_BAD_RE = re.compile(r'[\\/:*?"<>|#\[\]^\x00-\x1f]')
+
+
+def slugify(text):
+    """A filename from the memo's first line. Never a path, never empty."""
+    first = text.strip().splitlines()[0] if text.strip() else ""
+    slug = SLUG_BAD_RE.sub(" ", first)
+    slug = re.sub(r"\s+", " ", slug).strip(" .")
+    # Leading dots would hide the note from the scanner's own walk.
+    slug = slug.lstrip(".")
+    return slug[:SLUG_MAX].strip() or "memo"
+
+
+class CaptureError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def capture(root, folder, text, tag=None, now=None):
+    """Write one memo into the vault's capture folder. Returns its path.
+
+    Raises CaptureError('empty') for a blank memo and ('too_large') past the
+    cap. Every other failure is an OSError, which the caller reports as a 500 —
+    a disk that is full or read-only is not the client's fault and there is
+    nothing it can do differently.
+    """
+    now = now or datetime.datetime.now()
+    text = (text or "").strip()
+    if not text:
+        raise CaptureError("empty")
+    if len(text.encode("utf-8")) > CAPTURE_MAX_BYTES:
+        raise CaptureError("too_large")
+
+    target_dir = os.path.join(root, folder)
+    os.makedirs(target_dir, exist_ok=True)
+
+    # The memo's own first line is the filename, and therefore the title the
+    # board shows. A `2026-08-10 2104 ` prefix would be the first sixteen
+    # characters of a narrow column spent on something the panel already
+    # displays as an age in days; the date lives in the frontmatter instead.
+    stem = slugify(text)
+    path = os.path.join(target_dir, stem + ".md")
+    # Never overwrite. Two memos with the same first line is a duplicate-submit
+    # or a genuine repeat, and losing one of them silently would be the worst
+    # possible behaviour for a capture box.
+    n = 2
+    while os.path.exists(path):
+        path = os.path.join(target_dir, f"{stem} ({n}).md")
+        n += 1
+
+    front = [f"created: {now.date().isoformat()}"]
+    if tag:
+        # The tag as well as the folder, so the memo still reaches the board's
+        # inbox if the folder is not one the scanner recognises.
+        front.append(f"tags: [{tag.lstrip('#')}]")
+    body = "---\n" + "\n".join(front) + "\n---\n\n" + text + "\n"
+
+    # 'x' rather than 'w': if something created the file between the check above
+    # and here, fail loudly instead of clobbering it.
+    with open(path, "x", encoding="utf-8") as f:
+        f.write(body)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Agents
 # ---------------------------------------------------------------------------
 
@@ -571,6 +664,56 @@ class Handler(BaseHTTPRequestHandler):
     agents_path = None
     vault_name = None
     charset = None
+    capture_folder = None      # None = capture disabled
+
+    def _json(self, status, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        if self.path.split("?")[0] != "/capture":
+            self.send_error(404)
+            return
+        if not self.capture_folder:
+            # 403 rather than 404: the endpoint exists, it is switched off. A
+            # client can tell the difference between "wrong address" and "turn
+            # it on", and those need different fixes.
+            self._json(403, {"ok": False, "error": "capture_disabled"})
+            return
+
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > CAPTURE_MAX_BYTES * 2:
+            self._json(413, {"ok": False, "error": "too_large"})
+            return
+        raw = self.rfile.read(length).decode("utf-8", errors="replace") if length else ""
+
+        # JSON {"text": "..."} or a bare body, so `curl -d 'buy milk'` works.
+        text = raw
+        if raw.lstrip().startswith("{"):
+            try:
+                text = str(json.loads(raw).get("text", ""))
+            except ValueError:
+                self._json(400, {"ok": False, "error": "bad_json"})
+                return
+
+        try:
+            path = capture(self.vault.root, self.capture_folder, text,
+                           tag=self.vault.inbox_tag)
+        except CaptureError as e:
+            self._json(400, {"ok": False, "error": e.code})
+            return
+        except OSError as e:
+            print(f"capture failed: {e}", file=sys.stderr)
+            self._json(500, {"ok": False, "error": "write_failed"})
+            return
+
+        rel = os.path.relpath(path, self.vault.root)
+        print(f"captured {rel}", file=sys.stderr)
+        self._json(201, {"ok": True, "path": rel})
 
     def do_GET(self):
         if self.path.split("?")[0] not in ("/vault.json", "/"):
@@ -614,6 +757,10 @@ def main():
     ap.add_argument("--dump", action="store_true", help="print the payload and exit")
     ap.add_argument("--no-glyph-check", action="store_true",
                     help="skip warning about characters the board cannot draw")
+    ap.add_argument("--allow-capture", action="store_true",
+                    help="enable POST /capture, which WRITES a memo into the vault")
+    ap.add_argument("--capture-folder",
+                    help="folder captured memos land in (default: the first --inbox, or Inbox)")
     args = ap.parse_args()
 
     if not os.path.isdir(os.path.expanduser(args.vault)):
@@ -641,8 +788,15 @@ def main():
     Handler.agents_path = args.agents
     Handler.vault_name = args.name
     Handler.charset = charset
+    if args.allow_capture:
+        Handler.capture_folder = args.capture_folder or (args.inbox[0] if args.inbox else "Inbox")
     srv = HTTPServer((args.host, args.port), Handler)
     print(f"serving it on http://{args.host}:{args.port}/vault.json")
+    if Handler.capture_folder:
+        # Said plainly and every time: this is an unauthenticated service that
+        # can now create files in somebody's notes.
+        print(f"capture ENABLED — POST /capture writes into {Handler.capture_folder}/ "
+              f"(anyone on this network can)")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

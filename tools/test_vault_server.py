@@ -24,7 +24,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from vault_server import (  # noqa: E402
-    Vault, build_titles, check_glyphs, load_agents, parse_note, strip_code,
+    CAPTURE_MAX_BYTES, CaptureError, Vault, build_titles, capture, check_glyphs,
+    load_agents, parse_note, slugify, strip_code,
 )
 
 FAILURES = []
@@ -355,6 +356,70 @@ def test_agents(tmpdir):
     eq(load_agents(path), [], "unparseable agents file degrades to none")
 
 
+def test_slugify():
+    eq(slugify("ring the dentist"), "ring the dentist", "a plain memo is its own slug")
+    eq(slugify("first line\nsecond line"), "first line", "only the first line names the file")
+    eq(slugify("   "), "memo", "a blank memo still gets a name")
+    eq(slugify("a" * 100), "a" * 40, "the slug is capped")
+    # The filename is built from text a stranger on the LAN supplied. It must
+    # not be able to name a directory, escape the folder, or hide the note.
+    eq(slugify("../../etc/passwd"), "etc passwd", "a slug cannot contain a path")
+    eq(slugify("..\\..\\windows"), "windows", "nor a Windows one")
+    eq(slugify(".hidden"), "hidden", "nor start with a dot")
+    eq(slugify("a/b:c*d?e\"f<g>h|i"), "a b c d e f g h i", "reserved characters go")
+    check("\n" not in slugify("x\ny"), "no newline survives into a filename")
+    eq(slugify("메모 정리하기"), "메모 정리하기", "Korean is fine in a filename")
+
+
+def test_capture(tmpdir):
+    root = os.path.join(tmpdir, "capture-vault")
+    os.makedirs(root)
+    now = datetime.datetime(2026, 8, 10, 21, 4)
+
+    path = capture(root, "Inbox", "ring the dentist", tag="#todo", now=now)
+    # The filename IS the title the board shows, so it is the memo and nothing
+    # else — no timestamp prefix eating a narrow column for a date the panel
+    # already renders as an age.
+    eq(os.path.basename(path), "ring the dentist.md", "filename is the memo")
+    check(os.path.dirname(path).endswith("Inbox"), "it lands in the capture folder")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    check("created: 2026-08-10" in text, "the memo carries its creation date")
+    check("tags: [todo]" in text, "and the inbox tag, so it reaches the board's queue")
+    check(text.rstrip().endswith("ring the dentist"), "the body is the memo")
+
+    # A second memo with the same first line must not overwrite the first.
+    second = capture(root, "Inbox", "ring the dentist", now=now)
+    check(second != path, "a duplicate gets its own file")
+    eq(os.path.basename(second), "ring the dentist (2).md", "suffixed")
+    check(os.path.exists(path), "the original still exists")
+
+    # A memo whose text is a path must still land inside the folder.
+    escape = capture(root, "Inbox", "../../../etc/passwd", now=now)
+    check(os.path.realpath(escape).startswith(os.path.realpath(root)),
+          f"capture cannot escape the vault (wrote {escape})")
+    check(os.path.dirname(escape).endswith("Inbox"), "and cannot escape the folder")
+
+    try:
+        capture(root, "Inbox", "   ", now=now)
+        check(False, "an empty memo is rejected")
+    except CaptureError as e:
+        eq(e.code, "empty", "an empty memo is rejected as 'empty'")
+
+    try:
+        capture(root, "Inbox", "x" * (CAPTURE_MAX_BYTES + 1), now=now)
+        check(False, "an oversized memo is rejected")
+    except CaptureError as e:
+        eq(e.code, "too_large", "an oversized memo is rejected as 'too_large'")
+
+    # And the scanner must then see what capture wrote — the whole point.
+    v = Vault(root, inbox_tag="#todo")
+    snap = v.snapshot(now=now)
+    titles = [i["title"] for i in snap["inbox"]]
+    check("ring the dentist" in titles,
+          f"a captured memo shows up in the board's inbox, as itself (got {titles})")
+
+
 def test_glyph_check(vault):
     snap = vault.snapshot(now=NOW)
     charset = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -:/")
@@ -404,6 +469,8 @@ def main():
         test_incremental_rescan(vault)
         test_empty_vault()
         test_agents(tmpdir)
+        test_slugify()
+        test_capture(tmpdir)
         test_glyph_check(vault)
         test_payload_matches_the_wire_contract(vault)
     finally:

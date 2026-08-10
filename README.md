@@ -46,6 +46,17 @@ python3 tools/vault_server.py ~/Documents/MyVault   # http://<you>:8123/vault.js
 It is read-only: it opens `.md` files and writes nothing. To try the plumbing without a vault,
 `python3 tools/mock_vault_server.py` serves the same contract from a fixed payload.
 
+Add `--allow-capture` and it grows one write path, so the inbox on the panel is somewhere you can
+put things:
+
+```bash
+curl -X POST http://localhost:8123/capture -d 'ring the dentist'
+```
+
+That creates `Inbox/ring the dentist.md` and the board shows it on its next poll. It is off unless
+you ask for it — see [docs/vault-contract.md](docs/vault-contract.md#capture) for what it can and
+cannot do.
+
 and point the board at it, from the portal or over the network:
 
 ```bash

@@ -175,6 +175,34 @@ invent it. Point `--agents FILE` at a JSON file that your own tooling writes:
 measurable progress. No file means no agents, which the board draws as an empty board rather than
 as something pretending.
 
+### Capture
+
+A wall display showing an inbox you cannot add to is half a loop. `--allow-capture` adds one
+endpoint that closes it:
+
+```bash
+python3 tools/vault_server.py ~/Documents/MyVault --allow-capture
+curl -X POST http://localhost:8123/capture -d 'ring the dentist'
+```
+
+That writes `Inbox/ring the dentist.md` — the memo's first line is the filename, so it is also the
+title the board draws; the date goes in the frontmatter, because the panel already shows the age.
+The board picks it up on its next poll, or immediately with `POST /api/refresh`.
+
+**It is off unless you ask for it, and it is not part of the device contract** — nothing in the
+firmware knows this endpoint exists. Enabling it means an unauthenticated service on your LAN can
+create files in your notes. When on, it can do exactly one thing: create a new `.md` inside the
+capture folder. The filename is built from a sanitised slug so a request cannot name a path
+(`../../etc/passwd` becomes `etc passwd.md` inside the folder), an existing file is never
+overwritten, and the body is capped at 8 KB.
+
+| result | meaning |
+|---|---|
+| `201 {"ok":true,"path":"Inbox/…"}` | written |
+| `403 capture_disabled` | the endpoint exists, `--allow-capture` was not given |
+| `400 empty` / `400 too_large` / `400 bad_json` | the request |
+| `500 write_failed` | the disk said no |
+
 ### Glyphs
 
 On startup and on every request the server checks the payload against the character set the shipped
