@@ -32,3 +32,5 @@ shots/
 # local secrets — never commit
 .env
 .env.*
+
+.worktrees/
