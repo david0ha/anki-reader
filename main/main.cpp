@@ -8,7 +8,8 @@
 
 #include "epd_panel.h"
 #include "lvgl_bsp.h"
-#include "ui_vault.h"      /* the setup overlay doubles as the status screen */
+#include "ui_artwork.h"
+#include "ui_artwork_layout.h"
 #include "ui_strings.h"
 #include "user_app.h"
 #include "user_config.h"
@@ -35,8 +36,10 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 	uint16_t *buffer = (uint16_t *)color_map;
 	for (int y = area->y1; y <= area->y2; y++) {
 		for (int x = area->x1; x <= area->x2; x++) {
-			epd_set_pixel(x, y, (*buffer < 0x7fff) ? EPD_BLACK : EPD_WHITE);
-			buffer++;
+			/* FULL mode always passes the base of the entire logical 648x480
+			 * framebuffer, even when only a smaller invalidated area is flushed. */
+			uint16_t pixel = buffer[y * ARTWORK_SCREEN_W + x];
+			epd_set_pixel(x, y, (pixel < 0x7fff) ? EPD_BLACK : EPD_WHITE);
 		}
 	}
 	lv_disp_flush_ready(drv);
@@ -47,7 +50,7 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 static void SetStatus(const char *title, const char *body)
 {
 	if (Lvgl_lock(-1)) {
-		ui_vault_set_overlay(title, body);
+		ui_artwork_set_overlay(title, body);
 		Lvgl_unlock();
 	}
 	Lvgl_RenderNow();
@@ -84,10 +87,8 @@ extern "C" void app_main(void)
 {
 	UserApp_AppInit();
 
-	// Local timezone for the header clock. There is no RTC on the EE04 — the
-	// two pins the previous carrier routed to an I2C header are a user button
-	// and the battery divider's enable here — so the clock is SNTP alone, and
-	// this is the only thing that turns it into local time.
+	// Keep the configured timezone for timestamped diagnostics and future
+	// producers. The daily tarot intentionally shows no live clock or app chrome.
 	setenv("TZ", CONFIG_OBSIDIAN_TIMEZONE, 1);
 	tzset();
 
@@ -104,6 +105,7 @@ extern "C" void app_main(void)
 		.host = SPI3_HOST,
 	};
 	ESP_ERROR_CHECK(epd_init(&pins));
+	/* The artwork renders in the panel's native 648x480 coordinate system. */
 	Lvgl_PortInit(EPD_WIDTH, EPD_HEIGHT, Lvgl_FlushCallback);
 
 	// Build the real UI up front and drive provisioning through its overlay,
@@ -123,9 +125,9 @@ extern "C" void app_main(void)
 	if (connected) {
 		ESP_LOGI(TAG, "online — vault URL '%s'",
 		         cfg.vault_url[0] ? cfg.vault_url : "(none: demo snapshot)");
-		net_time_sync(10000);   // the header clock has no other source
+		net_time_sync(10000);
 		if (Lvgl_lock(-1)) {
-			ui_vault_set_overlay(NULL, NULL);   // dismiss the setup overlay
+			ui_artwork_set_overlay(NULL, NULL);   // dismiss the setup overlay
 			Lvgl_unlock();
 		}
 		// The pinout lives here and nowhere else; user_app takes the buttons

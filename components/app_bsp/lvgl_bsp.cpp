@@ -55,7 +55,7 @@ static void Lvgl_port_task(void *arg)
 void Lvgl_PortInit(int width, int height, DispFlushCb flush_cb) {
     lvgl_mux = xSemaphoreCreateMutex();
     lv_init();
-    lv_display_t * disp = lv_display_create(width, height); /* 以水平和垂直分辨率（像素）进行基本初始化 */
+    lv_display_t * disp = lv_display_create(width, height); /* physical panel resolution */
     lv_display_set_flush_cb(disp, flush_cb);
 	
 	// 648x480 RGB565 is 622KB per buffer, so PSRAM is not an optimisation here —
@@ -82,6 +82,7 @@ void Lvgl_PortInit(int width, int height, DispFlushCb flush_cb) {
 	assert(buffer_2);
 
     lv_display_set_buffers(disp, buffer_1, buffer_2, buffer_size, LV_DISPLAY_RENDER_MODE_FULL);
+    /* Native 648x480: display and panel memory share one coordinate system. */
 
     ESP_LOGI(TAG, "Install LVGL tick timer");
   	esp_timer_create_args_t lvgl_tick_timer_args = {};

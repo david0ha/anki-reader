@@ -13,7 +13,7 @@
 //   GET  /api/info          -> { deviceId, model, fw, ip }
 //   GET  /api/state         -> DeviceState snapshot (polled by the dashboard)
 //   POST /api/refresh       -> poll the vault source now
-//   POST /api/page          { page: 0..3 }
+//   POST /api/page          { page: 0 } (compatibility no-op)
 //   POST /api/vault         { url }      // '' switches the board to its built-in demo snapshot
 //   POST /api/display/test  -> run the e-Paper self-test sweep
 //
@@ -85,7 +85,7 @@ export interface VaultSummary {
   added7d: number
   agents: number
   agentsRunning: number
-  /** How many recent notes the board is showing (page 3, left column). */
+  /** How many recent notes the source summary contains. */
   recent: number
   /** Total inbox items — may exceed what fits on the panel. */
   inbox: number
@@ -99,7 +99,7 @@ export interface VaultSource {
   pollSeconds: number
   /** Seconds since the last SUCCESSFUL poll; -1 when none has ever succeeded. */
   ageSeconds: number
-  /** The board has decided what it is showing is old and has badged it on the panel. */
+  /** The board reports that the last good source snapshot is old; the companion may surface it. */
   stale: boolean
 }
 
@@ -128,9 +128,9 @@ export interface DeviceState {
   model: string
   fw: string
   ip: string
-  /** Page currently on the panel: 0=stats 1=graph 2=agents 3=notes. */
+  /** Compatibility page index. The fixed artwork composition is always page 0. */
   page: number
-  /** The board's own title for that page, in its UI language (Korean). */
+  /** The board's title for the single composition. */
   pageTitle: string
   vault: VaultSummary
   source: VaultSource
@@ -201,8 +201,8 @@ export interface WaitForConnectedResult extends ProvisionStatus {
 /** Mirrors the firmware's PROV_URL_MAX_LEN — the board rejects anything longer. */
 export const VAULT_URL_MAX_LEN = 128
 
-/** Page count on the panel; the firmware rejects anything outside 0..PAGE_COUNT-1. */
-export const PAGE_COUNT = 4
+/** One fixed landscape artwork; page 0 remains for API compatibility. */
+export const PAGE_COUNT = 1
 
 const DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_ESP32_BASE_URL || 'http://192.168.4.1'
 const DEFAULT_TIMEOUT_MS = 8000
@@ -425,8 +425,8 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
       model: asStr(j.model),
       fw: asStr(j.fw),
       ip: asStr(j.ip),
-      page: asNum(j.page),
-      pageTitle: asStr(j.pageTitle),
+      page: 0,
+      pageTitle: 'Artwork',
       vault: parseVault(j.vault as Record<string, unknown> | undefined),
       source: parseSource(j.source as Record<string, unknown> | undefined),
       battery: parseBattery(j.battery as Record<string, unknown> | undefined),
@@ -434,8 +434,7 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
     }
   }
 
-  // Switch the page on the panel (0=stats 1=graph 2=agents 3=notes). Always a full refresh on the
-  // board, so it takes a few seconds to actually appear.
+  // Compatibility endpoint for the single artwork composition. Only page 0 is valid.
   async function setPage(page: number): Promise<void> {
     return postJson('/api/page', { page }, 'page')
   }

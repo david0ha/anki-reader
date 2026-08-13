@@ -17,9 +17,8 @@ typedef struct {
     // this is a link between two machines on the user's own LAN, and requiring
     // a certificate for it would mean requiring a certificate authority.
     //
-    // Empty is a supported, complete configuration — the board then renders the
-    // built-in demo snapshot with a DEMO badge, which is what makes it a
-    // finished object with no PC running.
+    // Empty is supported: the board renders an explicitly labeled built-in
+    // design preview. A current dated tarot still requires a snapshot source.
     char vault_url[PROV_URL_MAX_LEN + 1];
 } prov_config_t;
 

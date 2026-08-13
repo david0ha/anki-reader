@@ -33,6 +33,10 @@ add_host_test(test_vault_parse test_vault_parse.c
 add_host_test(test_graph_layout test_graph_layout.c
               ${CORE}/ui_graph.c ${CORE}/vault_model.c)
 
+# Native card, deck-spine and reading-frame geometry. Pure integers, no LVGL.
+add_host_test(test_artwork_layout test_artwork_layout.c
+              ${CORE}/ui_artwork_layout.c)
+
 # The built-in demo snapshot, tied to the reference producer's committed output.
 add_host_test(test_vault_mock test_vault_mock.c
               ${CORE}/vault_mock.c ${CORE}/vault_parse.c ${CORE}/vault_model.c
@@ -52,6 +56,7 @@ add_host_test(test_api_json test_api_json.c ${CORE}/device_api_json.c ${CJSON}/c
 enable_testing()
 add_test(NAME vault_parse  COMMAND test_vault_parse)
 add_test(NAME graph_layout COMMAND test_graph_layout)
+add_test(NAME artwork_layout COMMAND test_artwork_layout)
 add_test(NAME vault_mock   COMMAND test_vault_mock)
 add_test(NAME vault_service COMMAND test_vault_service)
 add_test(NAME api_json      COMMAND test_api_json)

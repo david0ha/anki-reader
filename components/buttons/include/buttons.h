@@ -3,7 +3,7 @@
  *
  * Four press-to-GND buttons are exposed to the app as a FreeRTOS event queue:
  *
- *   KEY0 — EE04 side button 1  -> next page
+ *   KEY0 — EE04 side button 1  -> reserved by the single artwork UI
  *   KEY1 — EE04 side button 2  -> refresh now
  *   KEY2 — EE04 side button 3  -> tap: back to page 0; 5s hold: Wi-Fi setup
  *   BOOT — the XIAO module's own button: download-mode pin at reset, a normal

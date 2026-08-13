@@ -113,6 +113,9 @@ static void test_the_three_failures_are_distinguished(void)
     expect("captive portal", "<html>Sign in</html>", 200, VAULT_FETCH_BAD_PAYLOAD);
     expect("empty object", "{}", 200, VAULT_FETCH_BAD_PAYLOAD);
     expect("truncated", "{\"stats\":{\"notes\":14", 200, VAULT_FETCH_BAD_PAYLOAD);
+    expect("legacy schema without artwork",
+           "{\"schema\":1,\"stats\":{\"notes\":14}}", 200,
+           VAULT_FETCH_BAD_PAYLOAD);
 }
 
 static void test_status_is_checked_before_the_body(void)

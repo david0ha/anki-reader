@@ -123,8 +123,8 @@ I device_api: control server up on port 80
 I device_api: mDNS advertising http://obsidianboard.local
 ```
 
-`sntp sync timeout` costs only the header clock (it stays `--:--`); snapshot staleness is measured
-monotonically and is unaffected. From here the board is reachable:
+`sntp sync timeout` does not change the artwork layout; snapshot staleness is measured monotonically
+and is unaffected. From here the board is reachable:
 
 ```bash
 curl -s http://obsidianboard.local/api/info
@@ -155,7 +155,7 @@ curl -s http://obsidianboard.local/api/state | jq '.panel, .battery'
 | number | where it goes |
 |---|---|
 | `fullRefreshMs` | decides nothing on its own, but see the table in [epaper-5in83.md](epaper-5in83.md#when-the-numbers-arrive) |
-| `partialRefreshMs` | picks `CLOCK_REFRESH_EVERY` in `components/user_app/user_app.cpp` |
+| `partialRefreshMs` | records self-test behavior; normal artwork changes use a full refresh |
 | `battery.millivolts` vs a multimeter on the cell | corrects `BATT_DIVIDER` in `components/board_io/board_io.c` |
 
 `BATT_DIVIDER` is 3.0 **from the documentation, never measured**. It is the kind of constant that
@@ -163,9 +163,9 @@ fails quietly — a wrong ratio gives a percentage that looks entirely plausible
 time you glance at the panel. Scale it by the ratio between the two readings, then record here that
 it has been checked, and the question is closed.
 
-Also watch the panel through a clock tick and a page change before deciding the refresh policy.
-Whether a partial refresh is *silent* is not in any number the API reports, and it is half the
-decision.
+Also watch one unchanged poll and one changed `daily_tarot` payload before deciding the refresh
+policy. An unchanged tarot fingerprint must leave the panel untouched; a changed card or reading
+gets one full refresh.
 
 ## 5. Point it at a real vault
 
@@ -174,18 +174,19 @@ python3 tools/vault_server.py ~/Documents/MyVault      # on the machine holding 
 curl -X POST http://obsidianboard.local/api/vault -d '{"url":"http://mymac.local:8123/vault.json"}'
 ```
 
-The `DEMO` badge should disappear on the next poll. If it does not, `GET /api/state` reports
-`source.lastResult`, and the three failure codes each send you somewhere different —
-[vault-contract.md](vault-contract.md) has them.
+There is deliberately no `DEMO` badge, header or footer on the artwork. Confirm the source through
+`GET /api/state`: `source.lastResult` becomes `ok`, while its three failure codes each send you
+somewhere different — [vault-contract.md](vault-contract.md) has them. On glass, the full-height
+card and the right-hand reading change only when the visible `daily_tarot` fingerprint changes.
 
 ## Buttons
 
 | | |
 |---|---|
-| KEY0 | next page |
+| KEY0 | reserved (artwork unchanged) |
 | KEY1 | poll now |
-| KEY2 | tap → page 1 · **hold 5 s → reboot into Wi-Fi setup** |
-| BOOT | previous page |
+| KEY2 | tap → reserved · **hold 5 s → reboot into Wi-Fi setup** |
+| BOOT | reserved (artwork unchanged) |
 
 The KEY2 hold is the escape hatch for a board stuck on a network that no longer exists. It keeps the
 saved config so the portal pre-fills, and only the Wi-Fi needs re-entering.

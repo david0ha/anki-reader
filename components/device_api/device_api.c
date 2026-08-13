@@ -153,7 +153,7 @@ static esp_err_t api_refresh_post(httpd_req_t *req)
     return user_app_refresh_now() ? send_ok(req) : send_err(req, "busy");
 }
 
-// POST /api/page { page: 0..3 }
+// POST /api/page { page: 0 } — compatibility no-op for one composition.
 static esp_err_t api_page_post(httpd_req_t *req)
 {
     esp_err_t sent;
@@ -164,6 +164,8 @@ static esp_err_t api_page_post(httpd_req_t *req)
     cJSON *pg = cJSON_GetObjectItem(root, "page");
     if (!cJSON_IsNumber(pg)) {
         rc = send_err(req, "bad_json");
+    } else if (pg->valuedouble != 0.0) {
+        rc = send_err(req, "page_range");
     } else {
         rc = user_app_set_page((int)pg->valuedouble) ? send_ok(req) : send_err(req, "page_range");
     }

@@ -41,7 +41,7 @@ extern "C" {
  * out->ip empty for the caller (device_api owns esp_netif/esp_mac). */
 void user_app_snapshot(device_state_t *out);
 
-/* Switch page (0..UI_PAGE_COUNT-1). False if out of range or the queue is full. */
+/* Compatibility endpoint for the single composition. Only page 0 is valid. */
 bool user_app_set_page(int page);
 
 /* Poll the vault source now instead of waiting out the interval. The panel is

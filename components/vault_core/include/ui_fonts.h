@@ -1,13 +1,11 @@
 /*
  * ui_fonts.h — the Korean faces this board draws with.
  *
- * Source: Noto Sans KR, Regular and Medium (SIL Open Font License 1.1 —
- * fonts/OFL.txt). A sans face, unlike the serif the fortune board this code
- * forked from used: that panel was printing a 만세력 slip, this one is a
- * dashboard, and at 16 px on a binarizing panel a uniform stroke stays legible
- * where a serif's thin strokes drop out entirely.
+ * Source: Noto Sans KR Regular/Medium (SIL Open Font License 1.1 —
+ * fonts/OFL.txt). Uniform strokes survive 1-bit binarization reliably; the
+ * 28px tarot headline adds hierarchy without sacrificing those fine strokes.
  *
- * ## Both faces carry the whole 완성형 set, on purpose
+ * ## All sizes carry the whole 완성형 set, on purpose
  *
  * The fortune board could subset its fonts down to seventy glyphs because every
  * string it drew was a literal in its own source. This board draws note titles,
@@ -15,7 +13,7 @@
  * no symbol list that can be derived ahead of time, and the failure mode of
  * guessing is a tofu box on somebody's note title.
  *
- * So ui_font_kr_16 and ui_font_kr_20 both contain all 2350 KS X 1001 완성형
+ * So all three generated sizes contain the 2350 KS X 1001 완성형
  * syllables plus ASCII and punctuation — about 100 KB each at 1 bpp, against an
  * 8 MB app partition. 1 bpp because the panel binarizes anyway: anti-aliasing
  * would cost four times the flash to produce pixels that are then thresholded
@@ -50,6 +48,9 @@ extern const lv_font_t ui_font_kr_16;
 
 /* Headings, the header line, section titles and the stat captions. */
 extern const lv_font_t ui_font_kr_20;
+
+/* Tarot headline: full network-safe Noto Sans KR Medium at display scale. */
+extern const lv_font_t ui_font_kr_28;
 
 #ifdef __cplusplus
 }

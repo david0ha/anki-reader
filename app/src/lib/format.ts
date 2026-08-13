@@ -4,13 +4,12 @@
 import type { VaultFetchResult } from './esp32'
 
 /**
- * Page index → the app's label, matching the firmware's page order (ui_vault.c).
+ * The panel exposes one fixed artwork composition rather than navigable pages.
  *
- * The board also reports its own `pageTitle`, in Korean, which is what is actually on the glass.
- * These are the app's English equivalents for the page switcher: a control the user presses should
- * read in the app's language, and the board's own title is shown separately next to the page.
+ * The board also reports its own `pageTitle`; the label is retained for wire compatibility and
+ * status display even though there is no page switcher.
  */
-export const PAGE_LABELS = ['Stats', 'Graph', 'Agents', 'Notes'] as const
+export const PAGE_LABELS = ['Artwork'] as const
 
 export function pageLabel(page: number): string {
   return PAGE_LABELS[page] ?? `Page ${page}`
