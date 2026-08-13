@@ -50,6 +50,7 @@ extern "C" {
 #define UI_F_NUM        (&lv_font_montserrat_20)
 #define UI_F_NUM_LG     (&lv_font_montserrat_28)
 #define UI_F_NUM_XL     (&lv_font_montserrat_44)
+#define UI_F_ART_HEAD   (&ui_font_kr_28)
 
 /* --- shapes ---------------------------------------------------------------
  * All coordinates are relative to `par`. Every one of these returns an object

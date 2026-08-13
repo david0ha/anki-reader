@@ -11,7 +11,7 @@ network at runtime. There is no symbol list that can be derived ahead of time,
 and the failure mode of guessing is a tofu box on somebody's note title — on the
 glass, after a two-second refresh, where nobody is watching.
 
-So both faces carry the whole 완성형 set: the 2350 Hangul syllables of
+So all three sizes carry the whole 완성형 set: the 2350 Hangul syllables of
 KS X 1001, plus ASCII, plus the punctuation the UI composes at runtime.
 
 The 2350 are not a hardcoded table. They are exactly the syllables reachable
@@ -49,12 +49,12 @@ STRINGS_H = os.path.join(CORE, "include", "ui_strings.h")
 # Noto Sans KR — SIL Open Font License 1.1, so the generated bitmaps are
 # redistributable with this repo. A sans face on purpose: this panel is a
 # dashboard, and at 16 px after binarization a serif's thin strokes drop out.
-FONT_URL_BASE = "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/KR/"
 FONT_URLS = {
-    "regular": FONT_URL_BASE + "NotoSansKR-Regular.otf",
-    "medium":  FONT_URL_BASE + "NotoSansKR-Medium.otf",
+    "regular": "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/KR/NotoSansKR-Regular.otf",
+    "medium":  "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/KR/NotoSansKR-Medium.otf",
 }
 LICENSE_URL = "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/LICENSE"
+LV_FONT_CONV_VERSION = "1.5.3"
 
 
 def wansung_syllables():
@@ -116,6 +116,7 @@ def symbol_set():
 FACES = {
     "ui_font_kr_16": (16, "regular"),
     "ui_font_kr_20": (20, "medium"),
+    "ui_font_kr_28": (28, "medium"),
 }
 
 
@@ -123,7 +124,7 @@ def run_conv(font, name, size, chars):
     symbols = "".join(sorted(chars))
     out = os.path.join(FONTDIR, name + ".c")
     cmd = [
-        "npx", "-y", "lv_font_conv@latest",
+        "npx", "-y", f"lv_font_conv@{LV_FONT_CONV_VERSION}",
         "--font", font,
         "--size", str(size),
         "--bpp", "1",
@@ -156,7 +157,10 @@ def main():
         print("non-ASCII, non-Hangul:", "".join(extra))
         return
 
-    fonts = {"regular": args.font, "medium": args.font_medium}
+    fonts = {
+        "regular": args.font,
+        "medium": args.font_medium,
+    }
     missing = [w for w, p in fonts.items() if not p]
     if missing:
         if not args.download:

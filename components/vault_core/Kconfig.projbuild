@@ -4,9 +4,8 @@ config OBSIDIAN_TIMEZONE
     string "Local timezone (POSIX TZ)"
     default "KST-9"
     help
-      POSIX TZ string for the header clock. There is no RTC on the EE04, so the
-      clock comes entirely from SNTP and this is what turns UTC into what the
-      panel shows.
+      POSIX TZ string for device-local timekeeping and companion metadata.
+      There is no RTC on the EE04, so local time comes entirely from SNTP.
       Examples: "KST-9" (Korea), "JST-9" (Japan), "EST5EDT,M3.2.0,M11.1.0"
       (US Eastern), "CET-1CEST,M3.5.0,M10.5.0/3" (Central Europe), "UTC0".
 
@@ -20,15 +19,7 @@ config OBSIDIAN_POLL_SECONDS
       differs from what is on the glass — so the floor here is about not
       hammering somebody's laptop, not about e-Paper wear.
 
-      A snapshot older than twice this interval is badged "오래됨".
-
-config OBSIDIAN_VAULT_URL
-    string "Fallback vault URL"
-    default ""
-    help
-      Used only when no URL was entered during captive-portal setup. Leave empty
-      and the board renders its built-in demo snapshot with a DEMO badge, which
-      is a complete and intentional configuration — the display works with no PC
-      running at all.
+      A snapshot older than twice this interval is reported stale through the
+      companion API; operational status is not printed on the tarot artwork.
 
 endmenu

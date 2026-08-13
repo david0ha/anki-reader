@@ -44,9 +44,10 @@
 
 #include "user_app.h"
 #include "user_app_api.h"
+#include "source_guard.h"
 #include "lvgl_bsp.h"          /* Lvgl_lock / Lvgl_unlock / Lvgl_RenderNow */
 #include "epd_panel.h"         /* epd_refresh_* / epd_selftest            */
-#include "ui_vault.h"
+#include "ui_artwork.h"
 #include "ui_strings.h"
 #include "vault_model.h"
 #include "vault_mock.h"
@@ -68,28 +69,14 @@ static prov_config_t s_cfg;
 #ifndef CONFIG_OBSIDIAN_POLL_SECONDS
 #define CONFIG_OBSIDIAN_POLL_SECONDS 300
 #endif
-#ifndef CONFIG_OBSIDIAN_VAULT_URL
-#define CONFIG_OBSIDIAN_VAULT_URL ""
-#endif
-
 #define POLL_SECONDS       CONFIG_OBSIDIAN_POLL_SECONDS
 
-/* How often UiTask wakes to move the clock on. The header shows HH:MM, so a
- * minute is the useful resolution; whether that minute costs a panel refresh is
- * decided by CLOCK_REFRESH_EVERY below. */
+/* A minute wake keeps battery telemetry current. The artwork itself has no
+ * clock, so an idle wake never redraws the panel. */
 #define TICK_SECONDS       60
 
-/* Only every Nth clock tick is actually pushed to the glass. On the 2.13" board
- * this code came from, a partial refresh was 0.3s and silent, so the clock
- * moved every minute. Here a partial covers ten times the area; until the
- * measured timings say otherwise (they are logged, and served at /api/state),
- * five minutes of clock resolution is worth more than twelve times the panel
- * activity. */
-#define CLOCK_REFRESH_EVERY  5
-
-/* A snapshot older than this many poll intervals gets the "오래됨" badge. Two
- * rather than one: a single missed poll is a laptop closing its lid, not a
- * problem the user needs told about. */
+/* The companion API reports a snapshot stale after this many poll intervals.
+ * Two rather than one: one missed poll is usually a laptop closing its lid. */
 #define STALE_AFTER_POLLS    2
 
 /* KEY2 held this long forces Wi-Fi setup mode — the escape hatch when the board
@@ -110,6 +97,7 @@ typedef enum {
 typedef struct {
     app_cmd_kind_t kind;
     int  ival;
+    uint32_t source_generation;
     char text[PROV_URL_MAX_LEN + 1];
 } app_cmd_t;
 
@@ -125,22 +113,17 @@ static inline void state_unlock(void) { xSemaphoreGive(s_mtx); }
 /* --- state (guarded by s_mtx unless noted) -------------------------------- */
 
 static vault_t  s_data;                 /* what is on (or going to) the glass */
-static uint32_t s_data_hash;
+static uint32_t s_tarot_hash;
+/* Invalidates any synchronous HTTP fetch that started before the source changed. */
+static source_guard_t s_source_guard;
 static int      s_page;
 
 static vault_fetch_result_t s_last_result = VAULT_FETCH_NO_URL;
 static int64_t  s_last_ok_us;           /* 0 = never fetched successfully     */
-/* True until a fetch fails at the transport. Starts true because UserApp_TaskInit
- * only runs once Wi-Fi is up, and an unconfigured board that never fetches
- * anything is not offline — it is showing its demo screen on purpose. */
-static bool     s_online = true;
 
 static bool     s_batt_present;
 static int      s_batt_pct;
 static int      s_batt_mv;
-
-/* Only ever touched by UiTask. */
-static int s_ticks_since_clock_refresh;
 
 /* cJSON's parse tree for a vault snapshot is a few KB, but keeping it out of
  * internal RAM leaves that for WiFi/TLS and the panel's DMA framebuffer. */
@@ -158,7 +141,7 @@ void UserApp_AppInit(void)
 
 void UserApp_UiInit(void)
 {
-    /* Swap the provisioning status screen for the vault UI, freeing the old one
+    /* Swap the provisioning status screen for the tarot UI, freeing the old one
      * (and its widgets) instead of leaking it for the process lifetime. */
     lv_obj_t *prev = lv_screen_active();
     s_screen = lv_obj_create(NULL);
@@ -166,7 +149,7 @@ void UserApp_UiInit(void)
     if (prev && prev != s_screen) {
         lv_obj_delete(prev);
     }
-    ui_vault_create(s_screen);
+    ui_artwork_create(s_screen);
 }
 
 /* --- presenting (UiTask only) --------------------------------------------- */
@@ -175,27 +158,18 @@ void UserApp_UiInit(void)
  *
  * `full` is not a hint: it is the difference between a multi-second flashing
  * update that clears ghosting and a shorter silent one that adds to it. Use
- * full whenever the content area changed; the windowed partial is for the
- * header strip and nothing else. */
+ * full whenever the daily card or reading changed. */
 static void present_full(void)
 {
     Lvgl_RenderNow();
     epd_refresh_full();
 }
 
-static void present_header(void)
-{
-    int x1, y1, x2, y2;
-    ui_vault_header_area(&x1, &y1, &x2, &y2);
-    Lvgl_RenderNow();
-    epd_refresh_partial_area(x1, y1, x2, y2);
-}
-
 /* --- content updates (UiTask only) ---------------------------------------- */
 
 /* The snapshot is copied out from under the mutex so LVGL is never touched while
- * holding it. The copy is static rather than automatic because vault_t is 3.4 KB
- * — 42% of UiTask's 8 KB stack — and this frame goes on to call into LVGL, whose
+ * holding it. The copy is static rather than automatic because vault_t is about 5.8 KB
+ * — most of UiTask's 8 KB stack — and this frame goes on to call into LVGL, whose
  * render (Lvgl_RenderNow -> lv_refr_now) runs on this same task. A static is safe
  * here precisely because of the rule the whole file is built on: UiTask is the
  * only caller. */
@@ -205,28 +179,10 @@ static void push_data_to_ui(void)
 {
     state_lock();
     s_ui_copy = s_data;
-    ui_status_t st = {
-        .online          = s_online,
-        .stale           = false,
-        .battery_present = s_batt_present,
-        .battery_pct     = s_batt_pct,
-    };
-    /* Staleness is derived here rather than stored, so it becomes true on its
-     * own as time passes instead of only when a fetch fails. A configured board
-     * that has never once succeeded is stale from the start — otherwise the
-     * only state that says so is a transport error, and a server answering 404
-     * forever would look healthy. */
-    if (s_last_ok_us != 0) {
-        int64_t age_us = esp_timer_get_time() - s_last_ok_us;
-        st.stale = age_us > (int64_t)POLL_SECONDS * STALE_AFTER_POLLS * 1000000;
-    } else {
-        st.stale = s_cfg.vault_url[0] != '\0';
-    }
     state_unlock();
 
     if (Lvgl_lock(-1)) {
-        ui_vault_set_data(&s_ui_copy);
-        ui_vault_set_status(&st);
+        ui_artwork_set_data(&s_ui_copy);
         Lvgl_unlock();
     }
 }
@@ -245,35 +201,31 @@ static void read_battery(void)
 
 static void action_set_page(int page)
 {
-    if (page < 0 || page >= UI_PAGE_COUNT) {
+    if (page != 0) {
         return;
     }
     state_lock();
+    bool changed = s_page != 0;
     s_page = page;
     state_unlock();
-
-    if (Lvgl_lock(-1)) {
-        ui_vault_show_page((ui_page_t)page);
-        Lvgl_unlock();
-    }
-    present_full();   /* a page swap replaces every pixel in the content area */
+    if (changed) present_full();
 }
 
 static void action_set_url(const char *url)
 {
     state_lock();
     strlcpy(s_cfg.vault_url, url, sizeof(s_cfg.vault_url));
+    source_guard_advance(&s_source_guard);
     /* Clearing the URL means "go back to the demo screen", and it has to happen
      * here rather than by waiting for a poll — with no URL there is no poll, so
      * the board would otherwise sit on the last real snapshot indefinitely and
-     * then quietly badge it 오래됨, which is the opposite of what was asked. */
+     * then keep reporting a stale real snapshot, which is the opposite of what was asked. */
     bool to_demo = (url[0] == '\0');
     if (to_demo) {
         vault_mock(&s_data);
-        s_data_hash  = vault_hash(&s_data);
+        s_tarot_hash = vault_tarot_hash(&s_data);
         s_last_ok_us = 0;
         s_last_result = VAULT_FETCH_NO_URL;
-        s_online     = true;
     }
     state_unlock();
 
@@ -314,7 +266,7 @@ static void force_ap_mode(void)
     ESP_LOGW(TAG, "KEY2 long-press -> forcing Wi-Fi setup (AP) mode");
     prov_store_set_force_portal();
     if (Lvgl_lock(-1)) {
-        ui_vault_set_overlay(S_WIFI_TITLE, S_RESTARTING);
+        ui_artwork_set_overlay(S_WIFI_TITLE, S_RESTARTING);
         Lvgl_unlock();
     }
     present_full();
@@ -332,19 +284,17 @@ static void handle_cmd(const app_cmd_t *c)
         if (s_poll_wake) xSemaphoreGive(s_poll_wake);
         break;
     case APP_CMD_DATA:
-        push_data_to_ui();
-        present_full();
-        s_ticks_since_clock_refresh = 0;   /* the clock just went out too */
+        state_lock();
+        bool current = source_guard_accepts(&s_source_guard, c->source_generation);
+        state_unlock();
+        if (current) {
+            push_data_to_ui();
+            present_full();
+        } else {
+            ESP_LOGI(TAG, "stale queued tarot discarded after source change");
+        }
         break;
     }
-}
-
-static void next_page(int delta)
-{
-    state_lock();
-    int page = ((s_page + delta) % UI_PAGE_COUNT + UI_PAGE_COUNT) % UI_PAGE_COUNT;
-    state_unlock();
-    action_set_page(page);
 }
 
 /* Returns true if the button was still held after `ms`. Releases early. */
@@ -363,8 +313,7 @@ static void handle_press(button_id_t id)
 {
     switch (id) {
     case BUTTON_KEY0:
-        ESP_LOGI(TAG, "KEY0 -> next page");
-        next_page(+1);
+        ESP_LOGI(TAG, "KEY0 -> artwork unchanged");
         break;
     case BUTTON_KEY1:
         ESP_LOGI(TAG, "KEY1 -> refresh now");
@@ -377,12 +326,10 @@ static void handle_press(button_id_t id)
         if (held_for(BUTTON_KEY2, FORCE_AP_HOLD_MS)) {
             force_ap_mode();               /* reboots — does not return */
         }
-        ESP_LOGI(TAG, "KEY2 -> page 1");
-        action_set_page(UI_PAGE_STATS);
+        ESP_LOGI(TAG, "KEY2 tap -> artwork unchanged");
         break;
     case BUTTON_BOOT:
-        ESP_LOGI(TAG, "BOOT -> previous page");
-        next_page(-1);
+        ESP_LOGI(TAG, "BOOT -> artwork unchanged");
         break;
     default:
         break;
@@ -391,13 +338,12 @@ static void handle_press(button_id_t id)
 
 /*
  * UiTask — the only task that touches LVGL or the panel. Blocks on buttons OR
- * app commands, and wakes every TICK_SECONDS to keep the clock and battery
- * current.
+ * app commands, and wakes every TICK_SECONDS to keep battery telemetry current.
  */
 static void UiTask(void *arg)
 {
     (void)arg;
-    ESP_LOGI(TAG, "controls: KEY0 = page, KEY1 = refresh, KEY2 = page 1 (5s hold = Wi-Fi setup)");
+    ESP_LOGI(TAG, "controls: KEY1 = refresh, KEY2 hold 5s = Wi-Fi setup");
 
     /* The demo snapshot goes up immediately rather than after the first poll:
      * a board that shows a finished screen one second after boot and then
@@ -406,17 +352,12 @@ static void UiTask(void *arg)
     state_lock();
     if (!s_data.valid) {
         vault_mock(&s_data);
-        s_data_hash = vault_hash(&s_data);
+        s_tarot_hash = vault_tarot_hash(&s_data);
     }
     state_unlock();
 
     read_battery();
     push_data_to_ui();
-    if (Lvgl_lock(-1)) {
-        ui_vault_tick();
-        ui_vault_show_page(UI_PAGE_STATS);
-        Lvgl_unlock();
-    }
     present_full();
 
     for (;;) {
@@ -434,18 +375,9 @@ static void UiTask(void *arg)
                 handle_cmd(&cmd);
             }
         } else {
-            /* Idle tick: move the clock on, and spend a partial refresh on it
-             * only every CLOCK_REFRESH_EVERY minutes. */
             read_battery();
-            if (Lvgl_lock(-1)) {
-                ui_vault_tick();
-                Lvgl_unlock();
-            }
-            if (++s_ticks_since_clock_refresh >= CLOCK_REFRESH_EVERY) {
-                s_ticks_since_clock_refresh = 0;
-                push_data_to_ui();          /* the staleness badge may have changed */
-                present_header();
-            }
+            /* The artwork has no clock or transient chrome. A wake updates
+             * battery state only; unchanged content never refreshes glass. */
         }
     }
 }
@@ -455,7 +387,7 @@ static void UiTask(void *arg)
  * it got back differs from what is already on the glass. Never touches LVGL or
  * the panel itself, so a stalled HTTP request cannot hold up a refresh.
  */
-static void notify_ui(app_cmd_kind_t kind)
+static void notify_ui(app_cmd_kind_t kind, uint32_t source_generation)
 {
     if (!s_cmd_queue) {
         return;
@@ -463,10 +395,14 @@ static void notify_ui(app_cmd_kind_t kind)
     app_cmd_t c;
     memset(&c, 0, sizeof(c));
     c.kind = kind;
-    xQueueSend(s_cmd_queue, &c, 0);
+    c.source_generation = source_generation;
+    /* Do not advance the render fingerprint and then silently lose its draw.
+     * UiTask is the queue's sole consumer and never waits on VaultTask, so this
+     * bounded producer can safely wait until a slot is available. */
+    xQueueSend(s_cmd_queue, &c, portMAX_DELAY);
 }
 
-/* Static for the same reason as s_ui_copy: 3.4 KB of a 16 KB stack that an
+/* Static for the same reason as s_ui_copy: several KB of a 16 KB stack that an
  * https:// URL also has to fit a synchronous TLS handshake into. VaultTask is the
  * only caller. */
 static vault_t s_fetched;
@@ -479,36 +415,43 @@ static void VaultTask(void *arg)
 
     for (;;) {
         char url[PROV_URL_MAX_LEN + 1];
+        uint32_t generation;
         state_lock();
-        strlcpy(url, s_cfg.vault_url[0] ? s_cfg.vault_url : CONFIG_OBSIDIAN_VAULT_URL,
-                sizeof(url));
+        strlcpy(url, s_cfg.vault_url, sizeof(url));
+        generation = source_guard_capture(&s_source_guard);
         state_unlock();
 
         if (url[0]) {
             vault_fetch_result_t r = vault_service_fetch(url, &s_fetched);
 
-            state_lock();
-            s_last_result = r;
-            state_unlock();
+            if (r == VAULT_FETCH_OK && !s_fetched.daily_tarot.valid) {
+                r = VAULT_FETCH_BAD_PAYLOAD;
+            }
 
             if (r == VAULT_FETCH_OK) {
-                uint32_t h = vault_hash(&s_fetched);
+                uint32_t h = vault_tarot_hash(&s_fetched);
 
                 state_lock();
-                bool changed = (h != s_data_hash);
-                if (changed) {
-                    s_data      = s_fetched;
-                    s_data_hash = h;
+                /* Recheck while holding the same lock as the commit. A URL action
+                 * may run in the few instructions between hashing and this point. */
+                bool current_source = source_guard_accepts(&s_source_guard, generation);
+                bool changed = current_source && (h != s_tarot_hash);
+                if (current_source) {
+                    /* Keep API metadata current on every successful poll. Only the
+                     * render fingerprint decides whether glass is refreshed. */
+                    s_data = s_fetched;
+                    s_tarot_hash = h;
+                    s_last_ok_us = esp_timer_get_time();
+                    s_last_result = VAULT_FETCH_OK;
                 }
-                s_last_ok_us = esp_timer_get_time();
-                s_online     = true;
                 state_unlock();
 
-                if (changed) {
-                    ESP_LOGI(TAG, "vault: %d notes, %d links, %d agents — refreshing",
-                             s_fetched.stats.notes, s_fetched.stats.links,
-                             s_fetched.agent_count);
-                    notify_ui(APP_CMD_DATA);
+                if (!current_source) {
+                    ESP_LOGI(TAG, "vault source changed during fetch; stale response discarded");
+                } else if (changed) {
+                    ESP_LOGI(TAG, "daily tarot %s changed — refreshing",
+                             s_fetched.daily_tarot.card_id);
+                    notify_ui(APP_CMD_DATA, generation);
                 } else {
                     /* The single most common outcome, and the one that must not
                      * cost a panel refresh. */
@@ -516,9 +459,17 @@ static void VaultTask(void *arg)
                 }
             } else {
                 state_lock();
-                s_online = (r != VAULT_FETCH_TRANSPORT);
+                bool current_source = source_guard_accepts(&s_source_guard, generation);
+                if (current_source) s_last_result = r;
                 state_unlock();
-                ESP_LOGW(TAG, "vault fetch failed: %s", vault_fetch_result_name(r));
+                if (!current_source) {
+                    ESP_LOGI(TAG, "vault source changed during fetch; stale response discarded");
+                } else if (r == VAULT_FETCH_BAD_PAYLOAD) {
+                    ESP_LOGW(TAG, "vault payload has no valid daily tarot; panel preserved");
+                }
+                if (current_source) {
+                    ESP_LOGW(TAG, "vault fetch failed: %s", vault_fetch_result_name(r));
+                }
             }
         }
 
@@ -603,7 +554,7 @@ void user_app_snapshot(device_state_t *out)
 
     state_lock();
     out->page = s_page;
-    strlcpy(out->page_title, ui_vault_page_title((ui_page_t)s_page), sizeof(out->page_title));
+    strlcpy(out->page_title, "Artwork", sizeof(out->page_title));
 
     out->vault_valid    = s_data.valid;
     out->demo           = s_data.demo;
@@ -638,7 +589,7 @@ void user_app_snapshot(device_state_t *out)
 
 bool user_app_set_page(int page)
 {
-    if (page < 0 || page >= UI_PAGE_COUNT) {
+    if (page != 0) {
         return false;
     }
     return post_cmd(APP_CMD_SET_PAGE, page, NULL);

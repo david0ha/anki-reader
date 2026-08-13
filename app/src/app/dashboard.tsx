@@ -17,7 +17,6 @@ import { Card } from '../components/Card'
 import { Chip } from '../components/Chip'
 import { Button } from '../components/Button'
 import { InfoRow } from '../components/InfoRow'
-import { SegmentedControl } from '../components/SegmentedControl'
 import { StatTile } from '../components/StatTile'
 import { ScreenMessage } from '../components/ScreenMessage'
 import { useDevice } from '../lib/device'
@@ -54,10 +53,6 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false)
   // Disable controls briefly while a write command is in flight so taps can't race.
   const [busy, setBusy] = useState(false)
-  // A page the user asked for that the board has not confirmed yet. A page change is a full
-  // refresh of a 5.83" panel — seconds, not milliseconds — so without this the segmented control
-  // snaps back to the old page and looks like the tap was lost.
-  const [pendingPage, setPendingPage] = useState<number | null>(null)
   const focused = useRef(true)
 
   const load = useCallback(
@@ -67,7 +62,6 @@ export default function Dashboard() {
       try {
         const s = await client.getState()
         setState(s)
-        setPendingPage((p) => (p === null || p === s.page ? null : p))
         setError(null)
       } catch (e) {
         // Keep the last good snapshot on a transient poll failure; only surface an error when we
@@ -152,8 +146,6 @@ export default function Dashboard() {
   }
 
   const { vault, source, battery, panel } = state
-  const shownPage = pendingPage ?? state.page
-
   return (
     <Screen edges={['top']}>
       <Header baseUrl={baseUrl} onSettings={() => router.push('/settings')} />
@@ -221,8 +213,7 @@ export default function Dashboard() {
           <Section title="Quick memo">
             <MemoBox
               sourceUrl={source.url}
-              // The board polls every few minutes; asking it to poll now is what makes a memo
-              // typed on the sofa appear on the panel while you are still looking at it.
+              // The board polls every few minutes; ask it to poll now so source state stays current.
               onSaved={() => command(() => client.refresh())}
             />
           </Section>
@@ -240,22 +231,19 @@ export default function Dashboard() {
           </Card>
         </Section>
 
-        {/* Page control. The board's own title for the page it is showing sits underneath, in its
-            UI language — that is the ground truth for what is on the glass. */}
+        {/* The panel is a single fixed composition, so there is deliberately no page switcher. */}
         <Section title="On the panel">
-          <SegmentedControl
-            segments={[...PAGE_LABELS]}
-            selectedIndex={shownPage}
-            disabled={busy}
-            onChange={(page) => {
-              setPendingPage(page)
-              command(() => client.setPage(page))
-            }}
-          />
+          <Card style={styles.rows}>
+            <InfoRow
+              label="Composition"
+              value={state.pageTitle || PAGE_LABELS[state.page] || 'Artwork'}
+            />
+            <InfoRow label="Canvas" value="648 × 480 landscape" last />
+          </Card>
           <Text style={styles.pageNote}>
-            {pendingPage !== null && pendingPage !== state.page
-              ? 'Switching… a page change is a full refresh, which takes a few seconds.'
-              : `Showing “${state.pageTitle || PAGE_LABELS[state.page] || '—'}”.`}
+            A full-height tarot card sits beside today&apos;s headline, flow, caution and action.
+            There is no header or footer chrome. The panel redraws only when the daily reading
+            changes.
           </Text>
         </Section>
 

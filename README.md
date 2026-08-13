@@ -1,28 +1,16 @@
 # Obsidian Board
 
-An always-on e-Paper dashboard for an Obsidian vault and the agents working on it. A 5.83"
-monochrome panel on a Seeed EE04 carrier and a XIAO ESP32-S3 Plus, polling one URL on your LAN and
-drawing four pages: vault statistics, the link graph, agent status, and the note queue.
+An always-on daily tarot reading generated from an Obsidian vault. A 5.83" monochrome panel on a
+Seeed EE04 carrier and a XIAO ESP32-S3 Plus polls one URL on your LAN. A native-pixel Rider–Waite–
+Smith card fills the left 96% of the glass height; a cut-corner reading plate on the right carries
+the day's headline, flow, caution and action. There is no application header or footer chrome.
 
-![the stats page](docs/images/0_stats.png)
+It is set up over Wi-Fi from a captive portal. With no URL, the board renders an explicitly labeled
+built-in design preview, so display bring-up still works offline. A current dated reading comes from
+the reference producer or another schema-3 source.
 
-It is set up over Wi-Fi from a captive portal. **Point it at nothing and it still works** — the
-board renders a built-in demo snapshot with a `DEMO` badge, which is a complete configuration, not a
-placeholder.
-
-<table>
-<tr>
-<td width="50%"><img src="docs/images/1_graph.png" alt="link graph"></td>
-<td width="50%"><img src="docs/images/2_agents.png" alt="agents"></td>
-</tr>
-<tr>
-<td><img src="docs/images/3_notes.png" alt="recent notes and inbox"></td>
-<td><img src="docs/images/0_stats.png" alt="vault statistics"></td>
-</tr>
-</table>
-
-Those are not mockups. They are what `sim/sim.sh` renders at the exact panel resolution, through the
-exact binarization the device applies — see [the simulator](docs/simulator.md).
+The preview from `sim/artwork_sim.sh` is not a mockup. It uses the exact LVGL
+composition and binarization used by the device — see [the simulator](docs/simulator.md).
 
 ## Quick start
 
@@ -65,18 +53,18 @@ device cannot tell the difference. The format is [documented and tested](docs/va
 Two optional pieces turn the dashboard from something you watch into something you use:
 
 ```bash
-# a memo goes into the vault's inbox, and onto the panel on the next poll
+# a memo goes into the vault's inbox (the tarot composition stays focused)
 python3 tools/vault_server.py ~/Documents/MyVault --allow-capture
 curl -X POST http://localhost:8123/capture -d 'ring the dentist'
 
-# a script reports what it is doing, and the agents page stops being empty
+# a script reports what it is doing, enriching the source snapshot
 python3 tools/agent_status.py --file ~/agents.json set indexer running --progress 40
 python3 tools/vault_server.py ~/Documents/MyVault --agents ~/agents.json
 ```
 
 Capture is off unless asked for: it is an unauthenticated LAN service that creates files in your
 notes. Neither piece is part of the device contract — the firmware has never heard of either. See
-[docs/vault-contract.md](docs/vault-contract.md#capture).
+[docs/vault-contract.md](docs/vault-contract.md#optional-capture).
 
 ## Verify before claiming anything works
 
@@ -84,18 +72,20 @@ Four layers, three of which need no hardware. Each is faster than the next and c
 class of mistake.
 
 ```bash
-# 1) pure logic — the wire format, the fetch layer, the graph layout,
-#    the demo snapshot, the API JSON
+# 1) pure logic — the wire format, fetch layer, tarot layout,
+#    demo snapshot and API JSON
 cmake -S components/vault_core/test/host -B /tmp/vt && cmake --build /tmp/vt
 /tmp/vt/test_vault_parse && /tmp/vt/test_vault_service && /tmp/vt/test_graph_layout \
-  && /tmp/vt/test_vault_mock && /tmp/vt/test_api_json
+  && /tmp/vt/test_artwork_layout && /tmp/vt/test_vault_mock && /tmp/vt/test_api_json
 
 # 2) provisioning pure logic, and the vault scanner
 sh components/provisioning/test/run.sh
+sh components/user_app/test/run.sh
 python3 tools/test_vault_server.py
+python3 tools/test_tarot_assets.py
 
-# 3) the real UI at the real resolution -> PNG, plus layout and glyph assertions
-cd sim && ./sim.sh
+# 3) the real native 648x480 artwork -> PNG, plus layout and glyph assertions
+cd sim && ./artwork_sim.sh
 
 # 4) firmware
 idf.py build
@@ -124,10 +114,10 @@ Serial/JTAG. See [docs/pinout.md](docs/pinout.md).
 
 | | |
 |---|---|
-| KEY0 | next page |
+| KEY0 | keep current artwork |
 | KEY1 | poll the vault source now |
-| KEY2 | tap → page 1 · **hold 5 s → reboot into Wi-Fi setup** |
-| BOOT | previous page |
+| KEY2 | tap → keep artwork · **hold 5 s → reboot into Wi-Fi setup** |
+| BOOT | keep current artwork |
 
 ## The thing that makes this board different
 
@@ -135,7 +125,7 @@ Serial/JTAG. See [docs/pinout.md](docs/pinout.md).
 So drawing and presenting are separate everywhere:
 
 ```c
-...update widgets...      /* ui_vault_set_*(), cheap, no panel traffic */
+...update widgets...      /* ui_artwork_set_data(), cheap, no panel traffic */
 Lvgl_RenderNow();         /* synchronous render -> flush_cb -> framebuffer */
 epd_refresh_full();       /* or epd_refresh_partial_area(...) */
 ```
@@ -158,19 +148,21 @@ components/
     vault_parse.c       the wire contract, clamping every field
     vault_mock.c        the built-in demo snapshot
     vault_service.c     one fetch: http_get + parse
-    ui_vault.c          header, footer, overlay, page routing
-    ui_page_*.c         the four pages, one file each
-    ui_graph.c          deterministic concentric-ring link layout (no physics, no libm)
+    ui_artwork.c        native tarot card + framed daily-reading composition
+    ui_artwork_layout.c exact card, deck-spine and reading-frame geometry
+    assets/tarot/       78 byte-aligned 272x464 LVGL I1 card descriptors
     fonts/              full 완성형 Noto Sans KR faces (OFL) — generated, do not hand-edit
     test/host/          unit tests for all of the above
   provisioning/         SoftAP + captive portal + NVS + SNTP onboarding
   device_api/           STA-mode HTTP/JSON control server + mDNS (obsidianboard.local)
   board_io/             battery ADC
   buttons/              KEY0/1/2 + BOOT edge events
-sim/                    desktop simulator — renders the real UI to 648×480 and asserts on it
+sim/                    desktop simulator — renders the native 648x480 artwork and asserts pixels
 tools/
   vault_server.py       scans a REAL Obsidian vault and serves the contract from it
   mock_vault_server.py  the same contract from a fixed payload — the reference producer
+  tarot_assets/         reproducible source manifest and 1-bit card generator
+  tarot_readings_ko.json bounded Korean readings for all 78 cards
   gen_fonts.py          regenerates components/vault_core/fonts/
   agent_status.py       one line for a script to report an agent to the board
   flash.sh              find the board and flash it
@@ -182,7 +174,6 @@ third_party/cJSON/      vendored (ESP-IDF v6 dropped cJSON from core)
 
 - [docs/bring-up.md](docs/bring-up.md) — first power-on: reading the boot log, and the numbers to record
 - [docs/vault-contract.md](docs/vault-contract.md) — the JSON the device polls, and how it fails
-- [docs/pages.md](docs/pages.md) — the four pages, the layout grid, and the font decision
 - [docs/epaper-5in83.md](docs/epaper-5in83.md) — the UC8179 driver, the refresh policy, the self-test
 - [docs/pinout.md](docs/pinout.md) — GPIO assignments and the three traps
 - [docs/board-hardware.md](docs/board-hardware.md) — hardware notes

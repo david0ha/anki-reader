@@ -16,6 +16,7 @@
  */
 #include "vault_parse.h"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -60,6 +61,179 @@ static const cJSON *jobj(const cJSON *o, const char *key)
 {
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, key);
     return cJSON_IsObject(v) ? v : NULL;
+}
+
+static bool exact_int(const cJSON *v, int *out)
+{
+    if (!cJSON_IsNumber(v) || !out) return false;
+    double d = cJSON_GetNumberValue(v);
+    if (d < (double)INT_MIN || d > (double)INT_MAX) return false;
+    int n = (int)d;
+    if ((double)n != d) return false;
+    *out = n;
+    return true;
+}
+
+static bool valid_json_utf8(const char *json, size_t len)
+{
+    const unsigned char *s = (const unsigned char *)json;
+    bool in_string = false;
+    bool escaped = false;
+    for (size_t i = 0; i < len;) {
+        unsigned char c = s[i++];
+        if (c < 0x20) {
+            /* JSON permits space/tab/CR/LF between tokens, but every control
+             * inside a string must be escaped. A raw NUL must never silently
+             * terminate a bounded response. */
+            if (in_string || (c != '\t' && c != '\n' && c != '\r')) return false;
+            continue;
+        }
+        if (c < 0x80) {
+            if (in_string) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    in_string = false;
+                }
+            } else if (c == '"') {
+                in_string = true;
+            }
+            continue;
+        }
+
+        size_t continuation = 0;
+        uint32_t codepoint = 0;
+        uint32_t minimum = 0;
+        if (c >= 0xC2 && c <= 0xDF) {
+            continuation = 1;
+            codepoint = (uint32_t)(c & 0x1F);
+            minimum = 0x80;
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            continuation = 2;
+            codepoint = (uint32_t)(c & 0x0F);
+            minimum = 0x800;
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            continuation = 3;
+            codepoint = (uint32_t)(c & 0x07);
+            minimum = 0x10000;
+        } else {
+            return false;
+        }
+        if (continuation > len - i) return false;
+        for (size_t k = 0; k < continuation; k++) {
+            unsigned char tail = s[i++];
+            if ((tail & 0xC0) != 0x80) return false;
+            codepoint = (codepoint << 6) | (uint32_t)(tail & 0x3F);
+        }
+        if (codepoint < minimum || codepoint > 0x10FFFF ||
+            (codepoint >= 0xD800 && codepoint <= 0xDFFF)) return false;
+    }
+    return true;
+}
+
+static bool only_json_whitespace(const char *p, const char *end)
+{
+    while (p < end) {
+        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') return false;
+        p++;
+    }
+    return true;
+}
+
+static int edge_compare(const artwork_edge_t *a, const artwork_edge_t *b)
+{
+    if (a->a != b->a) return (int)a->a - (int)b->a;
+    return (int)a->b - (int)b->b;
+}
+
+static bool valid_tarot_date(const char *date)
+{
+    if (!date || strlen(date) != 10 || date[4] != '-' || date[7] != '-') return false;
+    for (int i = 0; i < 10; i++) {
+        if (i == 4 || i == 7) continue;
+        if (date[i] < '0' || date[i] > '9') return false;
+    }
+    int year = (date[0] - '0') * 1000 + (date[1] - '0') * 100 +
+               (date[2] - '0') * 10 + (date[3] - '0');
+    int month = (date[5] - '0') * 10 + (date[6] - '0');
+    int day = (date[8] - '0') * 10 + (date[9] - '0');
+    static const int days[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (year < 1 || month < 1 || month > 12) return false;
+    int max_day = days[month];
+    if (month == 2 && (year % 400 == 0 || (year % 4 == 0 && year % 100 != 0))) max_day++;
+    return day >= 1 && day <= max_day;
+}
+
+static bool valid_tarot_card_id(const char *card_id)
+{
+    if (!card_id) return false;
+    const char *dash = strrchr(card_id, '-');
+    if (!dash || dash[1] < '0' || dash[1] > '9' ||
+        dash[2] < '0' || dash[2] > '9' || dash[3] != '\0') return false;
+    int number = (dash[1] - '0') * 10 + (dash[2] - '0');
+    size_t suit_len = (size_t)(dash - card_id);
+    if (suit_len == 5 && memcmp(card_id, "major", 5) == 0) {
+        return number >= 0 && number <= 21;
+    }
+    bool minor = (suit_len == 4 && memcmp(card_id, "cups", 4) == 0) ||
+                 (suit_len == 5 && memcmp(card_id, "wands", 5) == 0) ||
+                 (suit_len == 6 && memcmp(card_id, "swords", 6) == 0) ||
+                 (suit_len == 9 && memcmp(card_id, "pentacles", 9) == 0);
+    return minor && number >= 1 && number <= 14;
+}
+
+static bool parse_tarot_lines(const cJSON *owner, const char *key, tarot_lines_t *out)
+{
+    const cJSON *arr = jarr(owner, key);
+    if (!arr || cJSON_GetArraySize(arr) < 1 ||
+        cJSON_GetArraySize(arr) > TAROT_LINES_MAX) return false;
+    int limit = cJSON_GetArraySize(arr);
+    for (int i = 0; i < limit; i++) {
+        const cJSON *line = cJSON_GetArrayItem(arr, i);
+        if (!cJSON_IsString(line) || !line->valuestring || !line->valuestring[0]) return false;
+        /* One wire element is exactly one fixed display row. Embedded line
+         * breaks would make LVGL wrap inside a one-line box and hide pixels. */
+        for (const unsigned char *p = (const unsigned char *)line->valuestring; *p; p++) {
+            if (*p < 0x20) return false;
+        }
+        vault_str_copy(out->lines[out->line_count], TAROT_LINE_MAX, line->valuestring);
+        if (!out->lines[out->line_count][0]) return false;
+        out->line_count++;
+    }
+    return out->line_count > 0;
+}
+
+static void parse_daily_tarot(const cJSON *root, vault_t *v)
+{
+    const cJSON *wire = jobj(root, "daily_tarot");
+    if (!wire) return;
+
+    daily_tarot_t tarot;
+    memset(&tarot, 0, sizeof(tarot));
+    const char *date = jstr(wire, "date");
+    const char *timezone = jstr(wire, "timezone");
+    const char *card_id = jstr(wire, "card_id");
+    const char *orientation = jstr(wire, "orientation");
+    int copy_version = 0;
+    if (!valid_tarot_date(date) || strcmp(timezone, "Asia/Seoul") != 0 ||
+        !valid_tarot_card_id(card_id) || strcmp(orientation, "upright") != 0 ||
+        !exact_int(cJSON_GetObjectItemCaseSensitive(wire, "copy_version"), &copy_version) ||
+        copy_version <= 0 ||
+        !parse_tarot_lines(wire, "headline", &tarot.headline) ||
+        !parse_tarot_lines(wire, "flow", &tarot.flow) ||
+        !parse_tarot_lines(wire, "caution", &tarot.caution) ||
+        !parse_tarot_lines(wire, "action", &tarot.action)) {
+        return;
+    }
+    vault_str_copy(tarot.date, sizeof(tarot.date), date);
+    vault_str_copy(tarot.timezone, sizeof(tarot.timezone), timezone);
+    vault_str_copy(tarot.card_id, sizeof(tarot.card_id), card_id);
+    vault_str_copy(tarot.orientation, sizeof(tarot.orientation), orientation);
+    tarot.copy_version = copy_version;
+    tarot.valid = true;
+    v->daily_tarot = tarot;
 }
 
 /* --- sections ------------------------------------------------------------- */
@@ -267,15 +441,205 @@ static void parse_inbox(const cJSON *root, vault_t *v)
     if (v->inbox_total < v->inbox_count) v->inbox_total = v->inbox_count;
 }
 
+static int parse_artwork_lines(const cJSON *owner, const char *key,
+                               artwork_line_t *out, int out_max)
+{
+    const cJSON *arr = jarr(owner, key);
+    if (!arr) return 0;
+    int count = 0;
+    const cJSON *e = NULL;
+    cJSON_ArrayForEach(e, arr) {
+        if (count >= out_max) break;
+        if (!cJSON_IsString(e) || !e->valuestring || !e->valuestring[0]) continue;
+        vault_str_copy(out[count].text, sizeof(out[count].text), e->valuestring);
+        if (out[count].text[0]) count++;
+    }
+    return count;
+}
+
+static void parse_artwork(const cJSON *root, vault_t *v)
+{
+    const cJSON *a = jobj(root, "artwork");
+    if (!a) return;
+
+    vault_artwork_t *art = &v->artwork;
+    art->headline_count = parse_artwork_lines(a, "headline", art->headline,
+                                               ARTWORK_HEADLINE_MAX);
+
+    /* Schema 3 deliberately changed definition from a bare string array to an
+     * object.  Requiring the actual object prevents a schema-2 payload from
+     * being mistaken for the new normalized artwork contract. */
+    const cJSON *definition = jobj(a, "definition");
+    if (definition) {
+        vault_str_copy(art->definition.headword, sizeof(art->definition.headword),
+                       jstr(definition, "headword"));
+        vault_str_copy(art->definition.meta, sizeof(art->definition.meta),
+                       jstr(definition, "meta"));
+        art->definition.line_count =
+            parse_artwork_lines(definition, "lines", art->definition.lines,
+                                ARTWORK_DEFINITION_MAX);
+    }
+
+    const cJSON *note = jobj(a, "note");
+    if (note) {
+        vault_str_copy(art->note.title, sizeof(art->note.title), jstr(note, "title"));
+        vault_str_copy(art->note.path, sizeof(art->note.path), jstr(note, "path"));
+        art->note.backlink_total = juint(note, "backlink_total", 0);
+
+        const cJSON *backlinks = jarr(note, "backlinks");
+        const cJSON *backlink = NULL;
+        if (backlinks) {
+            cJSON_ArrayForEach(backlink, backlinks) {
+                if (art->note.backlink_count >= ARTWORK_BACKLINKS_MAX) break;
+                if (!cJSON_IsString(backlink) || !backlink->valuestring ||
+                    !backlink->valuestring[0]) continue;
+                int i = art->note.backlink_count;
+                vault_str_copy(art->note.backlinks[i], sizeof(art->note.backlinks[i]),
+                               backlink->valuestring);
+                if (art->note.backlinks[i][0]) art->note.backlink_count++;
+            }
+        }
+        if (art->note.backlink_total < art->note.backlink_count) {
+            art->note.backlink_total = art->note.backlink_count;
+        }
+    }
+
+    const cJSON *g = jobj(a, "graph");
+    const cJSON *arr = g ? jarr(g, "nodes") : NULL;
+    const cJSON *e = NULL;
+    int wire_id[ARTWORK_NODES_MAX];
+    if (arr) {
+        cJSON_ArrayForEach(e, arr) {
+            if (art->node_count >= ARTWORK_NODES_MAX) break;
+            if (!cJSON_IsObject(e)) continue;
+            const char *title = jstr(e, "title");
+            if (!title[0]) continue;
+
+            int i = art->node_count;
+            int id = 0;
+            if (!exact_int(cJSON_GetObjectItemCaseSensitive(e, "id"), &id)) continue;
+            bool duplicate_id = false;
+            for (int j = 0; j < i; j++) {
+                if (wire_id[j] == id) duplicate_id = true;
+            }
+            if (duplicate_id) continue;
+
+            wire_id[i] = id;
+            artwork_node_t *node = &art->nodes[art->node_count++];
+            vault_str_copy(node->title, sizeof(node->title), title);
+
+            int slot = 0;
+            bool valid_slot = exact_int(cJSON_GetObjectItemCaseSensitive(e, "slot"), &slot) &&
+                              slot >= 0 && slot < ARTWORK_NODES_MAX;
+            node->slot = valid_slot ? (uint8_t)slot : UINT8_MAX;
+        }
+    }
+
+    /* Reserve the first owner of every legal producer slot before assigning
+     * fallbacks. This prevents an earlier malformed node from stealing a later
+     * node's declared focus slot. */
+    bool used_slot[ARTWORK_NODES_MAX] = {false};
+    for (int i = 0; i < art->node_count; i++) {
+        int slot = art->nodes[i].slot;
+        if (slot < ARTWORK_NODES_MAX && !used_slot[slot]) {
+            used_slot[slot] = true;
+        } else {
+            art->nodes[i].slot = UINT8_MAX;
+        }
+    }
+    if (art->node_count > 0 && !used_slot[0]) {
+        /* Prefer an already-unassigned node as the synthesized focus so every
+         * valid producer slot survives. If all nodes declared unique slots,
+         * promote the first node and release only its old slot. */
+        int focus = -1;
+        for (int i = 0; i < art->node_count && focus < 0; i++) {
+            if (art->nodes[i].slot == UINT8_MAX) focus = i;
+        }
+        if (focus < 0) {
+            focus = 0;
+            used_slot[art->nodes[focus].slot] = false;
+        }
+        art->nodes[focus].slot = 0;
+        used_slot[0] = true;
+    }
+    for (int i = 0; i < art->node_count; i++) {
+        if (art->nodes[i].slot != UINT8_MAX) continue;
+        int slot = 0;
+        while (slot < ARTWORK_NODES_MAX && used_slot[slot]) slot++;
+        art->nodes[i].slot = (uint8_t)slot;
+        used_slot[slot] = true;
+    }
+
+    arr = g ? jarr(g, "edges") : NULL;
+    if (arr) {
+        cJSON_ArrayForEach(e, arr) {
+            if (!cJSON_IsArray(e) || cJSON_GetArraySize(e) != 2) continue;
+            const cJSON *ja = cJSON_GetArrayItem(e, 0);
+            const cJSON *jb = cJSON_GetArrayItem(e, 1);
+            int wa = 0, wb = 0;
+            if (!exact_int(ja, &wa) || !exact_int(jb, &wb)) continue;
+            int pa = -1, pb = -1;
+            for (int i = 0; i < art->node_count; i++) {
+                if (wire_id[i] == wa) pa = i;
+                if (wire_id[i] == wb) pb = i;
+            }
+            if (pa < 0 || pb < 0 || pa == pb) continue;
+            uint8_t a_idx = (uint8_t)(pa < pb ? pa : pb);
+            uint8_t b_idx = (uint8_t)(pa < pb ? pb : pa);
+            bool dup = false;
+            for (int i = 0; i < art->edge_count; i++) {
+                const artwork_edge_t *old = &art->edges[i];
+                if (old->a == a_idx && old->b == b_idx) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+            artwork_edge_t edge = {a_idx, b_idx};
+            if (art->edge_count == ARTWORK_EDGES_MAX &&
+                edge_compare(&edge, &art->edges[ARTWORK_EDGES_MAX - 1]) >= 0) {
+                continue;
+            }
+            int pos = art->edge_count;
+            if (pos == ARTWORK_EDGES_MAX) pos--;
+            while (pos > 0 && edge_compare(&edge, &art->edges[pos - 1]) < 0) {
+                if (pos < ARTWORK_EDGES_MAX) art->edges[pos] = art->edges[pos - 1];
+                pos--;
+            }
+            art->edges[pos] = edge;
+            if (art->edge_count < ARTWORK_EDGES_MAX) art->edge_count++;
+        }
+    }
+
+    bool has_prose = art->headline_count > 0 ||
+                     art->definition.headword[0] ||
+                     art->definition.line_count > 0;
+    art->valid = art->note.title[0] && has_prose;
+}
+
 /* --- public --------------------------------------------------------------- */
 
 bool vault_parse(const char *json, size_t len, vault_t *out)
 {
     if (!json || !out || len == 0) return false;
+    if (!valid_json_utf8(json, len)) return false;
 
-    cJSON *root = cJSON_ParseWithLength(json, len);
+    const char *parse_end = NULL;
+    cJSON *root = cJSON_ParseWithLengthOpts(json, len, &parse_end, false);
     if (!root) return false;                 /* truncated or not JSON at all */
+    if (!parse_end || parse_end < json || parse_end > json + len ||
+        !only_json_whitespace(parse_end, json + len)) {
+        cJSON_Delete(root);
+        return false;
+    }
     if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return false;
+    }
+
+    const cJSON *schema_value = cJSON_GetObjectItemCaseSensitive(root, "schema");
+    int schema = 0;
+    if (!exact_int(schema_value, &schema) || schema != 3) {
         cJSON_Delete(root);
         return false;
     }
@@ -292,15 +656,19 @@ bool vault_parse(const char *json, size_t len, vault_t *out)
     parse_graph(root, &v);
     parse_recent(root, &v);
     parse_inbox(root, &v);
+    parse_artwork(root, &v);
+    parse_daily_tarot(root, &v);
 
     cJSON_Delete(root);
 
-    /* A well-formed object that carries no vault content at all is a rejection,
-     * not an empty dashboard: it is what a login page or an error envelope
-     * looks like after cJSON gets through with it, and replacing a good
-     * snapshot with blankness is the one failure the user actually notices. */
+    /* Schema 3 always carries normalized artwork. Reject an incomplete payload
+     * before it can erase the current glass. */
+    if (!v.artwork.valid) {
+        return false;
+    }
     if (v.stats.notes == 0 && v.agent_count == 0 &&
-        v.node_count == 0 && v.recent_count == 0 && v.inbox_count == 0) {
+        v.node_count == 0 && v.recent_count == 0 && v.inbox_count == 0 &&
+        !v.artwork.valid) {
         return false;
     }
 

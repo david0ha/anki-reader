@@ -76,11 +76,14 @@ Usage
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
 import sys
+import unicodedata
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -96,11 +99,180 @@ INBOX_MAX = 8
 DAILY_DAYS = 7
 TITLE_MAX = 64
 
+ARTWORK_HEADLINE_MAX = 2
+ARTWORK_DEFINITION_MAX = 2
+ARTWORK_BACKLINKS_MAX = 3
+ARTWORK_NODES_MAX = 6
+ARTWORK_EDGES_MAX = 8
+
+ARTWORK_HEADLINE_CELLS = 24
+ARTWORK_HEADWORD_CELLS = 20
+ARTWORK_DEFINITION_CELLS = 36
+ARTWORK_NOTE_TITLE_CELLS = 24
+ARTWORK_NOTE_PATH_CELLS = 30
+ARTWORK_BACKLINK_CELLS = 28
+ARTWORK_GRAPH_TITLE_CELLS = 14
+
+TAROT_TIMEZONE = "Asia/Seoul"
+TAROT_HEADLINE_CELLS = 22
+TAROT_BODY_CELLS = 32
+TAROT_LINE_UTF8_BYTES = 127
+DEFAULT_TAROT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "tarot_readings_ko.json")
+
 # Directory names that are never vault content. Anything else dotted is skipped
 # too — `.obsidian` is only the most obvious one.
 SKIP_DIRS = {".obsidian", ".trash", ".git", ".github", "node_modules"}
 
 DEFAULT_INBOX_NAMES = ["inbox", "0-inbox", "00-inbox", "_inbox", "인박스", "받은편지함"]
+
+
+def visual_cells(text):
+    """Deterministic display width for producer-side fixed-row fitting."""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
+
+
+def tarot_display_cells(text):
+    """Conservative cells for the real tarot fonts: space=1, every inked glyph=2.
+
+    Noto Sans KR's Latin W is almost as wide as a Hangul syllable. Treating
+    ASCII as one East-Asian-width cell would accept rows that LVGL ellipsizes.
+    """
+    return sum(1 if ch.isspace() else 2 for ch in text)
+
+
+def fit_visual(text, max_cells):
+    """Clip at a display-cell boundary, reserving one cell for an ellipsis."""
+    if visual_cells(text) <= max_cells:
+        return text
+    out = []
+    used = 0
+    limit = max(0, max_cells - 1)
+    for char in text:
+        width = 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        if used + width > limit:
+            break
+        out.append(char)
+        used += width
+    return "".join(out).rstrip() + "…"
+
+
+def fit_wire(text, max_cells, max_utf8_bytes):
+    """Fit one fixed LVGL row by both approximate width and C buffer bytes.
+
+    The wire carries UTF-8 while the ESP32 stores fixed byte arrays. Characters
+    such as the Euro sign are one display cell but three bytes, so either limit
+    alone is insufficient. Reserve the ellipsis in both budgets when clipping.
+    """
+    text = str(text or "")
+    if visual_cells(text) <= max_cells and len(text.encode("utf-8")) <= max_utf8_bytes:
+        return text
+    ellipsis = "…"
+    cell_limit = max(0, max_cells - visual_cells(ellipsis))
+    byte_limit = max(0, max_utf8_bytes - len(ellipsis.encode("utf-8")))
+    out = []
+    cells = 0
+    byte_count = 0
+    for char in text:
+        width = 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        encoded = len(char.encode("utf-8"))
+        if cells + width > cell_limit or byte_count + encoded > byte_limit:
+            break
+        out.append(char)
+        cells += width
+        byte_count += encoded
+    return "".join(out).rstrip() + ellipsis
+
+
+def fit_focus_label(text):
+    """Break the selected graph title into at most two rows inside its disc."""
+    compact = " ".join(str(text or "").split())
+    if visual_cells(compact) <= 8:
+        return fit_wire(compact, 8, 63)
+    words = compact.split(" ")
+    if len(words) > 1:
+        best = None
+        for split in range(1, len(words)):
+            left = " ".join(words[:split])
+            right = " ".join(words[split:])
+            if visual_cells(left) <= 8 and visual_cells(right) <= 8:
+                score = abs(visual_cells(left) - visual_cells(right))
+                if best is None or score < best[0]:
+                    best = (score, left, right)
+        if best:
+            return best[1] + "\n" + best[2]
+
+    first = fit_wire(compact, 8, 31)
+    consumed = first[:-1] if first.endswith("…") else first
+    rest = compact[len(consumed):].lstrip()
+    if not rest:
+        return first
+    return consumed + "\n" + fit_wire(rest, 8, 31)
+
+
+def expected_tarot_card_ids():
+    """The stable 78-card ids shared by assets, copy and the wire contract."""
+    majors = [f"major-{number:02d}" for number in range(22)]
+    minors = [
+        f"{suit}-{number:02d}"
+        for suit in ("cups", "pentacles", "swords", "wands")
+        for number in range(1, 15)
+    ]
+    return tuple(majors + minors)
+
+
+def _fallback_tarot_readings():
+    """Complete deterministic copy for source checkouts missing the data file."""
+    return {
+        card_id: {
+            "copy_version": 1,
+            "headline": ["오늘의 카드를", "천천히 살피다"],
+            "flow": ["작은 신호에 주의를 기울인다"],
+            "caution": ["확신을 서둘러 결론내지 않는다"],
+            "action": ["한 번 더 확인하고 움직인다"],
+        }
+        for card_id in expected_tarot_card_ids()
+    }
+
+
+def load_tarot_readings(path=DEFAULT_TAROT_PATH):
+    """Load and strictly validate the authored 78-card Korean copy mapping."""
+    if not path or not os.path.exists(path):
+        if path and os.path.abspath(path) != os.path.abspath(DEFAULT_TAROT_PATH):
+            raise ValueError(f"tarot readings not found: {path}")
+        print("warning: packaged tarot readings missing; using generic fallback", file=sys.stderr)
+        return _fallback_tarot_readings()
+    try:
+        with open(path, "r", encoding="utf-8") as source:
+            data = json.load(source)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"tarot readings unreadable: {exc}") from exc
+    if not isinstance(data, dict) or set(data) != set(expected_tarot_card_ids()):
+        raise ValueError("tarot readings must contain exactly the 78 stable card ids")
+
+    readings = {}
+    for card_id in expected_tarot_card_ids():
+        entry = data[card_id]
+        if not isinstance(entry, dict):
+            raise ValueError(f"{card_id}: reading must be an object")
+        copy_version = entry.get("copy_version", 1)
+        if isinstance(copy_version, bool) or not isinstance(copy_version, int) or copy_version <= 0:
+            raise ValueError(f"{card_id}: copy_version must be a positive integer")
+        normalized = {"copy_version": copy_version}
+        for key in ("headline", "flow", "caution", "action"):
+            lines = entry.get(key)
+            if not isinstance(lines, list) or not 1 <= len(lines) <= 2:
+                raise ValueError(f"{card_id}.{key}: expected one or two lines")
+            max_cells = TAROT_HEADLINE_CELLS if key == "headline" else TAROT_BODY_CELLS
+            for line in lines:
+                if (not isinstance(line, str) or not line or
+                        any(ord(char) < 0x20 for char in line) or
+                        tarot_display_cells(line) > max_cells or
+                        len(line.encode("utf-8")) > TAROT_LINE_UTF8_BYTES):
+                    raise ValueError(f"{card_id}.{key}: line exceeds its display budget")
+            normalized[key] = list(lines)
+        readings[card_id] = normalized
+    return readings
 
 # ---------------------------------------------------------------------------
 # Parsing one note
@@ -250,12 +422,15 @@ def created_date(path, fm_date, stat):
 class Vault:
     """A scanned vault, with a per-file cache so repeat polls are cheap."""
 
-    def __init__(self, root, excludes=(), inbox_names=None, inbox_tag=None):
+    def __init__(self, root, excludes=(), inbox_names=None, inbox_tag=None,
+                 tarot_path=DEFAULT_TAROT_PATH, tarot_seed=None):
         self.root = os.path.abspath(os.path.expanduser(root))
         self.excludes = set(excludes)
         self.inbox_names = [n.lower() for n in (inbox_names or DEFAULT_INBOX_NAMES)]
         self.inbox_tag = (inbox_tag or "").lstrip("#").lower() or None
         self.cache = {}          # path -> (mtime, size, parsed)
+        self.tarot_readings = load_tarot_readings(tarot_path)
+        self.tarot_seed = str(tarot_seed) if tarot_seed is not None else self.root
 
     def scan(self):
         """Re-read what changed, then recompute everything from the whole set."""
@@ -320,7 +495,11 @@ class Vault:
     # -- the payload -------------------------------------------------------
 
     def snapshot(self, name=None, agents=None, now=None):
-        now = now or datetime.datetime.now()
+        seoul = ZoneInfo(TAROT_TIMEZONE)
+        if now is None:
+            now = datetime.datetime.now(seoul)
+        elif now.tzinfo is not None:
+            now = now.astimezone(seoul)
         notes = self.scan()
         by_base, by_path = self.build_index(notes)
 
@@ -358,9 +537,10 @@ class Vault:
         titles = build_titles(notes)
         inbox = self._inbox(notes, titles, today)
 
+        vault_name = name or os.path.basename(self.root)
         return {
-            "schema": 1,
-            "vault": name or os.path.basename(self.root),
+            "schema": 3,
+            "vault": vault_name,
             "generated_at": now.strftime("%H:%M"),
             "stats": {
                 "notes": len(notes),
@@ -379,6 +559,27 @@ class Vault:
             # so "8 shown, 23 waiting" is a fact the panel can state.
             "inbox": inbox[:INBOX_MAX],
             "inbox_total": len(inbox),
+            "artwork": self._artwork(vault_name, notes, out_links, degree),
+            "daily_tarot": self._daily_tarot(vault_name, today),
+        }
+
+    def _daily_tarot(self, vault_name, today):
+        date = today.isoformat()
+        material = f"{date}\n{vault_name}\n{self.tarot_seed}".encode("utf-8")
+        digest = hashlib.sha256(material).digest()
+        card_ids = sorted(self.tarot_readings)
+        card_id = card_ids[int.from_bytes(digest, "big") % len(card_ids)]
+        reading = self.tarot_readings[card_id]
+        return {
+            "date": date,
+            "timezone": TAROT_TIMEZONE,
+            "card_id": card_id,
+            "orientation": "upright",
+            "copy_version": reading["copy_version"],
+            "headline": list(reading["headline"]),
+            "flow": list(reading["flow"]),
+            "caution": list(reading["caution"]),
+            "action": list(reading["action"]),
         }
 
     @staticmethod
@@ -426,6 +627,100 @@ class Vault:
                 seen.add(key)
                 unique.append(e)
         return {"nodes": nodes, "edges": unique[:EDGES_MAX]}
+
+    def _artwork(self, vault_name, notes, out_links, degree):
+        """Build the fixed landscape composition without device-side inference.
+
+        Focus and related-note choices are stable functions of degree, mtime,
+        and path.  Every string is already fitted to its fixed display row and
+        graph ids/slots are normalized to the six emitted positions.
+        """
+        def rank(rel):
+            return (-degree.get(rel, 0), -notes[rel].get("mtime", 0),
+                    rel.casefold(), rel)
+
+        focus = min(notes, key=rank) if notes else None
+        vault_titles = build_titles(notes)
+
+        incoming = []
+        related = set()
+        if focus is not None:
+            incoming = sorted(
+                (rel for rel in notes if focus in out_links.get(rel, set())),
+                key=rank,
+            )
+            related = set(out_links.get(focus, set()))
+            related.update(incoming)
+            related.discard(focus)
+            selected = [focus] + sorted(related, key=rank)[:ARTWORK_NODES_MAX - 1]
+        else:
+            selected = []
+
+        fallback = fit_wire(vault_name or "여백", ARTWORK_NOTE_TITLE_CELLS, 63)
+        note_title = fit_wire(
+            vault_titles[focus] if focus is not None else fallback,
+            ARTWORK_NOTE_TITLE_CELLS, 63,
+        )
+        note_path = "" if focus is None else fit_wire(
+            focus.replace("\\", "/").replace(os.sep, "/"),
+            ARTWORK_NOTE_PATH_CELLS, 127,
+        )
+        backlinks = [
+            fit_wire(vault_titles[rel], ARTWORK_BACKLINK_CELLS, 63)
+            for rel in incoming[:ARTWORK_BACKLINKS_MAX]
+        ]
+
+        if selected:
+            graph_titles = build_titles(selected)
+            nodes = [
+                {
+                    "id": i,
+                    "title": (fit_focus_label(graph_titles[rel]) if i == 0 else
+                              fit_wire(graph_titles[rel], ARTWORK_GRAPH_TITLE_CELLS, 63)),
+                    "slot": i,
+                }
+                for i, rel in enumerate(selected)
+            ]
+            selected_index = {rel: i for i, rel in enumerate(selected)}
+            pairs = set()
+            for src in selected:
+                for dst in out_links.get(src, set()):
+                    if dst not in selected_index or dst == src:
+                        continue
+                    a, b = sorted((selected_index[src], selected_index[dst]))
+                    pairs.add((a, b))
+            edges = [list(pair) for pair in sorted(pairs)[:ARTWORK_EDGES_MAX]]
+        else:
+            nodes = [{
+                "id": 0,
+                "title": fit_focus_label(fallback),
+                "slot": 0,
+            }]
+            edges = []
+
+        headline = [
+            fit_wire("기억한 것은", ARTWORK_HEADLINE_CELLS, 127),
+            fit_wire("남아 있다.", ARTWORK_HEADLINE_CELLS, 127),
+        ][:ARTWORK_HEADLINE_MAX]
+        definition_lines = [
+            fit_wire("서로 멀리 있던 생각이 만나", ARTWORK_DEFINITION_CELLS, 127),
+            fit_wire("새로운 방향을 만드는 순간.", ARTWORK_DEFINITION_CELLS, 127),
+        ][:ARTWORK_DEFINITION_MAX]
+        return {
+            "headline": headline,
+            "definition": {
+                "headword": fit_wire(note_title, ARTWORK_HEADWORD_CELLS, 63),
+                "meta": "노트",
+                "lines": definition_lines,
+            },
+            "note": {
+                "title": note_title,
+                "path": note_path,
+                "backlink_total": len(incoming),
+                "backlinks": backlinks,
+            },
+            "graph": {"nodes": nodes, "edges": edges},
+        }
 
     @staticmethod
     def _recent(notes, titles, out_links):
@@ -754,6 +1049,10 @@ def main():
     ap.add_argument("--inbox-tag", default="#todo",
                     help="tag that also puts a note in the inbox (default: #todo)")
     ap.add_argument("--agents", help="JSON file of agent statuses — see below")
+    ap.add_argument("--tarot-readings", default=DEFAULT_TAROT_PATH,
+                    help="validated 78-card Korean tarot copy JSON")
+    ap.add_argument("--tarot-seed",
+                    help="stable per-device selection seed (default: vault path)")
     ap.add_argument("--dump", action="store_true", help="print the payload and exit")
     ap.add_argument("--no-glyph-check", action="store_true",
                     help="skip warning about characters the board cannot draw")
@@ -767,7 +1066,8 @@ def main():
         sys.exit(f"not a directory: {args.vault}")
 
     vault = Vault(args.vault, excludes=args.exclude,
-                  inbox_names=args.inbox or None, inbox_tag=args.inbox_tag)
+                  inbox_names=args.inbox or None, inbox_tag=args.inbox_tag,
+                  tarot_path=args.tarot_readings, tarot_seed=args.tarot_seed)
     charset = None if args.no_glyph_check else load_device_charset()
 
     if args.dump:

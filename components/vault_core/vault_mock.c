@@ -2,14 +2,12 @@
  * vault_mock.c — the built-in demo snapshot.
  *
  * The board is a finished object with no PC running: when no vault_url has been
- * provisioned, this is what is on the glass, with a DEMO badge in the header so
- * nobody mistakes it for their own vault.
+ * provisioned, this daily tarot and its compatibility metadata are what reach
+ * the glass. Operational demo status stays in the companion API, not the art.
  *
- * It is also the layout's worst case, on purpose. Real data is easy; this
- * carries long Korean titles, a four-digit counter, all four agent states, a
- * zero day in the activity chart, a full node list and an inbox that overflows
- * its display cap — so the simulator's assertions run against the widest thing
- * the pages will ever be asked to draw.
+ * The legacy fields still carry their old maximum-capacity fixture so older
+ * clients and parsers remain covered. The visible daily tarot carries both
+ * rows in all four sections so the native simulator exercises every text box.
  *
  * It must stay byte-equivalent to tools/mock_vault_server.py's payload:
  * test_vault_mock.c parses that server's committed output and asserts the two
@@ -171,4 +169,59 @@ void vault_mock(vault_t *v)
     /* More than fits: the header shows the real total, the list shows what the
      * panel can hold. */
     v->inbox_total = 11;
+
+    v->artwork.valid = true;
+    CP(v->artwork.headline[0].text, "기억한 것은");
+    CP(v->artwork.headline[1].text, "남아 있다.");
+    v->artwork.headline_count = 2;
+
+    CP(v->artwork.definition.headword, "우연한 연결");
+    CP(v->artwork.definition.meta, "명사");
+    CP(v->artwork.definition.lines[0].text, "서로 멀리 있던 생각이 만나");
+    CP(v->artwork.definition.lines[1].text, "새로운 방향을 만드는 순간.");
+    v->artwork.definition.line_count = 2;
+
+    CP(v->artwork.note.title, "우연한 연결");
+    CP(v->artwork.note.path, "00 Daily/2026-08-13.md");
+    v->artwork.note.backlink_total = 6;
+    CP(v->artwork.note.backlinks[0], "아이디어");
+    CP(v->artwork.note.backlinks[1], "MOC/연구");
+    CP(v->artwork.note.backlinks[2], "프로젝트/보드");
+    v->artwork.note.backlink_count = 3;
+
+    static const char *N[] = {
+        "우연한\n연결", "아이디어", "MOC/연구",
+        "프로젝트/보드", "논문", "ESP32",
+    };
+    for (size_t i = 0; i < sizeof(N) / sizeof(N[0]); i++) {
+        artwork_node_t *node = &v->artwork.nodes[v->artwork.node_count++];
+        CP(node->title, N[i]);
+        node->slot = (uint8_t)i;
+    }
+    static const uint8_t AE[][2] = {
+        {0,1},{0,2},{0,3},{0,4},{0,5},{1,2},{2,4},{3,5},
+    };
+    for (size_t i = 0; i < sizeof(AE) / sizeof(AE[0]); i++) {
+        v->artwork.edges[v->artwork.edge_count++] =
+            (artwork_edge_t){ AE[i][0], AE[i][1] };
+    }
+
+    v->daily_tarot.valid = true;
+    CP(v->daily_tarot.date, "2026-08-13");
+    CP(v->daily_tarot.timezone, "Asia/Seoul");
+    CP(v->daily_tarot.card_id, "major-02");
+    CP(v->daily_tarot.orientation, "upright");
+    v->daily_tarot.copy_version = 1;
+    CP(v->daily_tarot.headline.lines[0], "고요히 살피면");
+    CP(v->daily_tarot.headline.lines[1], "속뜻이 보인다");
+    v->daily_tarot.headline.line_count = 2;
+    CP(v->daily_tarot.flow.lines[0], "두 기둥 사이 장막이");
+    CP(v->daily_tarot.flow.lines[1], "감춰진 단서를 품고 있다");
+    v->daily_tarot.flow.line_count = 2;
+    CP(v->daily_tarot.caution.lines[0], "모호한 느낌을");
+    CP(v->daily_tarot.caution.lines[1], "사실로 단정하지 않는다");
+    v->daily_tarot.caution.line_count = 2;
+    CP(v->daily_tarot.action.lines[0], "답하기 전에");
+    CP(v->daily_tarot.action.lines[1], "침묵 속에서 한 번 읽는다");
+    v->daily_tarot.action.line_count = 2;
 }

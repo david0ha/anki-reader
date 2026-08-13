@@ -20,7 +20,7 @@ extern "C" {
  *
  * Returns true and overwrites *out only on success. On failure *out is left
  * untouched, so the caller keeps whatever snapshot is already on the glass —
- * a dashboard badged "오래됨" beats a blank one.
+ * preserving the last good image beats replacing it with a blank one.
  *
  * Failure means: not JSON, not an object, truncated, or an object carrying no
  * vault content whatsoever (which is what an error envelope or a captive-portal

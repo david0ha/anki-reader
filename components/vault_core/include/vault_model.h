@@ -8,7 +8,7 @@
  * the wire format lands in one file.
  *
  * Every array is fixed-size and every count is clamped by the producer. The
- * struct is therefore ~6 KB, copyable, and safe to snapshot under a mutex and
+ * struct is therefore bounded, copyable, and safe to snapshot under a mutex and
  * hand to the UI task without any ownership question. That is deliberate: on a
  * device where one task owns the panel and another owns the network, a plain
  * copyable value is worth more than the bytes it wastes.
@@ -44,6 +44,82 @@ extern "C" {
 #define VAULT_EDGES_MAX     32
 #define VAULT_RECENT_MAX    8
 #define VAULT_INBOX_MAX     8
+
+#define ARTWORK_HEADWORD_MAX     64
+#define ARTWORK_META_MAX         32
+#define ARTWORK_PATH_MAX        128
+#define ARTWORK_LINE_MAX        128
+
+#define ARTWORK_HEADLINE_MAX      2
+#define ARTWORK_DEFINITION_MAX    2
+#define ARTWORK_BACKLINKS_MAX     3
+#define ARTWORK_NODES_MAX         6
+#define ARTWORK_EDGES_MAX         8
+
+#define TAROT_DATE_MAX           11
+#define TAROT_TIMEZONE_MAX       16
+#define TAROT_CARD_ID_MAX        16
+#define TAROT_ORIENTATION_MAX     9
+#define TAROT_LINE_MAX          128
+#define TAROT_LINES_MAX           2
+
+typedef struct {
+    char lines[TAROT_LINES_MAX][TAROT_LINE_MAX];
+    int line_count;
+} tarot_lines_t;
+
+typedef struct {
+    bool valid;
+    char date[TAROT_DATE_MAX];
+    char timezone[TAROT_TIMEZONE_MAX];
+    char card_id[TAROT_CARD_ID_MAX];
+    char orientation[TAROT_ORIENTATION_MAX];
+    int copy_version;
+    tarot_lines_t headline;
+    tarot_lines_t flow;
+    tarot_lines_t caution;
+    tarot_lines_t action;
+} daily_tarot_t;
+
+typedef struct {
+    char text[ARTWORK_LINE_MAX];
+} artwork_line_t;
+
+typedef struct {
+    char headword[ARTWORK_HEADWORD_MAX];
+    char meta[ARTWORK_META_MAX];
+    artwork_line_t lines[ARTWORK_DEFINITION_MAX];
+    int line_count;
+} artwork_definition_t;
+
+typedef struct {
+    char title[VAULT_TITLE_MAX];
+    char path[ARTWORK_PATH_MAX];
+    int backlink_total;
+    char backlinks[ARTWORK_BACKLINKS_MAX][VAULT_TITLE_MAX];
+    int backlink_count;
+} artwork_note_t;
+
+typedef struct {
+    char title[VAULT_TITLE_MAX];
+    uint8_t slot;
+} artwork_node_t;
+
+typedef struct {
+    uint8_t a, b;
+} artwork_edge_t;
+
+typedef struct {
+    bool valid;
+    artwork_line_t headline[ARTWORK_HEADLINE_MAX];
+    int headline_count;
+    artwork_definition_t definition;
+    artwork_note_t note;
+    artwork_node_t nodes[ARTWORK_NODES_MAX];
+    int node_count;
+    artwork_edge_t edges[ARTWORK_EDGES_MAX];
+    int edge_count;
+} vault_artwork_t;
 
 /* --- pieces --------------------------------------------------------------- */
 
@@ -130,6 +206,9 @@ typedef struct {
     vault_inbox_t inbox[VAULT_INBOX_MAX];
     int           inbox_count;
     int           inbox_total;  /* server's real count; >= inbox_count */
+
+    vault_artwork_t artwork;
+    daily_tarot_t daily_tarot;
 } vault_t;
 
 /* --- helpers (pure, shared by the UI, the API and the tests) -------------- */
@@ -168,6 +247,14 @@ int vault_daily_peak(const vault_t *v);
  *
  * Deliberately excludes nothing that reaches the glass, including `demo`. */
 uint32_t vault_hash(const vault_t *v);
+
+/* Fingerprint only fields consumed by ui_artwork.c. Pollers use this to avoid
+ * flashing the panel when timestamps or legacy dashboard aggregates change
+ * but the fixed artwork would produce identical pixels. */
+uint32_t vault_artwork_hash(const vault_t *v);
+
+/* Fingerprint only the daily tarot fields that reach the new tarot canvas. */
+uint32_t vault_tarot_hash(const vault_t *v);
 
 #ifdef __cplusplus
 }

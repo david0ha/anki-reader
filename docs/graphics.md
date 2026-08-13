@@ -68,8 +68,8 @@ one, so hairline strokes shimmer and thin fonts break up. Hence:
 - **1-bpp font generation** (`--bpp 1` in `tools/gen_fonts.py`). Generating at higher bpp and
   thresholding at runtime looks worse than letting the font converter decide — and costs four times
   the flash to do it.
-- **Full 완성형 faces, not subsets.** Half the strings on this board arrive over the network, so
-  there is nothing to subset from. See [pages.md](pages.md#fonts-and-why-both-faces-are-full).
+- **Full 완성형 faces, not subsets.** The readings arrive over the network, so there is nothing
+  safe to subset from. `tools/gen_fonts.py --dry-run` is the canonical coverage check.
 - Latin numerals at display sizes come from LVGL's built-in Montserrat; everything else, including
   mixed Korean-and-digit strings, is drawn from the Korean faces so a line stays in one voice.
 

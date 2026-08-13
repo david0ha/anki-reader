@@ -35,6 +35,7 @@ import os
 import random
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from zoneinfo import ZoneInfo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(ROOT, "components", "vault_core", "test", "host",
@@ -74,10 +75,10 @@ EDGES = [
 ]
 
 
-def snapshot(generated_at="21:04"):
+def snapshot(generated_at="21:04", date="2026-08-13"):
     """The canonical payload. Must stay identical to vault_mock.c."""
     return {
-        "schema": 1,
+        "schema": 3,
         "vault": "second-brain",
         "generated_at": generated_at,
         "stats": {
@@ -145,10 +146,49 @@ def snapshot(generated_at="21:04"):
         # normal case for a real producer, so the contract carries it from the
         # start rather than growing it later.
         "inbox_total": 11,
+        "daily_tarot": {
+            "date": date,
+            "timezone": "Asia/Seoul",
+            "card_id": "major-02",
+            "orientation": "upright",
+            "copy_version": 1,
+            "headline": ["고요히 살피면", "속뜻이 보인다"],
+            "flow": ["두 기둥 사이 장막이", "감춰진 단서를 품고 있다"],
+            "caution": ["모호한 느낌을", "사실로 단정하지 않는다"],
+            "action": ["답하기 전에", "침묵 속에서 한 번 읽는다"],
+        },
+        "artwork": {
+            "headline": ["기억한 것은", "남아 있다."],
+            "definition": {
+                "headword": "우연한 연결",
+                "meta": "명사",
+                "lines": ["서로 멀리 있던 생각이 만나", "새로운 방향을 만드는 순간."],
+            },
+            "note": {
+                "title": "우연한 연결",
+                "path": "00 Daily/2026-08-13.md",
+                "backlink_total": 6,
+                "backlinks": ["아이디어", "MOC/연구", "프로젝트/보드"],
+            },
+            "graph": {
+                "nodes": [
+                    {"id": 0, "title": "우연한\n연결", "slot": 0},
+                    {"id": 1, "title": "아이디어", "slot": 1},
+                    {"id": 2, "title": "MOC/연구", "slot": 2},
+                    {"id": 3, "title": "프로젝트/보드", "slot": 3},
+                    {"id": 4, "title": "논문", "slot": 4},
+                    {"id": 5, "title": "ESP32", "slot": 5},
+                ],
+                "edges": [
+                    [0, 1], [0, 2], [0, 3], [0, 4],
+                    [0, 5], [1, 2], [2, 4], [3, 5],
+                ],
+            },
+        },
     }
 
 
-def live_snapshot(state, clock):
+def live_snapshot(state, clock, date="2026-08-13"):
     """The canonical payload with the numbers nudged, for --live.
 
     Exists to exercise the one behaviour a static payload cannot: the device
@@ -156,7 +196,7 @@ def live_snapshot(state, clock):
     drift is how you confirm the board is polling AND that an unchanged poll
     stays silent.
     """
-    s = snapshot(generated_at=clock)
+    s = snapshot(generated_at=clock, date=date)
     state["notes"] += random.randint(0, 2)
     state["links"] += random.randint(0, 6)
     s["stats"]["notes"] = state["notes"]
@@ -178,9 +218,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         import datetime
-        clock = datetime.datetime.now().strftime("%H:%M")
-        payload = (live_snapshot(self.state, clock) if self.live
-                   else snapshot(generated_at=clock))
+        now = datetime.datetime.now(ZoneInfo("Asia/Seoul"))
+        clock = now.strftime("%H:%M")
+        date = now.date().isoformat()
+        payload = (live_snapshot(self.state, clock, date) if self.live
+                   else snapshot(generated_at=clock, date=date))
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")

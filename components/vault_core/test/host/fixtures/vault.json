@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 3,
   "vault": "second-brain",
   "generated_at": "21:04",
   "stats": {
@@ -352,5 +352,120 @@
       "age_days": 4
     }
   ],
-  "inbox_total": 11
+  "inbox_total": 11,
+  "daily_tarot": {
+    "date": "2026-08-13",
+    "timezone": "Asia/Seoul",
+    "card_id": "major-02",
+    "orientation": "upright",
+    "copy_version": 1,
+    "headline": [
+      "고요히 살피면",
+      "속뜻이 보인다"
+    ],
+    "flow": [
+      "두 기둥 사이 장막이",
+      "감춰진 단서를 품고 있다"
+    ],
+    "caution": [
+      "모호한 느낌을",
+      "사실로 단정하지 않는다"
+    ],
+    "action": [
+      "답하기 전에",
+      "침묵 속에서 한 번 읽는다"
+    ]
+  },
+  "artwork": {
+    "headline": [
+      "기억한 것은",
+      "남아 있다."
+    ],
+    "definition": {
+      "headword": "우연한 연결",
+      "meta": "명사",
+      "lines": [
+        "서로 멀리 있던 생각이 만나",
+        "새로운 방향을 만드는 순간."
+      ]
+    },
+    "note": {
+      "title": "우연한 연결",
+      "path": "00 Daily/2026-08-13.md",
+      "backlink_total": 6,
+      "backlinks": [
+        "아이디어",
+        "MOC/연구",
+        "프로젝트/보드"
+      ]
+    },
+    "graph": {
+      "nodes": [
+        {
+          "id": 0,
+          "title": "우연한\n연결",
+          "slot": 0
+        },
+        {
+          "id": 1,
+          "title": "아이디어",
+          "slot": 1
+        },
+        {
+          "id": 2,
+          "title": "MOC/연구",
+          "slot": 2
+        },
+        {
+          "id": 3,
+          "title": "프로젝트/보드",
+          "slot": 3
+        },
+        {
+          "id": 4,
+          "title": "논문",
+          "slot": 4
+        },
+        {
+          "id": 5,
+          "title": "ESP32",
+          "slot": 5
+        }
+      ],
+      "edges": [
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          0,
+          5
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          4
+        ],
+        [
+          3,
+          5
+        ]
+      ]
+    }
+  }
 }
