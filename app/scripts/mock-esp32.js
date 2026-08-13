@@ -14,7 +14,7 @@
 //     GET  /api/info          -> { deviceId, model, fw, ip }          (STA-mode identity)
 //     GET  /api/state         -> the live snapshot
 //     POST /api/refresh       -> poll the vault source now
-//     POST /api/page          { page: 0..3 }
+//     POST /api/page          { page: 0 }
 //     POST /api/vault         { url }
 //     POST /api/display/test  -> "run" the panel sweep
 //
@@ -26,6 +26,10 @@
 // Usage:
 //   node scripts/mock-esp32.js               # listens on http://localhost:8080
 //   PORT=9000 node scripts/mock-esp32.js     # custom port
+//   node scripts/mock-esp32.js --fingerprint # normalize one artwork object from stdin and exit
+//   node scripts/mock-esp32.js --tarot-fingerprint # normalize one daily_tarot object and exit
+//   node scripts/mock-esp32.js --tarot-visible-fingerprint # hash its pixel-driving fields
+//   node scripts/mock-esp32.js --summarise   # validate/summarize one schema-3 snapshot from stdin
 // Then point the app at it (the iOS simulator / Android emulator can reach the host):
 //   EXPO_PUBLIC_ESP32_BASE_URL=http://localhost:8080 npx expo start
 //   (Android emulator: use http://10.0.2.2:8080)
@@ -44,12 +48,10 @@ const CONNECT_MS = Number(process.env.CONNECT_MS || 3000)
 const SSID_MAX_LEN = 32
 const PASS_MAX_LEN = 64
 const URL_MAX_LEN = 128
-const PAGE_COUNT = 4
-const POLL_SECONDS = 300
+const POLL_SECONDS = Number(process.env.POLL_SECONDS || 300)
 
-// The firmware's page titles (components/vault_core/include/ui_strings.h). The app shows this
-// string as the ground truth for what is on the glass, so the mock has to serve the real ones.
-const PAGE_TITLES = ['볼트 통계', '링크 그래프', '에이전트', '최근 노트']
+// The control API retains one page title for compatibility with existing companion clients.
+const PAGE_TITLES = ['Artwork']
 
 // ---- Provisioning state ----
 const prov = { state: 'idle', ssid: undefined, reason: undefined }
@@ -80,12 +82,50 @@ const DEMO = {
   recent: 8,
   inbox: 11,
 }
+const DEMO_ARTWORK = {
+  headline: ['기억한 것은', '남아 있다.'],
+  definition: {
+    headword: '우연한 연결',
+    meta: '명사',
+    lines: ['서로 멀리 있던 생각이 만나', '새로운 방향을 만드는 순간.'],
+  },
+  note: {
+    title: '우연한 연결',
+    path: '00 Daily/2026-08-13.md',
+    backlink_total: 6,
+    backlinks: ['아이디어', 'MOC/연구', '프로젝트/보드'],
+  },
+  graph: {
+    nodes: [
+      { id: 0, title: '우연한\n연결', slot: 0 },
+      { id: 1, title: '아이디어', slot: 1 },
+      { id: 2, title: 'MOC/연구', slot: 2 },
+      { id: 3, title: '프로젝트/보드', slot: 3 },
+      { id: 4, title: '논문', slot: 4 },
+      { id: 5, title: 'ESP32', slot: 5 },
+    ],
+    edges: [[0, 1], [0, 2], [0, 3], [0, 4], [0, 5], [1, 2], [2, 4], [3, 5]],
+  },
+}
+const DEMO_TAROT = {
+  date: '2026-08-13',
+  timezone: 'Asia/Seoul',
+  card_id: 'major-02',
+  orientation: 'upright',
+  copy_version: 1,
+  headline: ['고요히 살피면', '속뜻이 보인다'],
+  flow: ['두 기둥 사이 장막이', '감춰진 단서를 품고 있다'],
+  caution: ['모호한 느낌을', '사실로 단정하지 않는다'],
+  action: ['답하기 전에', '침묵 속에서 한 번 읽는다'],
+}
 
 // ---- Board state ----
 const board = {
   page: 0,
   vaultUrl: '',
+  sourceGeneration: 0,
   vault: { ...DEMO },
+  tarotFingerprint: '',
   lastResult: 'no_url',
   // Epoch ms of the last SUCCESSFUL poll. null means none has ever succeeded, which /api/state
   // reports as ageSeconds -1 — a different fact from "0 seconds ago".
@@ -108,20 +148,22 @@ function validVaultUrl(url) {
   return rest.length > 0 && !rest.startsWith('/')
 }
 
-// Summarise a parsed snapshot the way device_api_json.c does. Returns null if the payload is not
-// a vault snapshot — the same judgement vault_parse.c makes (an object with no vault content in
-// it is a rejection, not an empty vault).
+// Summarise a parsed snapshot the way device_api_json.c does. Schema 3 requires a drawable
+// normalized artwork object; a rejection preserves the last image on the real panel.
 function summarise(json) {
   if (json === null || typeof json !== 'object' || Array.isArray(json)) return null
+  if (json.schema !== 3) return null
   const stats = json.stats ?? {}
   const agents = Array.isArray(json.agents) ? json.agents : []
   const nodes = Array.isArray(json.graph?.nodes) ? json.graph.nodes : []
   const recent = Array.isArray(json.recent) ? json.recent : []
   const inbox = Array.isArray(json.inbox) ? json.inbox : []
   const notes = num(stats.notes)
-  if (notes === 0 && agents.length === 0 && nodes.length === 0 && recent.length === 0 && inbox.length === 0) {
-    return null
-  }
+  const normalizedArtwork = normalizeArtwork(json.artwork)
+  const hasProse = normalizedArtwork.headline.length > 0 ||
+    normalizedArtwork.definition.headword.length > 0 ||
+    normalizedArtwork.definition.lines.length > 0
+  if (!normalizedArtwork.note.title || !hasProse) return null
   return {
     valid: true,
     demo: false,
@@ -145,22 +187,234 @@ function num(v) {
   return Number.isFinite(n) ? Math.trunc(n) : 0
 }
 
+function utf8Text(value, maxBytes) {
+  if (typeof value !== 'string') return ''
+  let result = ''
+  let bytes = 0
+  for (const glyph of value) {
+    if (glyph === '\0') break
+    const glyphBytes = Buffer.byteLength(glyph, 'utf8')
+    if (bytes + glyphBytes > maxBytes) break
+    result += glyph
+    bytes += glyphBytes
+  }
+  return result
+}
+
+// Normalize only fields consumed by ui_artwork.c. Keeping the same caps and graph rules as the C
+// parser makes JSON.stringify of this object a companion-side visible-content fingerprint.
+function normalizeArtwork(artwork) {
+  const wireInt = (value, fallback = 0) =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : fallback
+  const exactInt = (value) => Number.isInteger(value) && value >= -2147483648 && value <= 2147483647
+  const unsignedWireInt = (value) => Math.max(0, Math.min(2147483000, wireInt(value)))
+  const text = utf8Text
+  const lines = (value, cap) => {
+    const result = []
+    for (const line of Array.isArray(value) ? value : []) {
+      if (result.length >= cap) break
+      const normalized = text(line, 127)
+      if (normalized) result.push(normalized)
+    }
+    return result
+  }
+  const definition = artwork?.definition && typeof artwork.definition === 'object' &&
+    !Array.isArray(artwork.definition) ? artwork.definition : {}
+  const note = artwork?.note && typeof artwork.note === 'object' && !Array.isArray(artwork.note)
+    ? artwork.note : {}
+  const backlinks = []
+  for (const backlink of Array.isArray(note.backlinks) ? note.backlinks : []) {
+    if (backlinks.length >= 3) break
+    const normalized = text(backlink, 63)
+    if (normalized) backlinks.push(normalized)
+  }
+  const nodes = []
+  const wireIds = []
+  for (const node of Array.isArray(artwork?.graph?.nodes) ? artwork.graph.nodes : []) {
+    if (nodes.length >= 6) break
+    const title = text(node?.title, 63)
+    if (!title) continue
+    if (!exactInt(node.id) || wireIds.includes(node.id)) continue
+    const slot = exactInt(node.slot) && node.slot >= 0 && node.slot < 6 ? node.slot : null
+    wireIds.push(node.id)
+    nodes.push({ title, slot })
+  }
+  const usedSlots = new Set()
+  for (const node of nodes) {
+    if (node.slot !== null && !usedSlots.has(node.slot)) usedSlots.add(node.slot)
+    else node.slot = null
+  }
+  if (nodes.length > 0 && !usedSlots.has(0)) {
+    let focus = nodes.findIndex((node) => node.slot === null)
+    if (focus < 0) {
+      focus = 0
+      usedSlots.delete(nodes[focus].slot)
+    }
+    nodes[focus].slot = 0
+    usedSlots.add(0)
+  }
+  for (const node of nodes) {
+    if (node.slot !== null) continue
+    let slot = 0
+    while (usedSlots.has(slot)) slot++
+    node.slot = slot
+    usedSlots.add(slot)
+  }
+  const edgeKeys = new Set()
+  for (const edge of Array.isArray(artwork?.graph?.edges) ? artwork.graph.edges : []) {
+    if (!Array.isArray(edge) || edge.length !== 2 ||
+        !exactInt(edge[0]) || !exactInt(edge[1])) continue
+    const a = wireIds.indexOf(edge[0])
+    const b = wireIds.indexOf(edge[1])
+    if (a < 0 || b < 0 || a === b) continue
+    edgeKeys.add(`${Math.min(a, b)},${Math.max(a, b)}`)
+  }
+  const edges = [...edgeKeys]
+    .map((key) => key.split(',').map(Number))
+    .sort(([a1, b1], [a2, b2]) => a1 - a2 || b1 - b2)
+    .slice(0, 8)
+  return {
+    headline: lines(artwork?.headline, 2),
+    definition: {
+      headword: text(definition.headword, 63),
+      meta: text(definition.meta, 31),
+      lines: lines(definition.lines, 2),
+    },
+    note: {
+      title: text(note.title, 63),
+      path: text(note.path, 127),
+      backlinkTotal: Math.max(unsignedWireInt(note.backlink_total), backlinks.length),
+      backlinks,
+    },
+    nodes,
+    edges,
+  }
+}
+
+function artworkFingerprint(artwork) {
+  return JSON.stringify(normalizeArtwork(artwork))
+}
+
+function validTarotDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  if (year < 1 || month < 1 || month > 12) return false
+  const leap = year % 400 === 0 || (year % 4 === 0 && year % 100 !== 0)
+  const days = [0, 31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  return day >= 1 && day <= days[month]
+}
+
+function validTarotCardId(value) {
+  if (typeof value !== 'string') return false
+  const match = /^(major|cups|pentacles|swords|wands)-(\d{2})$/.exec(value)
+  if (!match) return false
+  const number = Number(match[2])
+  return match[1] === 'major' ? number >= 0 && number <= 21 : number >= 1 && number <= 14
+}
+
+// This is the exact render contract used by user_app.cpp: malformed tarot never replaces the
+// last-good pixels, and the fingerprint contains only content visible on the tarot composition.
+function normalizeDailyTarot(tarot) {
+  if (!tarot || typeof tarot !== 'object' || Array.isArray(tarot) ||
+      !validTarotDate(tarot.date) || tarot.timezone !== 'Asia/Seoul' ||
+      !validTarotCardId(tarot.card_id) || tarot.orientation !== 'upright' ||
+      !Number.isInteger(tarot.copy_version) || tarot.copy_version <= 0 ||
+      tarot.copy_version > 2147483647) return null
+
+  const normalized = {
+    date: tarot.date,
+    timezone: tarot.timezone,
+    card_id: tarot.card_id,
+    orientation: tarot.orientation,
+    copy_version: tarot.copy_version,
+  }
+  for (const key of ['headline', 'flow', 'caution', 'action']) {
+    const source = tarot[key]
+    if (!Array.isArray(source) || source.length < 1 || source.length > 2) return null
+    const lines = source.map((line) => utf8Text(line, 127))
+    if (lines.some((line) => !line || /[\u0000-\u001f]/.test(line))) return null
+    normalized[key] = lines
+  }
+  return normalized
+}
+
+function tarotFingerprint(tarot, demo = false) {
+  const normalized = normalizeDailyTarot(tarot)
+  if (!normalized) return null
+  return JSON.stringify({
+    demo,
+    date: normalized.date,
+    card_id: normalized.card_id,
+    headline: normalized.headline,
+    flow: normalized.flow,
+    caution: normalized.caution,
+    action: normalized.action,
+  })
+}
+
+if (process.argv[2] === '--demo-fingerprint') {
+  process.stdout.write(artworkFingerprint(DEMO_ARTWORK))
+  return
+}
+
+if (process.argv[2] === '--demo-tarot-fingerprint') {
+  process.stdout.write(tarotFingerprint(DEMO_TAROT, true))
+  return
+}
+
+if (process.argv[2] === '--fingerprint' || process.argv[2] === '--tarot-fingerprint' ||
+    process.argv[2] === '--tarot-visible-fingerprint' || process.argv[2] === '--summarise') {
+  const command = process.argv[2]
+  let input = ''
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', (chunk) => { input += chunk })
+  process.stdin.on('end', () => {
+    try {
+      const json = JSON.parse(input)
+      const output = command === '--fingerprint' ? normalizeArtwork(json) :
+        command === '--tarot-fingerprint' ? normalizeDailyTarot(json) :
+          command === '--tarot-visible-fingerprint' ? tarotFingerprint(json) : summarise(json)
+      if (output === null) {
+        process.exitCode = 1
+        return
+      }
+      process.stdout.write(typeof output === 'string' ? output : JSON.stringify(output))
+    } catch {
+      process.exitCode = 1
+    }
+  })
+  return
+}
+
 // One poll of the configured source, with the firmware's failure taxonomy: `transport` for
 // DNS/connect/timeout, `http_status` for a non-2xx, `bad_payload` for a 2xx that is not a
 // snapshot. A failure leaves the previous snapshot in place — blanking the board is the one
 // failure a user actually notices.
 async function pollVault() {
-  if (!board.vaultUrl) {
+  const sourceUrl = board.vaultUrl
+  const sourceGeneration = board.sourceGeneration
+  const sourceIsCurrent = () =>
+    sourceGeneration === board.sourceGeneration && sourceUrl === board.vaultUrl
+  if (!sourceUrl) {
     board.vault = { ...DEMO }
+    board.tarotFingerprint = tarotFingerprint(DEMO_TAROT, true)
     board.lastResult = 'no_url'
     return
   }
   let res
   try {
-    res = await fetch(board.vaultUrl, { signal: AbortSignal.timeout(8000) })
+    res = await fetch(sourceUrl, { signal: AbortSignal.timeout(8000) })
   } catch (e) {
+    if (!sourceIsCurrent()) {
+      console.log(`   -> discarded stale failure from ${sourceUrl}`)
+      return
+    }
     board.lastResult = 'transport'
     console.log(`   !! transport: ${e.message}`)
+    return
+  }
+  if (!sourceIsCurrent()) {
+    console.log(`   -> discarded stale response from ${sourceUrl}`)
     return
   }
   if (res.status < 200 || res.status > 299) {
@@ -172,21 +426,33 @@ async function pollVault() {
   try {
     json = await res.json()
   } catch {
+    if (!sourceIsCurrent()) {
+      console.log(`   -> discarded stale failure from ${sourceUrl}`)
+      return
+    }
     board.lastResult = 'bad_payload'
     console.log('   !! bad_payload: not JSON')
     return
   }
+  if (!sourceIsCurrent()) {
+    console.log(`   -> discarded stale response from ${sourceUrl}`)
+    return
+  }
   const summary = summarise(json)
-  if (!summary) {
+  const fingerprint = tarotFingerprint(json.daily_tarot)
+  if (!summary || !fingerprint) {
     board.lastResult = 'bad_payload'
     console.log('   !! bad_payload: JSON, but not a vault snapshot')
     return
   }
   board.vault = summary
+  board.tarotFingerprint = fingerprint
   board.lastResult = 'ok'
   board.lastOkAt = Date.now()
-  console.log(`   -> polled ${board.vaultUrl}: ${summary.notes} notes, ${summary.agents} agents`)
+  console.log(`   -> polled ${sourceUrl}: ${summary.notes} notes, ${summary.agents} agents`)
 }
+
+board.tarotFingerprint = tarotFingerprint(DEMO_TAROT, true)
 
 // Pretend to refresh the panel, recording a timing in the range the real panel lands in. The
 // firmware promotes a partial to a full refresh at its chain cap; this mirrors that so the
@@ -215,8 +481,8 @@ function state() {
       lastResult: board.lastResult,
       pollSeconds: POLL_SECONDS,
       ageSeconds: board.lastOkAt === null ? -1 : Math.round((Date.now() - board.lastOkAt) / 1000),
-      // The firmware badges what is on the glass as old once a couple of polls have failed in a
-      // row; approximate that with twice the interval since the last success.
+      // The API reports an old last-good snapshot after a couple of failed polls. The artwork has
+      // no status badge; the companion dashboard surfaces this operational state.
       stale: board.lastOkAt !== null && Date.now() - board.lastOkAt > POLL_SECONDS * 2000,
     },
     battery: { present: true, percent: 84, millivolts: 4012 },
@@ -290,6 +556,7 @@ const server = http.createServer(async (req, res) => {
 
     // Provisioning REWRITES the whole config on the real board, so an absent field clears the URL.
     board.vaultUrl = vaultUrl
+    board.sourceGeneration++
 
     setTimeout(async () => {
       if (password === 'wrong') {
@@ -313,11 +580,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === 'POST' && url === '/api/refresh') {
-    const before = JSON.stringify(board.vault)
+    const before = board.tarotFingerprint
     await pollVault()
     // The board only touches the panel when the snapshot actually changed — that is the whole
     // point of the content hash, so the mock honours it rather than counting a refresh every time.
-    if (JSON.stringify(board.vault) !== before) fakeRefresh('full')
+    if (board.tarotFingerprint !== before) fakeRefresh('full')
     return sendJson(res, 200, { ok: true })
   }
 
@@ -329,11 +596,10 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 400, { ok: false, error: 'bad_json' })
     }
     if (typeof body?.page !== 'number') return sendJson(res, 400, { ok: false, error: 'bad_json' })
-    if (body.page < 0 || body.page >= PAGE_COUNT) {
+    if (!Number.isInteger(body.page) || body.page !== 0) {
       return sendJson(res, 400, { ok: false, error: 'page_range' })
     }
     board.page = body.page
-    fakeRefresh('full') // a page change is always a full refresh
     return sendJson(res, 200, { ok: true })
   }
 
@@ -346,10 +612,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (typeof body?.url !== 'string') return sendJson(res, 400, { ok: false, error: 'bad_json' })
     if (!validVaultUrl(body.url)) return sendJson(res, 400, { ok: false, error: 'vault_url_invalid' })
+    const before = board.tarotFingerprint
     board.vaultUrl = body.url
+    board.sourceGeneration++
     if (!body.url) board.lastOkAt = null // back to the demo snapshot; nothing has been fetched
     await pollVault()
-    fakeRefresh('full')
+    if (board.tarotFingerprint !== before) fakeRefresh('full')
     return sendJson(res, 200, { ok: true })
   }
 
@@ -363,8 +631,11 @@ const server = http.createServer(async (req, res) => {
 })
 
 // Poll on the board's own schedule too, so a dashboard left open sees the age tick and reset.
-setInterval(() => {
-  if (board.vaultUrl) pollVault()
+setInterval(async () => {
+  if (!board.vaultUrl) return
+  const before = board.tarotFingerprint
+  await pollVault()
+  if (board.tarotFingerprint !== before) fakeRefresh('full')
 }, POLL_SECONDS * 1000)
 
 server.listen(PORT, () => {

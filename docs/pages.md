@@ -1,4 +1,8 @@
-# The four pages
+# Legacy four-page dashboard (archived)
+
+> This documents the pre-tarot dashboard retained in `sim/main_sim.c` for regression coverage. The
+> shipped firmware now has one native tarot composition; see [simulator.md](simulator.md) and
+> [vault-contract.md](vault-contract.md). Header/footer and KEY navigation below are not active UI.
 
 648 × 480, one bit deep. Every page shares a 44 px header and a 34 px footer, leaving a
 648 × 398 content area at y = 46. `KEY0` cycles forward, `BOOT` back.
@@ -148,10 +152,10 @@ against both faces, so if it ever happens it fails on a laptop with the offendin
 
 ## Where the layout is asserted
 
-`sim/main_sim.c` renders all four pages at 648 × 480 and checks the pixels: every list row inked,
+The legacy `sim/main_sim.c` renders all four archived pages at 648 × 480 and checks the pixels: every list row inked,
 every graph node and label inside the canvas, exactly one filled page dot, the header and footer
 rules intact, the overlay opaque, and every string covered by its font. It exits non-zero on any
-failure, so `./sim.sh` is a test that happens to leave screenshots behind.
+failure. The current panel acceptance test is `./artwork_sim.sh`, which renders the tarot UI.
 
 It earns its keep. On its first run it caught two real bugs: a missing em dash in a note title, and
 labels wrapping instead of ellipsizing because only their width was set, which put a second line on

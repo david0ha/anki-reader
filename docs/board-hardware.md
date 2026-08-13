@@ -65,6 +65,7 @@ refresh policy already keeps refreshes rare (see [epaper-5in83.md](epaper-5in83.
 
 ## Firmware footprint
 
-At the time of writing: **1.7 MB** of an 8 MB app partition (79% free). About 450 KB of that is the
-two full 완성형 font faces — which is the point of having 8 MB, and is discussed in
-[pages.md](pages.md).
+Current tarot build: **0x2ea660 bytes (about 2.93 MB)** of an 8 MB app partition, leaving **64%**.
+The main additions are 78 native 1-bit cards (1,231,152 payload bytes) and three full 완성형 Noto
+Sans KR faces at 16/20/28 px. Asset and font coverage are verified by the host and artwork simulator
+tests rather than estimated from generated C source size.

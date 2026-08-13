@@ -27,16 +27,17 @@ static void test_mock_matches_the_wire_fixture(void)
     char *json = th_slurp(FIXDIR "/vault.json", &len);
 
     vault_t wire;
-    CHECK(vault_parse(json, len, &wire) == true);
+    bool parsed = vault_parse(json, len, &wire);
+    CHECK(parsed == true);
     free(json);
+    if (!parsed) return;
 
     vault_t mock;
     vault_mock(&mock);
 
-    /* The one field that legitimately differs: `demo` is how the header knows
-     * to show the DEMO badge, and a snapshot that arrived over the network is
-     * by definition not the demo. Normalise it and everything else must match
-     * exactly. */
+    /* The one field that legitimately differs: `demo` makes the tarot canvas
+     * identify fixed content as a design preview, while a network snapshot is
+     * a dated reading. Normalize it and everything else must match exactly. */
     CHECK(mock.demo == true);
     CHECK(wire.demo == false);
     mock.demo = false;
@@ -94,6 +95,43 @@ static void test_mock_matches_the_wire_fixture(void)
             CHECK_STR(mock.inbox[i].title, wire.inbox[i].title);
             CHECK_INT(mock.inbox[i].age_days, wire.inbox[i].age_days);
         }
+        CHECK_INT(mock.artwork.headline_count, wire.artwork.headline_count);
+        for (int i = 0; i < mock.artwork.headline_count && i < wire.artwork.headline_count; i++) {
+            CHECK_STR(mock.artwork.headline[i].text, wire.artwork.headline[i].text);
+        }
+        CHECK_STR(mock.artwork.definition.headword, wire.artwork.definition.headword);
+        CHECK_STR(mock.artwork.definition.meta, wire.artwork.definition.meta);
+        CHECK_INT(mock.artwork.definition.line_count, wire.artwork.definition.line_count);
+        for (int i = 0; i < mock.artwork.definition.line_count &&
+                        i < wire.artwork.definition.line_count; i++) {
+            CHECK_STR(mock.artwork.definition.lines[i].text,
+                      wire.artwork.definition.lines[i].text);
+        }
+        CHECK_STR(mock.artwork.note.title, wire.artwork.note.title);
+        CHECK_STR(mock.artwork.note.path, wire.artwork.note.path);
+        CHECK_INT(mock.artwork.note.backlink_total, wire.artwork.note.backlink_total);
+        CHECK_INT(mock.artwork.note.backlink_count, wire.artwork.note.backlink_count);
+        for (int i = 0; i < mock.artwork.note.backlink_count &&
+                        i < wire.artwork.note.backlink_count; i++) {
+            CHECK_STR(mock.artwork.note.backlinks[i], wire.artwork.note.backlinks[i]);
+        }
+        CHECK_INT(mock.artwork.node_count, wire.artwork.node_count);
+        for (int i = 0; i < mock.artwork.node_count && i < wire.artwork.node_count; i++) {
+            CHECK_STR(mock.artwork.nodes[i].title, wire.artwork.nodes[i].title);
+            CHECK_INT(mock.artwork.nodes[i].slot, wire.artwork.nodes[i].slot);
+        }
+        CHECK_INT(mock.artwork.edge_count, wire.artwork.edge_count);
+        for (int i = 0; i < mock.artwork.edge_count && i < wire.artwork.edge_count; i++) {
+            CHECK_INT(mock.artwork.edges[i].a, wire.artwork.edges[i].a);
+            CHECK_INT(mock.artwork.edges[i].b, wire.artwork.edges[i].b);
+        }
+        CHECK_INT(mock.daily_tarot.valid, wire.daily_tarot.valid);
+        CHECK_STR(mock.daily_tarot.date, wire.daily_tarot.date);
+        CHECK_STR(mock.daily_tarot.timezone, wire.daily_tarot.timezone);
+        CHECK_STR(mock.daily_tarot.card_id, wire.daily_tarot.card_id);
+        CHECK_STR(mock.daily_tarot.orientation, wire.daily_tarot.orientation);
+        CHECK_INT(mock.daily_tarot.copy_version, wire.daily_tarot.copy_version);
+        CHECK_INT(vault_tarot_hash(&mock), vault_tarot_hash(&wire));
     } else {
         g_total++;
     }
@@ -177,6 +215,41 @@ static void test_mock_is_the_layouts_worst_case(void)
         if (v.stats.daily[i] == 0) has_zero_day = true;
     }
     CHECK(has_zero_day);                           /* the divide-by-value trap */
+    CHECK(v.artwork.valid);
+    CHECK_INT(v.artwork.headline_count, ARTWORK_HEADLINE_MAX);
+    CHECK(v.artwork.definition.headword[0] != '\0');
+    CHECK(v.artwork.definition.meta[0] != '\0');
+    CHECK_INT(v.artwork.definition.line_count, ARTWORK_DEFINITION_MAX);
+    CHECK(v.artwork.note.title[0] != '\0');
+    CHECK(v.artwork.note.path[0] != '\0');
+    CHECK_INT(v.artwork.note.backlink_count, ARTWORK_BACKLINKS_MAX);
+    CHECK(v.artwork.note.backlink_total >= v.artwork.note.backlink_count);
+    CHECK_INT(v.artwork.node_count, ARTWORK_NODES_MAX);
+    CHECK_INT(v.artwork.edge_count, ARTWORK_EDGES_MAX);
+    CHECK(v.daily_tarot.valid);
+    CHECK_INT(v.daily_tarot.headline.line_count, TAROT_LINES_MAX);
+    CHECK_INT(v.daily_tarot.flow.line_count, TAROT_LINES_MAX);
+    CHECK_INT(v.daily_tarot.caution.line_count, TAROT_LINES_MAX);
+    CHECK_INT(v.daily_tarot.action.line_count, TAROT_LINES_MAX);
+
+    bool used_slot[ARTWORK_NODES_MAX] = {false};
+    CHECK_INT(v.artwork.nodes[0].slot, 0);
+    for (int i = 0; i < v.artwork.node_count; i++) {
+        CHECK(v.artwork.nodes[i].slot < ARTWORK_NODES_MAX);
+        CHECK(!used_slot[v.artwork.nodes[i].slot]);
+        used_slot[v.artwork.nodes[i].slot] = true;
+    }
+    for (int i = 0; i < v.artwork.edge_count; i++) {
+        CHECK(v.artwork.edges[i].a < v.artwork.node_count);
+        CHECK(v.artwork.edges[i].b < v.artwork.node_count);
+        CHECK(v.artwork.edges[i].a != v.artwork.edges[i].b);
+        for (int j = i + 1; j < v.artwork.edge_count; j++) {
+            CHECK(!((v.artwork.edges[i].a == v.artwork.edges[j].a &&
+                     v.artwork.edges[i].b == v.artwork.edges[j].b) ||
+                    (v.artwork.edges[i].a == v.artwork.edges[j].b &&
+                     v.artwork.edges[i].b == v.artwork.edges[j].a)));
+        }
+    }
 }
 
 int main(void)

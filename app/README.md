@@ -9,8 +9,7 @@ It does two things:
 1. **Onboarding** over the board's setup Wi-Fi (SoftAP): pick your home Wi-Fi, enter the password
    and the vault snapshot URL, and the board reboots onto your network.
 2. **Live control** over the LAN: a dashboard that polls the board, shows what it is displaying and
-   how its last poll went, switches the page on the panel, changes the snapshot URL, and runs the
-   panel self-test.
+   how its last poll went, changes the snapshot URL, and runs the panel self-test.
 
 The HTTP/JSON contract it implements is documented in [`../docs/app-control.md`](../docs/app-control.md).
 `src/lib/esp32.ts` is the TypeScript mirror of that document and the only file in the app that
@@ -25,18 +24,16 @@ no keyboard:
 - **Status** — how the last poll went, whether what's on the glass is demo data or stale, battery.
 - **Counters** — notes, links, orphans, tags, with link density and orphan rate derived.
 - **Agents & queue** — how many agents are running, and how deep the note/inbox queues are.
-- **On the panel** — which page is showing (with the board's own Korean title for it), and a
-  switcher. A page change is a full refresh of a 5.83" panel, so the control stays on the page you
-  asked for until the board confirms it, rather than snapping back and looking like a lost tap.
+- **On the panel** — the single native 648 × 480 daily tarot composition: a full-height card beside
+  its headline, flow, caution and action, with no header/footer chrome or page switcher.
 - **Source** — the URL, the last result, when it last succeeded, how often it polls. The three
   failure codes (`transport` / `http_status` / `bad_payload`) each get their own sentence, because
   they send you to three different places.
 - **Panel** — the measured full/partial refresh times. The refresh policy for this panel is meant
   to be chosen from measurement, and this is how you read the measurements off a board on a shelf
   instead of holding a serial cable to it.
-- **Quick memo** — type something and it lands in the vault's inbox, so the queue on the panel is
-  somewhere you can add to from the sofa. Saving also asks the board to poll, which is what makes
-  the memo appear on the glass while you are still looking at it.
+- **Quick memo** — type something and it lands in the vault's inbox. Saving also asks the board to
+  poll, while the panel itself stays focused on the daily tarot composition.
 
 The memo box is the one thing here that does **not** talk to the board. `POST /capture` is served
 by whatever is producing the snapshot — `tools/vault_server.py --allow-capture` does, most
@@ -80,7 +77,8 @@ routes straight to the dashboard). Open it in the iOS Simulator (which can reach
 
 The mock is not a stub. Give it a real snapshot URL and it fetches it and summarises it exactly as
 the firmware would, including the three distinct failure codes — so the whole chain the board walks
-is exercised, with only the panel missing:
+is exercised, with only the panel missing. It validates the same strict `daily_tarot` object and
+fingerprints only the card, date and copy that can change pixels, just like the firmware:
 
 ```bash
 python3 ../tools/mock_vault_server.py --port 8123     # the vault contract, as a server
@@ -122,7 +120,7 @@ Then follow the in-app onboarding:
 ```
 [AP setup]                                    [home LAN control]
 turn-on  ─ join "Obsidian Board-XXXX"         dashboard ─ GET /api/state (poll)
-wifi-list ─ GET /api/scan                       │           POST /api/{page,refresh,display/test}
+wifi-list ─ GET /api/scan                       │           POST /api/{refresh,display/test}
 vault    ─ (validate locally)                   └─ settings ─ GET /api/info + /api/state
 password ─ POST /api/provision (ssid, pass,                   POST /api/vault, change host,
            vault_url) → poll GET /api/status                  re-onboard
@@ -164,7 +162,7 @@ app/
    │  ├─ dashboard.tsx     live dashboard (polls getState)
    │  ├─ settings.tsx      board info, snapshot URL, host override, re-onboard
    │  └─ onboarding/       turn-on → wifi-list → vault → password → complete
-   ├─ components/      Screen, Button, Card, Chip, SegmentedControl, StatTile, InfoRow, …
+   ├─ components/      Screen, Button, Card, Chip, StatTile, InfoRow, …
    ├─ lib/
    │  ├─ esp32.ts          the board client (both API surfaces) + types  ← core
    │  ├─ esp32.test.ts     thorough unit tests with a fake fetch

@@ -4,7 +4,7 @@ A JSON control server on port 80, up once Wi-Fi is connected, advertised over mD
 **`obsidianboard.local`**.
 
 Local-network only: no auth, no TLS, no cloud. That is a scope decision, not an oversight — the
-device holds no credentials worth stealing, and the only actions are "show a different page" and
+device holds no credentials worth stealing, and the only actions are "refresh the artwork" and
 "fetch from a different URL on this LAN".
 
 > The hostname is **not** `tickerboard`. That name belongs to the fortune board this project forked
@@ -16,9 +16,9 @@ device holds no credentials worth stealing, and the only actions are "show a dif
 | Method | Path | Body | Effect |
 |---|---|---|---|
 | GET | `/api/info` | — | discovery probe |
-| GET | `/api/state` | — | the full snapshot |
+| GET | `/api/state` | — | board-status summary |
 | POST | `/api/refresh` | — | poll the vault source now |
-| POST | `/api/page` | `{"page":0..3}` | switch page (full refresh) |
+| POST | `/api/page` | `{"page":0}` | compatibility no-op for the single artwork composition |
 | POST | `/api/vault` | `{"url":"http://..."}` | change the snapshot URL (persisted, live) |
 | POST | `/api/display/test` | — | run the e-Paper self-test sweep |
 
@@ -29,6 +29,11 @@ Every write posts a command onto the app's queue and returns immediately; the UI
 through the same code path as a button press. Nothing here touches LVGL or the panel directly —
 exactly one task is allowed to start a refresh, because a full refresh of this panel takes seconds
 and cannot be interleaved with another.
+
+There is exactly one panel page: `Artwork` at index `0`. The endpoint is retained for compatible
+clients; it does not select another view or force a refresh. The artwork itself is a native
+648 × 480 composition with no header/footer chrome: a 272 × 464 tarot card on the left and its
+daily headline, flow, caution and action inside a cut-corner reading frame on the right.
 
 ## `GET /api/info`
 
@@ -44,7 +49,7 @@ reads `ip` to pick the best one. Renaming any of them is a client release, not a
 ```json
 {
   "deviceId": "1A2B", "model": "Obsidian Board", "fw": "0.1.0", "ip": "192.168.0.42",
-  "page": 2, "pageTitle": "에이전트",
+  "page": 0, "pageTitle": "Artwork",
 
   "vault": {
     "valid": true, "demo": false,
@@ -73,6 +78,9 @@ This is a **summary**, not the vault snapshot. A client does not need the graph 
 titles — it needs to know the board is alive, what it is showing, and whether the last poll worked.
 The full snapshot is available from the same URL the board polls, which the client can reach too.
 
+`page` is always `0` and `pageTitle` is always `Artwork`. A client may display that state but must
+not offer page navigation.
+
 `source.lastResult` is one of `ok`, `no_url`, `transport`, `http_status`, `bad_payload` — the same
 strings the serial log uses. `transport` means DNS/connect/TLS/timeout; `http_status` means the
 server answered but not with a 2xx; `bad_payload` means it answered 2xx with something that is not a
@@ -90,12 +98,12 @@ Serving them means reading them off a phone instead of holding a serial cable to
 ```bash
 curl http://obsidianboard.local/api/state | jq
 
-curl -X POST http://obsidianboard.local/api/page -d '{"page":1}'
+curl -X POST http://obsidianboard.local/api/page -d '{"page":0}'
 curl -X POST http://obsidianboard.local/api/refresh
 curl -X POST http://obsidianboard.local/api/vault \
      -d '{"url":"http://mymac.local:8123/vault.json"}'
 
-# back to the built-in demo screen
+# back to the persisted built-in design preview (also disables polling after reboot)
 curl -X POST http://obsidianboard.local/api/vault -d '{"url":""}'
 
 # how long a refresh actually takes on this board

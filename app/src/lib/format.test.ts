@@ -15,10 +15,9 @@ import {
 } from './format'
 
 describe('pageLabel', () => {
-  it('names the four pages in the firmware’s order', () => {
-    expect([...PAGE_LABELS]).toEqual(['Stats', 'Graph', 'Agents', 'Notes'])
-    expect(pageLabel(0)).toBe('Stats')
-    expect(pageLabel(3)).toBe('Notes')
+  it('names the single artwork composition exposed by the firmware', () => {
+    expect([...PAGE_LABELS]).toEqual(['Artwork'])
+    expect(pageLabel(0)).toBe('Artwork')
   })
 
   it('falls back for an out-of-range page rather than rendering undefined', () => {

@@ -153,6 +153,76 @@ static void h_int(uint32_t *h, int v)
     h_bytes(h, &x, sizeof(x));
 }
 
+static void h_artwork(uint32_t *h, const vault_artwork_t *a)
+{
+    h_int(h, a->valid);
+
+    h_int(h, a->headline_count);
+    for (int i = 0; i < a->headline_count; i++) {
+        h_str(h, a->headline[i].text);
+    }
+
+    h_str(h, a->definition.headword);
+    h_str(h, a->definition.meta);
+    h_int(h, a->definition.line_count);
+    for (int i = 0; i < a->definition.line_count; i++) {
+        h_str(h, a->definition.lines[i].text);
+    }
+
+    h_str(h, a->note.title);
+    h_str(h, a->note.path);
+    h_int(h, a->note.backlink_total);
+    h_int(h, a->note.backlink_count);
+    for (int i = 0; i < a->note.backlink_count; i++) {
+        h_str(h, a->note.backlinks[i]);
+    }
+
+    h_int(h, a->node_count);
+    for (int i = 0; i < a->node_count; i++) {
+        h_str(h, a->nodes[i].title);
+        h_int(h, a->nodes[i].slot);
+    }
+
+    h_int(h, a->edge_count);
+    for (int i = 0; i < a->edge_count; i++) {
+        h_int(h, a->edges[i].a);
+        h_int(h, a->edges[i].b);
+    }
+
+}
+
+static void h_tarot_lines(uint32_t *h, const tarot_lines_t *lines)
+{
+    h_int(h, lines->line_count);
+    for (int i = 0; i < lines->line_count; i++) h_str(h, lines->lines[i]);
+}
+
+static void h_tarot(uint32_t *h, const daily_tarot_t *t)
+{
+    h_int(h, t->valid);
+    h_str(h, t->date);
+    h_str(h, t->timezone);
+    h_str(h, t->card_id);
+    h_str(h, t->orientation);
+    h_int(h, t->copy_version);
+    h_tarot_lines(h, &t->headline);
+    h_tarot_lines(h, &t->flow);
+    h_tarot_lines(h, &t->caution);
+    h_tarot_lines(h, &t->action);
+}
+
+static void h_tarot_pixels(uint32_t *h, const daily_tarot_t *t)
+{
+    /* timezone/orientation are validation constraints and copy_version is
+     * producer metadata. None is printed; changing one must not flash e-paper. */
+    h_str(h, t->date);
+    h_str(h, t->card_id);
+    h_tarot_lines(h, &t->headline);
+    h_tarot_lines(h, &t->flow);
+    h_tarot_lines(h, &t->caution);
+    h_tarot_lines(h, &t->action);
+}
+
 uint32_t vault_hash(const vault_t *v)
 {
     uint32_t h = FNV_OFFSET;
@@ -214,5 +284,27 @@ uint32_t vault_hash(const vault_t *v)
         h_int(&h, v->inbox[i].age_days);
     }
 
+    h_artwork(&h, &v->artwork);
+    h_tarot(&h, &v->daily_tarot);
+
+    return h;
+}
+
+uint32_t vault_tarot_hash(const vault_t *v)
+{
+    uint32_t h = FNV_OFFSET;
+    if (!v || !v->valid || !v->daily_tarot.valid) return h;
+
+    h_int(&h, v->demo);
+    h_tarot_pixels(&h, &v->daily_tarot);
+    return h;
+}
+
+uint32_t vault_artwork_hash(const vault_t *v)
+{
+    uint32_t h = FNV_OFFSET;
+    if (!v || !v->valid || !v->artwork.valid) return h;
+
+    h_artwork(&h, &v->artwork);
     return h;
 }
