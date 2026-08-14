@@ -44,6 +44,13 @@ typedef struct {
     bool drop_write_but_report_success;
     bool cutoff_enabled;
     size_t write_bytes_left;
+    uint32_t deceptive_write_offset;
+    size_t deceptive_write_length;
+    enum {
+        DECEPTIVE_WRITE_NONE = 0,
+        DECEPTIVE_WRITE_DROP,
+        DECEPTIVE_WRITE_CORRUPT,
+    } deceptive_write;
     unsigned erase_calls;
 } nor_fake_t;
 
@@ -73,6 +80,14 @@ static bool nor_write(void *ctx, uint32_t offset, const void *src, size_t length
     }
     if (nor->drop_write_but_report_success) return true;
 
+    const bool deceive = nor->deceptive_write != DECEPTIVE_WRITE_NONE &&
+                         offset == nor->deceptive_write_offset &&
+                         length == nor->deceptive_write_length;
+    if (deceive && nor->deceptive_write == DECEPTIVE_WRITE_DROP) {
+        nor->deceptive_write = DECEPTIVE_WRITE_NONE;
+        return true;
+    }
+
     size_t written = length;
     if (nor->cutoff_enabled && written > nor->write_bytes_left) {
         written = nor->write_bytes_left;
@@ -86,6 +101,18 @@ static bool nor_write(void *ctx, uint32_t offset, const void *src, size_t length
     }
     for (size_t i = 0; i < written; i++) {
         nor->bytes[offset + i] &= input[i];
+    }
+    if (deceive && nor->deceptive_write == DECEPTIVE_WRITE_CORRUPT) {
+        /* A plausible NOR fault: one additional programmed zero while the
+         * driver incorrectly reports that the requested operation succeeded. */
+        for (size_t i = 0; i < written; i++) {
+            uint8_t set_bits = nor->bytes[offset + i];
+            if (set_bits != 0) {
+                nor->bytes[offset + i] &= (uint8_t)(set_bits - 1u);
+                break;
+            }
+        }
+        nor->deceptive_write = DECEPTIVE_WRITE_NONE;
     }
 
     if (nor->cutoff_enabled) {
@@ -380,6 +407,39 @@ static void test_invalid_input_and_immediate_callback_failure_are_atomic(void)
     free(nor);
 }
 
+static void test_wide_and_negative_congruent_grades_are_atomic(void)
+{
+    static const int invalid_grades[] = { 257, 258, -255, -254 };
+    nor_fake_t *nor = malloc(sizeof *nor);
+    uint8_t *flash_before = malloc(PARTITION_SIZE);
+    CHECK(nor != NULL && flash_before != NULL);
+    if (nor == NULL || flash_before == NULL) {
+        free(nor);
+        free(flash_before);
+        return;
+    }
+
+    for (size_t i = 0; i < sizeof invalid_grades / sizeof invalid_grades[0]; i++) {
+        nor_init(nor);
+        const uint8_t id[16] = { 0x39, (uint8_t)i };
+        kanji_state_io_t io = nor_io(nor);
+        kanji_state_t state;
+        kanji_rating_summary_t summaries[2];
+        CHECK(kanji_state_open(&state, &io, id, 2, summaries));
+        kanji_rating_summary_t summaries_before[2];
+        memcpy(summaries_before, summaries, sizeof summaries_before);
+        memcpy(flash_before, nor->bytes, PARTITION_SIZE);
+
+        CHECK(!kanji_state_append_grade(&state, 0, 1,
+                                        (kanji_grade_t)invalid_grades[i]));
+        CHECK_U32(kanji_state_current_ordinal(&state), 0);
+        CHECK(memcmp(summaries_before, summaries, sizeof summaries_before) == 0);
+        CHECK(memcmp(flash_before, nor->bytes, PARTITION_SIZE) == 0);
+    }
+    free(flash_before);
+    free(nor);
+}
+
 static void test_torn_record_replays_only_the_previous_commit(void)
 {
     nor_fake_t *nor = malloc(sizeof *nor);
@@ -447,6 +507,31 @@ static void test_generation_selection_is_wrap_safe(void)
     CHECK_U32(kanji_state_current_ordinal(&state), 2);
     CHECK(summary_is_zero(&summaries[0]));
     check_summary(&summaries[1], 10, 2, 5, 0, KANJI_GRADE_EASY, 0);
+
+    /* The same wrap with the physical bank placements reversed must still
+     * choose generation zero, not whichever header happened to be read last. */
+    nor_init(nor);
+    fixture_bank(nor, 0, 0, id, &wrapped_new_record, 1);
+    fixture_bank(nor, 1, UINT32_MAX, id, &old_record, 1);
+    CHECK(kanji_state_open(&state, &io, id, 3, summaries));
+    CHECK_U32(kanji_state_current_ordinal(&state), 2);
+    CHECK(summary_is_zero(&summaries[0]));
+    check_summary(&summaries[1], 10, 2, 5, 0, KANJI_GRADE_EASY, 0);
+
+    /* At the exactly ambiguous half range neither serial is "newer".  The
+     * documented deterministic tie policy is numeric generation, independent
+     * of bank placement, so 0x80000000 wins in either bank. */
+    nor_init(nor);
+    fixture_bank(nor, 0, 0, id, &old_record, 1);
+    fixture_bank(nor, 1, UINT32_C(0x80000000), id, &wrapped_new_record, 1);
+    CHECK(kanji_state_open(&state, &io, id, 3, summaries));
+    CHECK_U32(kanji_state_current_ordinal(&state), 2);
+
+    nor_init(nor);
+    fixture_bank(nor, 0, UINT32_C(0x80000000), id, &wrapped_new_record, 1);
+    fixture_bank(nor, 1, 0, id, &old_record, 1);
+    CHECK(kanji_state_open(&state, &io, id, 3, summaries));
+    CHECK_U32(kanji_state_current_ordinal(&state), 2);
     free(nor);
 }
 
@@ -617,6 +702,55 @@ static void test_compaction_erase_callback_failure_is_atomic(void)
     free(nor);
 }
 
+static void check_deceptive_compaction_write_is_rejected(
+    int deceptive_write, bool target_commit)
+{
+    nor_fake_t *nor = malloc(sizeof *nor);
+    uint8_t *old_bank = malloc(BANK_SIZE);
+    CHECK(nor != NULL && old_bank != NULL);
+    if (nor == NULL || old_bank == NULL) {
+        free(nor);
+        free(old_bank);
+        return;
+    }
+    nor_init(nor);
+    const uint8_t id[16] = { 0x8d, (uint8_t)deceptive_write,
+                             target_commit ? 1 : 0 };
+    fixture_full_bank(nor, id);
+    kanji_state_io_t io = nor_io(nor);
+    kanji_state_t state;
+    kanji_rating_summary_t summaries[3];
+    CHECK(kanji_state_open(&state, &io, id, 3, summaries));
+    kanji_rating_summary_t summaries_before[3];
+    memcpy(summaries_before, summaries, sizeof summaries_before);
+    memcpy(old_bank, nor->bytes, BANK_SIZE);
+
+    nor->deceptive_write_offset = BANK_SIZE + (target_commit ? 60u : 0u);
+    nor->deceptive_write_length = target_commit ? 4u : 60u;
+    nor->deceptive_write = deceptive_write;
+    CHECK(!kanji_state_append_grade(&state, 0, 1, KANJI_GRADE_EASY));
+    CHECK_U32(kanji_state_current_ordinal(&state), 0);
+    CHECK(memcmp(summaries_before, summaries, sizeof summaries_before) == 0);
+    CHECK(memcmp(old_bank, nor->bytes, BANK_SIZE) == 0);
+
+    nor->deceptive_write = DECEPTIVE_WRITE_NONE;
+    kanji_state_t rebooted;
+    kanji_rating_summary_t replay[3];
+    CHECK(kanji_state_open(&rebooted, &io, id, 3, replay));
+    CHECK_U32(kanji_state_current_ordinal(&rebooted), 0);
+    check_full_bank_replay(replay);
+    free(old_bank);
+    free(nor);
+}
+
+static void test_compaction_validates_header_and_commit_before_switch(void)
+{
+    check_deceptive_compaction_write_is_rejected(DECEPTIVE_WRITE_DROP, false);
+    check_deceptive_compaction_write_is_rejected(DECEPTIVE_WRITE_CORRUPT, false);
+    check_deceptive_compaction_write_is_rejected(DECEPTIVE_WRITE_DROP, true);
+    check_deceptive_compaction_write_is_rejected(DECEPTIVE_WRITE_CORRUPT, true);
+}
+
 static void test_catalog_id_mismatch_starts_fresh(void)
 {
     nor_fake_t *nor = malloc(sizeof *nor);
@@ -653,12 +787,14 @@ int main(void)
     test_erased_first_boot_commits_exact_header_and_zero_state();
     test_all_grades_and_saturation_survive_reboot();
     test_invalid_input_and_immediate_callback_failure_are_atomic();
+    test_wide_and_negative_congruent_grades_are_atomic();
     test_torn_record_replays_only_the_previous_commit();
     test_generation_selection_is_wrap_safe();
     test_power_loss_before_compaction_commit_keeps_old_bank();
     test_power_loss_after_compaction_commit_selects_new_bank();
     test_successful_compaction_retains_every_latest_summary();
     test_compaction_erase_callback_failure_is_atomic();
+    test_compaction_validates_header_and_commit_before_switch();
     test_catalog_id_mismatch_starts_fresh();
 
     if (failures != 0) {

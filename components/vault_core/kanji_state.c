@@ -52,21 +52,41 @@ static uint32_t state_crc32(const void *data, size_t length)
     return ~crc;
 }
 
-/* RFC-1982-style ordering.  A generation immediately after UINT32_MAX is 0. */
+/* RFC-1982-style ordering without an implementation-defined unsigned-to-signed
+ * conversion. A serial exactly half the uint32_t space away is ambiguous and
+ * therefore not newer in either direction. */
 static bool serial_newer(uint32_t candidate, uint32_t reference)
 {
-    return (int32_t)(candidate - reference) > 0;
+    const uint32_t delta = candidate - reference;
+    return delta != 0 && delta < UINT32_C(0x80000000);
 }
 
-static bool grade_valid(uint8_t grade)
+static unsigned select_newest_bank(const bank_candidate_t banks[2])
+{
+    if (banks[0].generation == banks[1].generation) return 0;
+    if (serial_newer(banks[1].generation, banks[0].generation)) return 1;
+    if (serial_newer(banks[0].generation, banks[1].generation)) return 0;
+
+    /* Exact half-range ambiguity: use the numerically greater generation so
+     * the choice is deterministic and independent of physical bank placement. */
+    return banks[1].generation > banks[0].generation ? 1u : 0u;
+}
+
+static bool encoded_grade_valid(uint8_t grade)
 {
     return grade >= (uint8_t)KANJI_GRADE_AGAIN &&
            grade <= (uint8_t)KANJI_GRADE_EASY;
 }
 
+static bool requested_grade_valid(kanji_grade_t grade)
+{
+    return grade == KANJI_GRADE_AGAIN || grade == KANJI_GRADE_HARD ||
+           grade == KANJI_GRADE_GOOD || grade == KANJI_GRADE_EASY;
+}
+
 static bool summary_reviewed(const kanji_rating_summary_t *summary)
 {
-    return grade_valid(summary->grade);
+    return encoded_grade_valid(summary->grade);
 }
 
 static uint32_t next_sequence(uint32_t sequence)
@@ -91,8 +111,8 @@ static void make_header(uint8_t header[KANJI_STATE_HEADER_SIZE],
     put_u32(header + 40, state_crc32(header, 40));
 }
 
-static bool header_valid(const uint8_t header[KANJI_STATE_HEADER_SIZE],
-                         const uint8_t catalog_id[16])
+static bool header_prefix_valid(const uint8_t header[KANJI_STATE_HEADER_SIZE],
+                                const uint8_t catalog_id[16])
 {
     return memcmp(header + 0, "KJSTATE1", 8) == 0 &&
            get_u16(header + 8) == STATE_SCHEMA &&
@@ -101,7 +121,13 @@ static bool header_valid(const uint8_t header[KANJI_STATE_HEADER_SIZE],
            get_u32(header + 32) == KANJI_STATE_BANK_SIZE &&
            get_u16(header + 36) == KANJI_STATE_RECORD_SIZE &&
            get_u16(header + 38) == 0 &&
-           get_u32(header + 40) == state_crc32(header, 40) &&
+           get_u32(header + 40) == state_crc32(header, 40);
+}
+
+static bool header_valid(const uint8_t header[KANJI_STATE_HEADER_SIZE],
+                         const uint8_t catalog_id[16])
+{
+    return header_prefix_valid(header, catalog_id) &&
            get_u32(header + 60) == STATE_COMMIT;
 }
 
@@ -125,7 +151,7 @@ static bool record_valid(const uint8_t encoded[KANJI_STATE_RECORD_SIZE],
     return get_u32(encoded + 0) != UINT32_MAX &&
            get_u16(encoded + 4) < card_count &&
            get_u16(encoded + 6) < card_count &&
-           grade_valid(encoded[12]) && get_u16(encoded + 14) == 0 &&
+           encoded_grade_valid(encoded[12]) && get_u16(encoded + 14) == 0 &&
            get_u32(encoded + 16) == state_crc32(encoded, 16);
 }
 
@@ -244,10 +270,16 @@ static bool compact(kanji_state_t *state)
     const uint32_t new_base = old_base == 0 ? KANJI_STATE_BANK_SIZE : 0;
     const uint32_t new_generation = state->generation + 1;
     uint8_t header[KANJI_STATE_HEADER_SIZE];
+    uint8_t verify[KANJI_STATE_HEADER_SIZE];
     make_header(header, new_generation, state->catalog_id);
 
     if (!state->io.erase_range(state->io.ctx, new_base, KANJI_STATE_BANK_SIZE) ||
         !state->io.write_at(state->io.ctx, new_base, header, 60)) {
+        return false;
+    }
+    if (!state->io.read_at(state->io.ctx, new_base, verify, 60) ||
+        memcmp(verify, header, 60) != 0 ||
+        !header_prefix_valid(verify, state->catalog_id)) {
         return false;
     }
 
@@ -265,6 +297,12 @@ static bool compact(kanji_state_t *state)
     put_u32(commit, STATE_COMMIT);
     if (!state->io.write_at(state->io.ctx, new_base + 60, commit,
                             sizeof commit)) {
+        return false;
+    }
+    put_u32(header + 60, STATE_COMMIT);
+    if (!state->io.read_at(state->io.ctx, new_base, verify, sizeof verify) ||
+        memcmp(verify, header, sizeof header) != 0 ||
+        !header_valid(verify, state->catalog_id)) {
         return false;
     }
 
@@ -305,7 +343,7 @@ bool kanji_state_open(kanji_state_t *state, const kanji_state_io_t *io,
         unsigned selected;
         if (!banks[0].valid) selected = 1;
         else if (!banks[1].valid) selected = 0;
-        else selected = serial_newer(banks[1].generation, banks[0].generation) ? 1 : 0;
+        else selected = select_newest_bank(banks);
         opened.active_bank = banks[selected].base;
         opened.generation = banks[selected].generation;
     } else {
@@ -348,18 +386,20 @@ bool kanji_state_append_grade(kanji_state_t *state, uint16_t ordinal,
 {
     if (state == NULL || !state->ready || ordinal >= state->card_count ||
         ordinal != state->current_ordinal || next_ordinal >= state->card_count ||
-        !grade_valid((uint8_t)grade)) {
+        !requested_grade_valid(grade)) {
         return false;
     }
+    const uint8_t grade_value = (uint8_t)grade;
 
     kanji_rating_summary_t updated = state->summaries[ordinal];
     updated.sequence = state->next_sequence;
     updated.next_ordinal = next_ordinal;
     if (updated.reps != UINT16_MAX) updated.reps++;
-    if (grade == KANJI_GRADE_AGAIN && updated.lapses != UINT16_MAX) {
+    if (grade_value == (uint8_t)KANJI_GRADE_AGAIN &&
+        updated.lapses != UINT16_MAX) {
         updated.lapses++;
     }
-    updated.grade = (uint8_t)grade;
+    updated.grade = grade_value;
     updated.flags = 0;
 
     uint8_t erased[KANJI_STATE_RECORD_SIZE];
