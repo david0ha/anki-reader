@@ -9,6 +9,14 @@ static bool valid_grade(kanji_grade_t grade)
     return grade >= KANJI_GRADE_AGAIN && grade <= KANJI_GRADE_EASY;
 }
 
+static bool remote_publication_is_current(const study_runtime_t *runtime)
+{
+    return runtime != NULL && runtime->data.source == KANJI_SOURCE_REMOTE &&
+           runtime->remote_publication_generation_valid &&
+           source_guard_accepts(&runtime->source_guard,
+                                runtime->remote_publication_generation);
+}
+
 static void lock_state(study_state_lock_t state)
 {
     if (state.lock != NULL) {
@@ -74,9 +82,15 @@ bool study_runtime_accepts_draw(const study_runtime_t *runtime,
     if (token->kind == STUDY_DRAW_PUBLICATION_ONLY) {
         return true;
     }
-    return token->kind == STUDY_DRAW_PUBLICATION_AND_SOURCE &&
-           source_guard_accepts(&runtime->source_guard,
-                                token->source_generation);
+    if (token->kind != STUDY_DRAW_PUBLICATION_AND_SOURCE ||
+        !source_guard_accepts(&runtime->source_guard,
+                              token->source_generation)) {
+        return false;
+    }
+    return runtime->data.source != KANJI_SOURCE_REMOTE ||
+           (remote_publication_is_current(runtime) &&
+            runtime->remote_publication_generation ==
+                token->source_generation);
 }
 
 study_restore_result_t study_runtime_restore(study_runtime_t *runtime,
@@ -129,6 +143,10 @@ study_grade_route_t study_runtime_capture_grade(study_runtime_t *runtime,
                                                 kanji_grade_t grade)
 {
     if (runtime == NULL || runtime->pending_grade_valid) {
+        return STUDY_GRADE_NONE;
+    }
+    if (runtime->data.source == KANJI_SOURCE_REMOTE &&
+        !remote_publication_is_current(runtime)) {
         return STUDY_GRADE_NONE;
     }
 

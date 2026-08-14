@@ -329,6 +329,19 @@ static void publication_revision_tracks_draws_not_source_only_changes(void)
     study_runtime_advance_source(&runtime);
     CHECK(!study_runtime_accepts_draw(&runtime, &old_remote_draw));
     CHECK(!study_runtime_accepts_draw(&runtime, &old_remote_status));
+
+    /* URL B has no card yet. A B failure/status token must not borrow URL A's
+     * still-current publication revision to redraw A, and A must not become a
+     * grade request addressed to B. */
+    const study_draw_token_t failed_b_status = study_runtime_capture_draw(
+        &runtime, STUDY_DRAW_PUBLICATION_AND_SOURCE);
+    CHECK(!study_runtime_accepts_draw(&runtime, &failed_b_status));
+    CHECK(study_runtime_capture_grade(&runtime, KANJI_GRADE_HARD) ==
+          STUDY_GRADE_NONE);
+    CHECK(!runtime.pending_grade_valid);
+
+    /* The first successful B response is a new publication even when its card
+     * bytes equal A. Only then may B draw and grade that remote card. */
     generation = source_guard_capture(&runtime.source_guard);
     CHECK(study_runtime_commit_remote(&runtime, &remote, generation, false) ==
           STUDY_REMOTE_PUBLISHED);
@@ -338,6 +351,9 @@ static void publication_revision_tracks_draws_not_source_only_changes(void)
     CHECK(study_runtime_commit_remote(&runtime, &remote, generation, false) ==
           STUDY_REMOTE_UNCHANGED);
     CHECK(study_runtime_accepts_draw(&runtime, &current_remote_draw));
+    CHECK(study_runtime_capture_grade(&runtime, KANJI_GRADE_HARD) ==
+          STUDY_GRADE_REMOTE);
+    runtime.pending_grade_valid = false;
 
     /* A later remote publication also supersedes a queued local-only draw. */
     catalog.current = card("local-again", KANJI_SOURCE_CATALOG);

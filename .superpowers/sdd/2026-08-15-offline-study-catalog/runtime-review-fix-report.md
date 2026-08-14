@@ -289,5 +289,45 @@ UserApp_TaskInit                       96
 
 No hardware was flashed.
 
+## Remote provenance scoped re-review
+
+The next scoped review found that a token captured after a URL switch could
+combine the old remote card's still-current publication revision with the new
+source generation. A failed URL B fetch could therefore redraw URL A's card,
+and a button press could capture A's remote card ID as a grade for B.
+
+The exact production-helper sequence was added before the fix:
+
+1. A publishes a remote card and records generation A;
+2. switching to B advances the source and rejects A's queued draw;
+3. B fails and captures a status token while A is still the runtime card;
+4. the B status token must be rejected and remote grade capture must refuse;
+5. B succeeds with byte-identical card data, creating a new B publication;
+6. the B draw is accepted and the card becomes gradable.
+
+The RED reported four assertions: the B failure token was accepted, grade
+capture returned remote, the pending slot became occupied, and the subsequent
+B card could not be graded. `study_runtime_accepts_draw()` now accepts a remote
+publication-and-source token only when the token matches the current source
+and the runtime card's recorded publication generation also matches that
+source. `study_runtime_capture_grade()` applies the same provenance gate before
+forming a remote request. Catalog capture remains unchanged.
+
+The existing remote-epoch rule makes B's first valid same-card response a new
+publication, updating the recorded provenance; subsequent same-generation,
+same-card polls remain unchanged. Until that response, A stays available only
+as stale, ungradable internal state and cannot be sent to B.
+
+Final evidence after the fix:
+
+- focused user-app: all four executables report zero failures;
+- ASan+UBSan study-runtime test with halt-on-error: zero failures;
+- provisioning: `40 tests, 87 checks, 0 failures`;
+- ESP-IDF 5.4.3 `study_source.c` and dependent `user_app.cpp` objects compile;
+- the hard 2 KiB frame replay exits zero; provenance helper and draw/grade
+  functions remain at 32/32/96-byte static frames.
+
+No hardware was flashed.
+
 Commit identity is reported in the parent handoff because a commit cannot
 contain its own final hash.
