@@ -92,7 +92,9 @@ size_t kanji_text_collapse_whitespace(char *dst, size_t dst_size,
         const size_t separator = pending_space ? 1 : 0;
         if (out + separator + n >= dst_size) break;
         if (pending_space) dst[out++] = ' ';
-        memcpy(dst + out, src + i, n);
+        /* Normalization can shift a UTF-8 sequence left after stripped or
+         * collapsed whitespace, so its source and destination may overlap. */
+        memmove(dst + out, src + i, n);
         out += n;
         i += n;
         pending_space = false;

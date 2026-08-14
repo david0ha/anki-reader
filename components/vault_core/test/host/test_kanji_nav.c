@@ -74,6 +74,73 @@ static void check_availability_matches_press(const kanji_nav_t *original,
                   action != KANJI_ACT_NONE);
         CHECK(same_nav(original, &before));
     }
+
+    const kanji_button_t invalid[] = {
+        (kanji_button_t)-1,
+        (kanji_button_t)KANJI_BTN_COUNT,
+    };
+    for (size_t i = 0; i < sizeof invalid / sizeof invalid[0]; i++) {
+        const kanji_nav_t before = *original;
+        CHECK(!kanji_nav_can_press(original, invalid[i], k));
+        CHECK(same_nav(original, &before));
+    }
+}
+
+static void add_unique_nav_state(kanji_nav_t *states, size_t *count,
+                                 size_t capacity, const kanji_nav_t *candidate)
+{
+    for (size_t i = 0; i < *count; i++) {
+        if (same_nav(&states[i], candidate)) return;
+    }
+    CHECK(*count < capacity);
+    if (*count < capacity) states[(*count)++] = *candidate;
+}
+
+/* The footer and physical controls must agree for every state that buttons or
+ * the companion app can put on screen. Seed all sheet entries, then close over
+ * real button presses so every page and grade variation is checked. */
+static void check_availability_for_every_reachable_state(const kanji_t *k)
+{
+    enum { MAX_STATES = 128 };
+    kanji_nav_t states[MAX_STATES];
+    size_t count = 0;
+    const kanji_nav_t question = at_question();
+    add_unique_nav_state(states, &count, MAX_STATES, &question);
+
+    for (int revealed = 0; revealed < 2; revealed++) {
+        for (int grade = KANJI_GRADE_AGAIN; grade <= KANJI_GRADE_EASY; grade++) {
+            kanji_nav_t base = at_question();
+            base.revealed = revealed != 0;
+            base.grade = (kanji_grade_t)grade;
+            for (int screen = KANJI_SCREEN_DESCRIPTION;
+                 screen < KANJI_SCREEN_COUNT; screen++) {
+                kanji_nav_t sheet = base;
+                if (kanji_nav_set_screen(&sheet, (kanji_screen_t)screen, k)) {
+                    add_unique_nav_state(states, &count, MAX_STATES, &sheet);
+                }
+            }
+        }
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        check_availability_matches_press(&states[i], k);
+        for (int button = KANJI_BTN_KEY0; button < KANJI_BTN_COUNT; button++) {
+            kanji_nav_t next = states[i];
+            kanji_nav_press(&next, (kanji_button_t)button, k);
+            add_unique_nav_state(states, &count, MAX_STATES, &next);
+        }
+    }
+}
+
+static kanji_t card_with_description_mask(int mask)
+{
+    kanji_t k = no_card();
+    k.card.valid = true;
+    k.card.comment_count = KANJI_COMMENTS_PER_PAGE + 1;
+    if (mask & 1) kanji_str_copy(k.card.description, KANJI_BODY_MAX, "글자의 유래");
+    if (mask & 2) kanji_str_copy(k.card.hook_body, KANJI_BODY_MAX, "기억 힌트");
+    if (mask & 4) k.card.part_count = 1;
+    return k;
 }
 
 /* --- the starting state --------------------------------------------------- */
@@ -637,6 +704,32 @@ static void test_control_availability_delegates_to_navigation(void)
     }
 }
 
+static void test_control_availability_matches_every_state_space_oracle(void)
+{
+    /* A session with no card can still expose every FSRS page. */
+    const kanji_t empty = no_card();
+    check_availability_for_every_reachable_state(&empty);
+
+    /* Shape, hook and parts are independently optional. Every semantic mask
+     * gets question/answer, both sheet underlays, all grades and all pages. */
+    for (int mask = 0; mask < 8; mask++) {
+        const kanji_t k = card_with_description_mask(mask);
+        check_availability_for_every_reachable_state(&k);
+    }
+
+    /* can_press() must not normalize a caller's invalid persisted state; the
+     * real press operates on its own copy, so compare its action only. */
+    const kanji_t rich = card_with_description_mask(7);
+    const kanji_nav_t invalid[] = {
+        { false, (kanji_sheet_t)-1, -1, (kanji_grade_t)0 },
+        { true, (kanji_sheet_t)KANJI_SHEET_COUNT, 99,
+          (kanji_grade_t)(KANJI_GRADE_EASY + 1) },
+    };
+    for (size_t i = 0; i < sizeof invalid / sizeof invalid[0]; i++) {
+        check_availability_matches_press(&invalid[i], &rich);
+    }
+}
+
 /* --- the footer legend ---------------------------------------------------- */
 
 static void test_the_legend_says_what_the_buttons_currently_do(void)
@@ -734,6 +827,7 @@ int main(void)
     test_no_screen_the_app_can_set_is_a_dead_end();
     test_key2_always_refreshes_and_never_moves_the_nav();
     test_control_availability_delegates_to_navigation();
+    test_control_availability_matches_every_state_space_oracle();
     test_the_legend_says_what_the_buttons_currently_do();
     test_every_screen_has_a_title();
     test_no_button_from_no_state_produces_an_impossible_state();

@@ -84,6 +84,18 @@ static void test_display_prose_collapses_ascii_whitespace(void)
               strlen("日本語 한국어"));
     CHECK_STR(inplace, "日本語 한국어");
 
+    /* Leading whitespace shifts a multibyte source glyph left over its own
+     * bytes. These one- and two-byte displacements must be overlap-safe. */
+    char shifted_one[] = "\t会う";
+    CHECK_INT(kanji_text_collapse_whitespace(shifted_one, sizeof shifted_one,
+                                              shifted_one), strlen("会う"));
+    CHECK_STR(shifted_one, "会う");
+
+    char shifted_two[] = " \t한국";
+    CHECK_INT(kanji_text_collapse_whitespace(shifted_two, sizeof shifted_two,
+                                              shifted_two), strlen("한국"));
+    CHECK_STR(shifted_two, "한국");
+
     char too_small[7] = { 'x', 'x', 'x', 'x', 'x', 'x', 'x' };
     CHECK_INT(kanji_text_collapse_whitespace(too_small, sizeof too_small,
                                               "日本語 한국어"), 6);
