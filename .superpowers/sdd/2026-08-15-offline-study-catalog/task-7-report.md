@@ -320,3 +320,65 @@ with zero failures, and a new simulator build. Logs use
 app-flash preserves the existing catalog and usable progress; full/catalog
 flash physically preserves state bytes, but replay occurs only when the active
 catalog ID is unchanged. No hardware was flashed.
+
+## Task 7 re-review fix round 2 — flash token grammar
+
+The second review found that the interval arithmetic was sound but its input
+parser was still line-oriented. Installed ESP-IDF 5.4.3 uses esptool 4.10.0.
+Inspection of that installed source established the actual grammar:
+
+- `esptool.expand_file_arguments()` runs `shlex.split()` on every argfile line
+  and concatenates all results into one token stream; newlines have no parsing
+  significance.
+- `write_flash` accepts positional address/filename pairs plus explicit
+  zero- or one-value options. `AddrFilenamePairAction` consumes all positional
+  pairs and stats their files.
+- `--encrypt-files` is a separate variable-length address/filename group;
+  ESP-IDF's `project_include.cmake` emits it when encrypted and plaintext
+  images are mixed.
+
+The pre-fix parser instead skipped an entire line whenever its first token
+started with `--`. The complete focused RED log is
+`/tmp/task7-round2-token-stream-red-complete.log`:
+
+```text
+FAIL: normal flash cannot hide a state payload after same-line options
+FAIL: app-flash cannot hide a catalog payload after same-line options
+FAIL: unsupported encrypted payload groups are rejected, never skipped
+FAIL: unknown option arity is rejected instead of guessed or skipped
+FAIL: whole-flash erase cannot masquerade as state-preserving flash
+83 checks, 5 failures
+```
+
+The replacement parser flattens the file exactly as esptool does, consumes only
+the installed `write_flash` options with explicitly known arities, gathers all
+remaining tokens into address/file pairs, stats every file, and rejects odd
+trailing tokens or unknown options. This acceptance path deliberately rejects
+`--encrypt-files` rather than guessing where its variable-length group ends.
+It also rejects `--erase-all`/`-e`, because accepting that flag would invalidate
+the claim that state bytes remain physically untouched even with no state
+payload. A separate mutation that removed the odd-token check demonstrated that
+an unpaired trailing token would otherwise be discarded; the focused
+`/tmp/task7-round2-malformed-red.log` records that expected failure, and the
+restored check rejects it.
+
+Focused GREEN is `/tmp/task7-round2-token-stream-green-final.log` (`ok: 84 checks`).
+The unchanged real generated `flash_args` and `app-flash_args` remain accepted.
+`/tmp/task7-round2-full-helper-mutations.log` also runs the complete metadata
+helper on copies of the real build arguments: it rejects the same-line normal
+payload at `[0xF81000,0xF82000)` and the app-flash payload at
+`[0x820000,0x821000)` with the expected protected-partition diagnostics.
+The required live database plus the real external IDF build produced:
+
+```text
+LIVE: decks=10 cards=9956 blocks=156 bytes=3441578
+formula_checks=9956 formula_nonempty=9196 formula_empty=760
+IDF flash metadata: app=[0x10000,0x5802b0)
+catalog=[0x810000,0xb583aa) state=[0xf80000,0x1000000) untouched
+ok: 10054 checks
+```
+
+That GREEN log is `/tmp/task7-round2-live-idf-green-final.log`. No firmware source,
+generated image, `progress.md`, or managed dependency was changed, and no
+hardware was flashed. This round is submitted for parent-coordinated re-review;
+it does not self-declare the review clean.
