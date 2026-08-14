@@ -191,6 +191,16 @@ const kanji_sheet_layout_t *kanji_sheet_layout(bool with_stats)
     return with_stats ? &SHEET_WITH_STATS : &SHEET_PLAIN;
 }
 
+void kanji_rect_to_half_open(const kanji_rect_t *r,
+                             int *x1, int *y1, int *x2, int *y2)
+{
+    if (!r) return;
+    if (x1) *x1 = r->x;
+    if (y1) *y1 = r->y;
+    if (x2) *x2 = r->x + r->w;
+    if (y2) *y2 = r->y + r->h;
+}
+
 /* --- content-dependent choices -------------------------------------------- */
 
 /* Five characters at 56 px is about 300 px, which clears the rail with room to

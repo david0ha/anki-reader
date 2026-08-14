@@ -260,6 +260,47 @@ static void test_the_dock_is_byte_aligned(void)
     CHECK(a->dock.h >= 56);
 }
 
+/* The panel refresh API takes half-open bounds: x2/y2 name the first pixel
+ * outside the window. A -1 conversion would leave the dock's last row and
+ * column stale after a rating change. */
+static void test_rectangles_convert_to_half_open_bounds(void)
+{
+    const kanji_rect_t r = { 3, 4, 5, 6 };
+    int x1, y1, x2, y2;
+
+    kanji_rect_to_half_open(&r, &x1, &y1, &x2, &y2);
+
+    CHECK_INT(x1, 3);
+    CHECK_INT(y1, 4);
+    CHECK_INT(x2, 8);
+    CHECK_INT(y2, 10);
+}
+
+static void test_rectangle_conversion_allows_nullable_outputs(void)
+{
+    const kanji_rect_t r = { 3, 4, 5, 6 };
+    int x1 = -1;
+    int y2 = -1;
+
+    kanji_rect_to_half_open(&r, &x1, NULL, NULL, &y2);
+
+    CHECK_INT(x1, 3);
+    CHECK_INT(y2, 10);
+}
+
+static void test_the_dock_converts_to_its_current_half_open_size(void)
+{
+    const kanji_rect_t *dock = &kanji_answer_layout()->dock;
+    int x1, y1, x2, y2;
+
+    kanji_rect_to_half_open(dock, &x1, &y1, &x2, &y2);
+
+    CHECK_INT(x1, dock->x);
+    CHECK_INT(y1, dock->y);
+    CHECK_INT(x2 - x1, dock->w);
+    CHECK_INT(y2 - y1, dock->h);
+}
+
 /* --- the sheets ----------------------------------------------------------- */
 
 static void test_a_sheet_is_a_strip_and_a_page(void)
@@ -361,6 +402,9 @@ int main(void)
     test_the_answer_band_carries_the_word_and_the_prose_is_below_it();
     test_the_grade_dock_contains_everything_it_draws();
     test_the_dock_is_byte_aligned();
+    test_rectangles_convert_to_half_open_bounds();
+    test_rectangle_conversion_allows_nullable_outputs();
+    test_the_dock_converts_to_its_current_half_open_size();
     test_a_sheet_is_a_strip_and_a_page();
     test_the_fsrs_sheet_gives_up_page_height_for_the_card_numbers();
     test_the_hero_face_shrinks_before_it_truncates();

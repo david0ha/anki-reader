@@ -47,6 +47,13 @@ typedef struct {
     int x, y, w, h;
 } kanji_rect_t;
 
+/* Convert an origin-and-size rectangle to panel bounds [x1, x2) × [y1, y2).
+ * The upper bounds are exclusive, matching epd_refresh_partial_area(); NULL
+ * output pointers are ignored, and a NULL rectangle leaves every output
+ * untouched. */
+void kanji_rect_to_half_open(const kanji_rect_t *r,
+                             int *x1, int *y1, int *x2, int *y2);
+
 /* --- shared chrome -------------------------------------------------------- */
 
 typedef struct {

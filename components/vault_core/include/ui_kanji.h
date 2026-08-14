@@ -57,7 +57,9 @@ void ui_kanji_set_nav(const kanji_nav_t *nav);
 /* Header indicators. */
 void ui_kanji_set_status(const ui_status_t *st);
 
-/* The rectangle the grade cursor lives in, in panel coordinates.
+/* The rectangle the grade cursor lives in, in panel coordinates. `x2` and
+ * `y2` are exclusive, so the returned window is [x1, x2) × [y1, y2), matching
+ * epd_refresh_partial_area().
  *
  * This is the ONLY partial refresh on the board, and it exists for one reason:
  * choosing among four ratings takes up to three presses, and three full

@@ -86,7 +86,9 @@ uint8_t *epd_framebuffer(void);
  * — epd_last_full_ms() reports what it actually took on this board. */
 void epd_refresh_full(void);
 
-/* Partial update of one rectangle. No flash, leaves faint ghosting.
+/* Partial update of one rectangle [x1, x2) × [y1, y2). `x2` and `y2` are
+ * exclusive; the driver converts them to the controller's inclusive endpoint.
+ * No flash, leaves faint ghosting.
  *
  * x is snapped outward to a byte boundary (the controller addresses source
  * lines in groups of 8), so the refreshed area may be up to 7 px wider on each

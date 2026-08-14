@@ -325,9 +325,5 @@ void ui_kanji_set_status(const ui_status_t *st)
 
 void ui_kanji_dock_area(int *x1, int *y1, int *x2, int *y2)
 {
-    const kanji_answer_layout_t *a = kanji_answer_layout();
-    if (x1) *x1 = a->dock.x;
-    if (y1) *y1 = a->dock.y;
-    if (x2) *x2 = a->dock.x + a->dock.w - 1;
-    if (y2) *y2 = a->dock.y + a->dock.h - 1;
+    kanji_rect_to_half_open(&kanji_answer_layout()->dock, x1, y1, x2, y2);
 }
