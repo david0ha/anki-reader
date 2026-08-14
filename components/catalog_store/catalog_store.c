@@ -2,50 +2,29 @@
 
 #include <limits.h>
 #include <stdlib.h>
-#include <string.h>
 
+#include "catalog_store_core.h"
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
-#include "kanji_catalog.h"
-#include "kanji_state.h"
 #include "zlib.h"
 
 #define CATALOG_PARTITION_TYPE ((esp_partition_type_t)0x40)
 #define STATE_PARTITION_TYPE ((esp_partition_type_t)0x41)
 #define STORE_PARTITION_SUBTYPE ((esp_partition_subtype_t)0x00)
-#define CATALOG_PARTITION_OFFSET 0x810000u
-#define CATALOG_PARTITION_SIZE 0x770000u
-#define STATE_PARTITION_OFFSET 0xF80000u
-#define STATE_PARTITION_SIZE 0x080000u
 
-typedef struct {
-    const esp_partition_t *catalog_partition;
-    const esp_partition_t *state_partition;
-    void *compressed;
-    size_t compressed_capacity;
-    void *raw;
-    kanji_rating_summary_t *summaries;
-    kanji_catalog_t catalog;
-    kanji_state_t state;
-    kanji_t current;
-    uint16_t ordinal;
-    bool ready;
-} catalog_store_runtime_t;
+static catalog_store_core_t s_store;
 
-static catalog_store_runtime_t s_store;
-
-static void *workspace_alloc(size_t size)
+static void *workspace_alloc(void *context, size_t size)
 {
+    (void)context;
     void *memory = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     return memory != NULL ? memory : malloc(size);
 }
 
-static void runtime_release(catalog_store_runtime_t *runtime)
+static void workspace_free(void *context, void *memory)
 {
-    free(runtime->summaries);
-    free(runtime->raw);
-    free(runtime->compressed);
-    memset(runtime, 0, sizeof *runtime);
+    (void)context;
+    free(memory);
 }
 
 static bool partition_read(void *context, uint32_t offset,
@@ -107,132 +86,59 @@ static uint32_t zlib_crc32(const void *data, size_t length)
     return (uint32_t)crc;
 }
 
-static const esp_partition_t *find_catalog_partition(void)
+static bool find_partition(void *context, catalog_store_partition_kind_t kind,
+                           catalog_store_partition_t *out)
 {
+    (void)context;
+    const bool catalog = kind == CATALOG_STORE_PARTITION_CATALOG;
     const esp_partition_t *partition = esp_partition_find_first(
-        CATALOG_PARTITION_TYPE, STORE_PARTITION_SUBTYPE, "catalog");
-    if (partition == NULL || partition->address != CATALOG_PARTITION_OFFSET ||
-        partition->size != CATALOG_PARTITION_SIZE || !partition->readonly) {
-        return NULL;
-    }
-    return partition;
-}
-
-static const esp_partition_t *find_state_partition(void)
-{
-    const esp_partition_t *partition = esp_partition_find_first(
-        STATE_PARTITION_TYPE, STORE_PARTITION_SUBTYPE, "study_state");
-    if (partition == NULL || partition->address != STATE_PARTITION_OFFSET ||
-        partition->size != STATE_PARTITION_SIZE || partition->readonly) {
-        return NULL;
-    }
-    return partition;
+        catalog ? CATALOG_PARTITION_TYPE : STATE_PARTITION_TYPE,
+        STORE_PARTITION_SUBTYPE, catalog ? "catalog" : "study_state");
+    if (partition == NULL || out == NULL) return false;
+    *out = (catalog_store_partition_t){
+        .context = (void *)partition,
+        .type = (uint8_t)partition->type,
+        .subtype = (uint8_t)partition->subtype,
+        .address = partition->address,
+        .size = partition->size,
+        .readonly = partition->readonly,
+    };
+    return true;
 }
 
 bool catalog_store_init(void)
 {
-    catalog_store_runtime_t opened = {0};
-    opened.catalog_partition = find_catalog_partition();
-    opened.state_partition = find_state_partition();
-    if (opened.catalog_partition == NULL || opened.state_partition == NULL) {
-        return false;
-    }
-
-    opened.compressed_capacity =
-        (size_t)compressBound(KANJI_CATALOG_MAX_RAW_BLOCK);
-    opened.compressed = workspace_alloc(opened.compressed_capacity);
-    opened.raw = workspace_alloc(KANJI_CATALOG_MAX_RAW_BLOCK);
-    if (opened.compressed == NULL || opened.raw == NULL) {
-        runtime_release(&opened);
-        return false;
-    }
-
-    const kanji_catalog_io_t catalog_io = {
-        .context = (void *)opened.catalog_partition,
+    const catalog_store_ops_t ops = {
+        .alloc = workspace_alloc,
+        .dealloc = workspace_free,
+        .find_partition = find_partition,
         .read = partition_read,
+        .write = partition_write,
+        .erase = partition_erase,
         .inflate = inflate_exact,
         .crc32 = zlib_crc32,
+        .compressed_capacity =
+            (size_t)compressBound(KANJI_CATALOG_MAX_RAW_BLOCK),
     };
-    if (!kanji_catalog_open(&opened.catalog, &catalog_io,
-                            opened.catalog_partition->size,
-                            opened.compressed, opened.compressed_capacity,
-                            opened.raw, KANJI_CATALOG_MAX_RAW_BLOCK)) {
-        runtime_release(&opened);
-        return false;
-    }
-
-    const uint32_t card_count = kanji_catalog_card_count(&opened.catalog);
-    if (card_count == 0 || card_count > UINT16_MAX ||
-        card_count > SIZE_MAX / sizeof *opened.summaries) {
-        runtime_release(&opened);
-        return false;
-    }
-    opened.summaries = workspace_alloc(card_count * sizeof *opened.summaries);
-    if (opened.summaries == NULL) {
-        runtime_release(&opened);
-        return false;
-    }
-
-    const kanji_state_io_t state_io = {
-        .read_at = partition_read,
-        .write_at = partition_write,
-        .erase_range = partition_erase,
-        .ctx = (void *)opened.state_partition,
-    };
-    if (!kanji_state_open(&opened.state, &state_io,
-                          kanji_catalog_id(&opened.catalog),
-                          (uint16_t)card_count, opened.summaries)) {
-        runtime_release(&opened);
-        return false;
-    }
-
-    opened.ordinal = kanji_state_current_ordinal(&opened.state);
-    if (!kanji_catalog_read_card(&opened.catalog, opened.ordinal,
-                                 &opened.current)) {
-        runtime_release(&opened);
-        return false;
-    }
-    opened.ready = true;
-
-    catalog_store_runtime_t previous = s_store;
-    s_store = opened;
-    runtime_release(&previous);
-    return true;
+    return catalog_store_core_init(&s_store, &ops);
 }
 
 bool catalog_store_available(void)
 {
-    return s_store.ready;
+    return catalog_store_core_available(&s_store);
 }
 
 const kanji_t *catalog_store_current(void)
 {
-    return s_store.ready ? &s_store.current : NULL;
+    return catalog_store_core_current(&s_store);
 }
 
 uint16_t catalog_store_ordinal(void)
 {
-    return s_store.ready ? s_store.ordinal : 0;
+    return catalog_store_core_ordinal(&s_store);
 }
 
 bool catalog_store_grade(kanji_grade_t grade)
 {
-    if (!s_store.ready) return false;
-
-    const uint32_t count = kanji_catalog_card_count(&s_store.catalog);
-    if (count == 0 || count > UINT16_MAX) return false;
-    const uint16_t next_ordinal = (uint16_t)(((uint32_t)s_store.ordinal + 1u) % count);
-
-    kanji_t next;
-    if (!kanji_catalog_read_card(&s_store.catalog, next_ordinal, &next)) {
-        return false;
-    }
-    if (!kanji_state_append_grade(&s_store.state, s_store.ordinal,
-                                  next_ordinal, grade)) {
-        return false;
-    }
-
-    s_store.ordinal = next_ordinal;
-    s_store.current = next;
-    return true;
+    return catalog_store_core_grade(&s_store, grade);
 }
