@@ -48,6 +48,16 @@ typedef enum {
     KANJI_SHEET_COUNT,
 } kanji_sheet_t;
 
+/* The semantic content blocks that may appear in the description sheet. Their
+ * order is its reading order; missing blocks are omitted rather than rendered
+ * as empty pages. */
+typedef enum {
+    KANJI_DESC_PAGE_NONE = 0,
+    KANJI_DESC_PAGE_SHAPE,
+    KANJI_DESC_PAGE_HOOK,
+    KANJI_DESC_PAGE_PARTS,
+} kanji_desc_page_t;
+
 /* What the caller should do about the press. Exactly one of these; the refresh
  * kind is the point of the enum, because on e-Paper it is the difference
  * between a silent update and a two-second flash of the whole panel. */
@@ -122,10 +132,19 @@ const char *kanji_screen_title(kanji_screen_t s);
  * by zero and an empty comments list still has a page to say so on. */
 int kanji_sheet_pages(const kanji_t *k, kanji_sheet_t sheet);
 
+/* Which semantic description block is shown at the zero-based page, or NONE
+ * when the card has no such block. */
+kanji_desc_page_t kanji_desc_page_at(const kanji_t *k, int page);
+
 /* Apply one press. `k` is read for nothing but "is there a card at all" and the
  * open sheet's page count, so a NULL snapshot behaves like an empty one. */
 kanji_nav_result_t kanji_nav_press(kanji_nav_t *nav, kanji_button_t btn,
                                    const kanji_t *k);
+
+/* Whether pressing a control would produce an action. The query has the same
+ * behavior as kanji_nav_press(), but never changes the supplied nav state. */
+bool kanji_nav_can_press(const kanji_nav_t *nav, kanji_button_t button,
+                         const kanji_t *k);
 
 /* Jump straight to `screen`, for the companion app. Returns whether the screen
  * was ACCEPTED, not whether anything moved — a refused screen leaves *nav

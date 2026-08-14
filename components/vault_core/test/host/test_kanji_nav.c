@@ -54,6 +54,28 @@ static kanji_nav_t at_answer(void)
     return n;
 }
 
+static bool same_nav(const kanji_nav_t *a, const kanji_nav_t *b)
+{
+    return a->revealed == b->revealed && a->sheet == b->sheet &&
+           a->sheet_page == b->sheet_page && a->grade == b->grade;
+}
+
+/* Availability has no independent state machine: it must be exactly the
+ * result of trying a press on a copy, without touching the rendered state. */
+static void check_availability_matches_press(const kanji_nav_t *original,
+                                             const kanji_t *k)
+{
+    for (int b = 0; b < KANJI_BTN_COUNT; b++) {
+        const kanji_nav_t before = *original;
+        kanji_nav_t probe = *original;
+        const kanji_action_t action = kanji_nav_press(
+            &probe, (kanji_button_t)b, k).action;
+        CHECK_INT(kanji_nav_can_press(original, (kanji_button_t)b, k),
+                  action != KANJI_ACT_NONE);
+        CHECK(same_nav(original, &before));
+    }
+}
+
 /* --- the starting state --------------------------------------------------- */
 
 static void test_reset_is_question_side_up_with_the_cursor_on_good(void)
@@ -151,6 +173,65 @@ static void test_fsrs_opens_without_a_card_but_the_others_do_not(void)
     n = at_question();
     CHECK_INT(kanji_nav_press(&n, KANJI_BTN_KEY1, &k).action, KANJI_ACT_NONE);
     CHECK_INT(n.sheet, KANJI_SHEET_NONE);
+}
+
+/* The 설명 sheet is a semantic sequence, not three fixed boxes with blank
+ * pages. This catches a page map that treats whitespace as prose or reorders
+ * shape, hook and component sections. */
+static void test_description_pages_follow_nonempty_semantic_sections(void)
+{
+    const kanji_desc_page_t expected[8][3] = {
+        { KANJI_DESC_PAGE_NONE },
+        { KANJI_DESC_PAGE_SHAPE },
+        { KANJI_DESC_PAGE_HOOK },
+        { KANJI_DESC_PAGE_SHAPE, KANJI_DESC_PAGE_HOOK },
+        { KANJI_DESC_PAGE_PARTS },
+        { KANJI_DESC_PAGE_SHAPE, KANJI_DESC_PAGE_PARTS },
+        { KANJI_DESC_PAGE_HOOK, KANJI_DESC_PAGE_PARTS },
+        { KANJI_DESC_PAGE_SHAPE, KANJI_DESC_PAGE_HOOK, KANJI_DESC_PAGE_PARTS },
+    };
+
+    for (int mask = 0; mask < 8; mask++) {
+        kanji_t k = no_card();
+        k.card.valid = true;
+        if (mask & 1) kanji_str_copy(k.card.description, KANJI_BODY_MAX, "글자 유래");
+        if (mask & 2) kanji_str_copy(k.card.hook_body, KANJI_BODY_MAX, "기억 힌트");
+        if (mask & 4) k.card.part_count = 1;
+
+        const int pages = ((mask & 1) != 0) + ((mask & 2) != 0) + ((mask & 4) != 0);
+        CHECK_INT(kanji_sheet_pages(&k, KANJI_SHEET_DESCRIPTION), pages ? pages : 1);
+        for (int page = 0; page < 3; page++) {
+            CHECK_INT(kanji_desc_page_at(&k, page), expected[mask][page]);
+        }
+        CHECK_INT(kanji_desc_page_at(&k, 3), KANJI_DESC_PAGE_NONE);
+    }
+
+    kanji_t whitespace = no_card();
+    whitespace.card.valid = true;
+    kanji_str_copy(whitespace.card.description, KANJI_BODY_MAX, " \t\r\n ");
+    kanji_str_copy(whitespace.card.hook_body, KANJI_BODY_MAX, "\f\v ");
+    CHECK_INT(kanji_desc_page_at(&whitespace, 0), KANJI_DESC_PAGE_NONE);
+
+    kanji_t rich = rich_card();
+    kanji_nav_t n = at_question();
+    kanji_nav_press(&n, KANJI_BTN_KEY1, &rich);
+    CHECK_INT(n.sheet_page, 0);
+    for (int page = 1; page <= 2; page++) {
+        CHECK_INT(kanji_nav_press(&n, KANJI_BTN_KEY0, &rich).action,
+                  KANJI_ACT_DRAW_FULL);
+        CHECK_INT(n.sheet_page, page);
+    }
+    CHECK_INT(kanji_nav_press(&n, KANJI_BTN_KEY0, &rich).action,
+              KANJI_ACT_DRAW_FULL);
+    CHECK_INT(n.sheet_page, 0);
+
+    kanji_t one_page = no_card();
+    one_page.card.valid = true;
+    kanji_str_copy(one_page.card.description, KANJI_BODY_MAX, "한 문단");
+    n = at_question();
+    kanji_nav_press(&n, KANJI_BTN_KEY1, &one_page);
+    CHECK_INT(kanji_nav_press(&n, KANJI_BTN_KEY0, &one_page).action,
+              KANJI_ACT_NONE);
 }
 
 /* --- the answer screen: the grade dock ------------------------------------ */
@@ -502,6 +583,60 @@ static void test_key2_always_refreshes_and_never_moves_the_nav(void)
     }
 }
 
+static void test_control_availability_delegates_to_navigation(void)
+{
+    kanji_t empty = no_card();
+    kanji_t rich = rich_card();
+    kanji_nav_t question = at_question();
+    CHECK(!kanji_nav_can_press(NULL, KANJI_BTN_KEY0, &rich));
+    CHECK(!kanji_nav_can_press(&question, (kanji_button_t)KANJI_BTN_COUNT,
+                                &empty));
+
+    /* No-card question: reveal and hint are hidden; refresh and scheduler
+     * information remain useful. */
+    CHECK(!kanji_nav_can_press(&question, KANJI_BTN_KEY0, &empty));
+    CHECK(!kanji_nav_can_press(&question, KANJI_BTN_KEY1, &empty));
+    CHECK(kanji_nav_can_press(&question, KANJI_BTN_KEY2, &empty));
+    CHECK(kanji_nav_can_press(&question, KANJI_BTN_BOOT, &empty));
+    check_availability_matches_press(&question, &empty);
+
+    check_availability_matches_press(&question, &rich);
+
+    kanji_nav_t rich_answer = at_question();
+    kanji_nav_press(&rich_answer, KANJI_BTN_KEY0, &rich);
+    check_availability_matches_press(&rich_answer, &rich);
+
+    kanji_t no_description = rich_card();
+    no_description.card.description[0] = '\0';
+    no_description.card.hook_body[0] = '\0';
+    no_description.card.part_count = 0;
+    kanji_nav_t answer = at_question();
+    kanji_nav_press(&answer, KANJI_BTN_KEY0, &no_description);
+    CHECK(!kanji_nav_can_press(&answer, KANJI_BTN_BOOT, &no_description));
+    check_availability_matches_press(&answer, &no_description);
+
+    kanji_t one_page = no_card();
+    one_page.card.valid = true;
+    kanji_str_copy(one_page.card.description, KANJI_BODY_MAX, "한 문단");
+    kanji_nav_t description = at_question();
+    kanji_nav_press(&description, KANJI_BTN_KEY1, &one_page);
+    CHECK(!kanji_nav_can_press(&description, KANJI_BTN_KEY0, &one_page));
+    check_availability_matches_press(&description, &one_page);
+
+    kanji_nav_t multi[3] = { at_question(), at_question(), at_question() };
+    kanji_nav_press(&multi[0], KANJI_BTN_KEY1, &rich); /* three-page 설명 */
+    kanji_nav_press(&multi[1], KANJI_BTN_KEY1, &rich);
+    kanji_nav_press(&multi[1], KANJI_BTN_BOOT, &rich); /* two-page 댓글 */
+    kanji_nav_press(&multi[2], KANJI_BTN_BOOT, &rich); /* three-page FSRS */
+    for (size_t s = 0; s < sizeof multi / sizeof multi[0]; s++) {
+        const int pages = kanji_sheet_pages(&rich, multi[s].sheet);
+        for (int page = 0; page < pages; page++) {
+            multi[s].sheet_page = page;
+            check_availability_matches_press(&multi[s], &rich);
+        }
+    }
+}
+
 /* --- the footer legend ---------------------------------------------------- */
 
 static void test_the_legend_says_what_the_buttons_currently_do(void)
@@ -509,12 +644,12 @@ static void test_the_legend_says_what_the_buttons_currently_do(void)
     kanji_t k = rich_card();
 
     kanji_nav_t n = at_question();
-    CHECK_STR(kanji_nav_hint_key0(&n), "정답");
-    CHECK_STR(kanji_nav_hint_key1(&n), "설명");
-    CHECK_STR(kanji_nav_hint_boot(&n), "FSRS");
+    CHECK_STR(kanji_nav_hint_key0(&n), "정답 보기");
+    CHECK_STR(kanji_nav_hint_key1(&n), "힌트");
+    CHECK_STR(kanji_nav_hint_boot(&n), "학습 정보");
 
     n = at_answer();
-    CHECK_STR(kanji_nav_hint_key0(&n), "등급");
+    CHECK_STR(kanji_nav_hint_key0(&n), "등급 바꾸기");
     CHECK_STR(kanji_nav_hint_key1(&n), "확정");
     CHECK_STR(kanji_nav_hint_boot(&n), "설명");
 
@@ -582,6 +717,7 @@ int main(void)
     test_key0_does_nothing_when_there_is_no_card_to_reveal();
     test_key1_opens_the_description_and_boot_opens_fsrs();
     test_fsrs_opens_without_a_card_but_the_others_do_not();
+    test_description_pages_follow_nonempty_semantic_sections();
     test_key0_walks_the_grade_cursor_and_only_repaints_the_dock();
     test_key1_submits_the_cursor_grade();
     test_boot_opens_the_description_from_the_answer();
@@ -597,6 +733,7 @@ int main(void)
     test_the_sheet_and_screen_vocabularies_round_trip();
     test_no_screen_the_app_can_set_is_a_dead_end();
     test_key2_always_refreshes_and_never_moves_the_nav();
+    test_control_availability_delegates_to_navigation();
     test_the_legend_says_what_the_buttons_currently_do();
     test_every_screen_has_a_title();
     test_no_button_from_no_state_produces_an_impossible_state();

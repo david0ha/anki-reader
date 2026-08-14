@@ -187,6 +187,17 @@ typedef struct {
  * of bytes written (excluding the NUL). */
 size_t kanji_str_copy(char *dst, size_t dst_size, const char *src);
 
+/* Whether text contains a visible byte after ASCII display whitespace. This is
+ * deliberately byte-oriented: UTF-8 continuation bytes are never whitespace. */
+bool kanji_text_has_content(const char *text);
+
+/* Copy display prose with ASCII whitespace runs reduced to one space and both
+ * ends trimmed. Like kanji_str_copy(), truncation is UTF-8-boundary safe and
+ * the destination is always NUL-terminated when it has room. `dst` may equal
+ * `src`. Returns bytes written, excluding the NUL. */
+size_t kanji_text_collapse_whitespace(char *dst, size_t dst_size,
+                                      const char *src);
+
 /* How many UTF-8 characters (not bytes) `s` holds. The hero label picks its
  * face from this: a two-character headword gets the 56 px face, a nine-character
  * one would run off the panel and gets the 28 px one instead. */

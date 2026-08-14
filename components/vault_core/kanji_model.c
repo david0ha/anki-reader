@@ -50,6 +50,57 @@ size_t kanji_str_copy(char *dst, size_t dst_size, const char *src)
     return out;
 }
 
+static bool ascii_display_whitespace(unsigned char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+           c == '\f' || c == '\v';
+}
+
+bool kanji_text_has_content(const char *text)
+{
+    if (!text) return false;
+    for (; *text; text++) {
+        if (!ascii_display_whitespace((unsigned char)*text)) return true;
+    }
+    return false;
+}
+
+size_t kanji_text_collapse_whitespace(char *dst, size_t dst_size,
+                                      const char *src)
+{
+    if (!dst || dst_size == 0) return 0;
+    if (!src) { dst[0] = '\0'; return 0; }
+
+    size_t out = 0;
+    size_t i = 0;
+    bool pending_space = false;
+    for (;;) {
+        const unsigned char c = (unsigned char)src[i];
+        if (c == '\0') break;
+        if (ascii_display_whitespace(c)) {
+            pending_space = out != 0;
+            i++;
+            continue;
+        }
+
+        size_t n = kanji_utf8_seq_len(c);
+        for (size_t k = 1; k < n; k++) {
+            if (src[i + k] == '\0') { n = 0; break; }
+        }
+        if (n == 0) break;
+
+        const size_t separator = pending_space ? 1 : 0;
+        if (out + separator + n >= dst_size) break;
+        if (pending_space) dst[out++] = ' ';
+        memcpy(dst + out, src + i, n);
+        out += n;
+        i += n;
+        pending_space = false;
+    }
+    dst[out] = '\0';
+    return out;
+}
+
 int kanji_utf8_len(const char *s)
 {
     if (!s) return 0;

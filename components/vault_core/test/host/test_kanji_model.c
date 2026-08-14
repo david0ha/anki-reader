@@ -52,6 +52,45 @@ static void test_copy_is_defensive_about_its_arguments(void)
     CHECK_INT(kanji_str_copy(dst, 0, "x"), 0);
 }
 
+/* Display prose is a single visual paragraph even when the catalog formatted
+ * it across lines. This catches a normalizer that leaves leading/trailing
+ * space, splits words with tabs/newlines, or cuts a CJK glyph in half. */
+static void test_display_prose_collapses_ascii_whitespace(void)
+{
+    char out[64];
+    CHECK_INT(kanji_text_collapse_whitespace(
+                  out, sizeof out, "  글자 \n\t 유래\r\n 입니다  "),
+              strlen("글자 유래 입니다"));
+    CHECK_STR(out, "글자 유래 입니다");
+    CHECK(kanji_text_has_content(out));
+    CHECK(!kanji_text_has_content(" \t\r\n\f\v "));
+    CHECK(!kanji_text_has_content(NULL));
+    CHECK_INT(kanji_text_collapse_whitespace(out, sizeof out, NULL), 0);
+    CHECK_STR(out, "");
+    CHECK_INT(kanji_text_collapse_whitespace(NULL, sizeof out, "text"), 0);
+    CHECK_INT(kanji_text_collapse_whitespace(out, 0, "text"), 0);
+
+    char exact[sizeof "会 う"];
+    CHECK_INT(kanji_text_collapse_whitespace(exact, sizeof exact, "会 \tう"), 7);
+    CHECK_STR(exact, "会 う");
+
+    char short_dst[6] = { 'x', 'x', 'x', 'x', 'x', 'x' };
+    CHECK_INT(kanji_text_collapse_whitespace(short_dst, sizeof short_dst, "会 う"), 3);
+    CHECK_STR(short_dst, "会");
+    CHECK_INT((unsigned char)short_dst[3], '\0');
+
+    char inplace[32] = "  日本語\t한국어  ";
+    CHECK_INT(kanji_text_collapse_whitespace(inplace, sizeof inplace, inplace),
+              strlen("日本語 한국어"));
+    CHECK_STR(inplace, "日本語 한국어");
+
+    char too_small[7] = { 'x', 'x', 'x', 'x', 'x', 'x', 'x' };
+    CHECK_INT(kanji_text_collapse_whitespace(too_small, sizeof too_small,
+                                              "日本語 한국어"), 6);
+    CHECK_STR(too_small, "日本");
+    CHECK_INT((unsigned char)too_small[6], '\0');
+}
+
 /* --- character counting --------------------------------------------------- */
 
 static void test_utf8_len_counts_characters_not_bytes(void)
@@ -253,6 +292,7 @@ int main(void)
 {
     test_copy_truncates_on_a_character_boundary();
     test_copy_is_defensive_about_its_arguments();
+    test_display_prose_collapses_ascii_whitespace();
     test_utf8_len_counts_characters_not_bytes();
     test_one_decoder_decides_where_a_character_starts();
     test_grade_words_match_the_backend_and_the_dock();

@@ -44,10 +44,11 @@
 #define S_KEY_WIFI         "길게 Wi-Fi"
 
 /* kanji_nav.c's per-screen legend, and the screen names beside them. */
-#define S_HINT_REVEAL      "정답"
+#define S_HINT_REVEAL      "정답 보기"
+#define S_HINT_HINT        "힌트"
 #define S_HINT_DESC        "설명"
-#define S_HINT_FSRS        "FSRS"
-#define S_HINT_GRADE       "등급"
+#define S_HINT_FSRS        "학습 정보"
+#define S_HINT_GRADE       "등급 바꾸기"
 #define S_HINT_COMMIT      "확정"
 #define S_HINT_PAGE        "다음 쪽"
 #define S_HINT_CLOSE       "닫기"

@@ -67,6 +67,46 @@ static bool has_card(const kanji_t *k)
     return k != NULL && k->card.valid;
 }
 
+/* One description section predicate feeds availability, pagination and page
+ * identity. Separating those decisions is how an empty page becomes reachable
+ * even though the footer says there is more prose to read. */
+static bool description_has_section(const kanji_t *k, kanji_desc_page_t page)
+{
+    if (!has_card(k)) return false;
+    switch (page) {
+    case KANJI_DESC_PAGE_SHAPE:
+        return kanji_text_has_content(k->card.description);
+    case KANJI_DESC_PAGE_HOOK:
+        return kanji_text_has_content(k->card.hook_body);
+    case KANJI_DESC_PAGE_PARTS:
+        return k->card.part_count > 0;
+    default:
+        return false;
+    }
+}
+
+static int description_page_count(const kanji_t *k)
+{
+    int count = 0;
+    for (int page = KANJI_DESC_PAGE_SHAPE; page <= KANJI_DESC_PAGE_PARTS;
+         page++) {
+        if (description_has_section(k, (kanji_desc_page_t)page)) count++;
+    }
+    return count;
+}
+
+kanji_desc_page_t kanji_desc_page_at(const kanji_t *k, int page)
+{
+    if (page < 0) return KANJI_DESC_PAGE_NONE;
+    for (int section = KANJI_DESC_PAGE_SHAPE;
+         section <= KANJI_DESC_PAGE_PARTS; section++) {
+        const kanji_desc_page_t candidate = (kanji_desc_page_t)section;
+        if (!description_has_section(k, candidate)) continue;
+        if (page-- == 0) return candidate;
+    }
+    return KANJI_DESC_PAGE_NONE;
+}
+
 /* Whether a sheet has anything to say about this card. FSRS always does — it
  * explains the scheduler, which is exactly what a learner staring at an empty
  * session wants to read. The other two are about a card, so with no card there
@@ -77,9 +117,7 @@ static bool sheet_available(const kanji_t *k, kanji_sheet_t sheet)
     case KANJI_SHEET_FSRS:
         return true;
     case KANJI_SHEET_DESCRIPTION:
-        return has_card(k) && (k->card.description[0] != '\0' ||
-                               k->card.hook_body[0] != '\0' ||
-                               k->card.part_count > 0);
+        return description_page_count(k) > 0;
     case KANJI_SHEET_COMMENTS:
         return has_card(k);
     default:
@@ -98,10 +136,12 @@ int kanji_sheet_pages(const kanji_t *k, kanji_sheet_t sheet)
         return (n + KANJI_COMMENTS_PER_PAGE - 1) / KANJI_COMMENTS_PER_PAGE;
     }
     case KANJI_SHEET_DESCRIPTION:
-        /* One screen: the explanation, the memory hook and up to three parts
-         * are each bounded by the model's own byte limits and were sized to
-         * fit the content area together. */
-        return 1;
+        /* Public callers can always render a pager safely, even for a card
+         * whose description sheet is unavailable. */
+        {
+            const int pages = description_page_count(k);
+            return pages > 0 ? pages : 1;
+        }
     default:
         return 1;
     }
@@ -120,7 +160,7 @@ const char *kanji_nav_hint_key1(const kanji_nav_t *nav)
 {
     if (!nav) return S_HINT_DESC;
     if (nav->sheet != KANJI_SHEET_NONE) return S_HINT_CLOSE;
-    return nav->revealed ? S_HINT_COMMIT : S_HINT_DESC;
+    return nav->revealed ? S_HINT_COMMIT : S_HINT_HINT;
 }
 
 const char *kanji_nav_hint_boot(const kanji_nav_t *nav)
@@ -309,4 +349,14 @@ kanji_nav_result_t kanji_nav_press(kanji_nav_t *nav, kanji_button_t btn,
                 before.sheet_page != nav->sheet_page ||
                 before.grade      != nav->grade;
     return r;
+}
+
+bool kanji_nav_can_press(const kanji_nav_t *nav, kanji_button_t button,
+                         const kanji_t *k)
+{
+    if (!nav || button < KANJI_BTN_KEY0 || button >= KANJI_BTN_COUNT) {
+        return false;
+    }
+    kanji_nav_t probe = *nav;
+    return kanji_nav_press(&probe, button, k).action != KANJI_ACT_NONE;
 }
