@@ -144,6 +144,17 @@ static void expect_open_status(const image_t *base, void (*mutate)(image_t *),
     free(image.bytes);
 }
 
+static void expect_image_open_status(image_t *image,
+                                     kanji_catalog_status_t expected)
+{
+    uint8_t compressed[65536];
+    uint8_t raw[98304];
+    kanji_catalog_t catalog;
+    CHECK(!open_catalog(image, (uint32_t)image->length, &catalog,
+                        compressed, sizeof compressed, raw, sizeof raw));
+    CHECK_EQ(kanji_catalog_status(&catalog), expected);
+}
+
 static void corrupt_magic(image_t *image) { image->bytes[0] ^= 1; }
 static void corrupt_version(image_t *image) { image->bytes[8] ^= 1; }
 static void corrupt_header_crc(image_t *image) { image->bytes[120] ^= 1; }
@@ -251,6 +262,60 @@ static void test_open_corruptions(const image_t *fixture)
     expect_open_status(fixture, overflow_deck_offset, 0, KANJI_CATALOG_BOUNDS);
 }
 
+static void test_repaired_structural_corruptions(const image_t *fixture,
+                                                 const image_t *boundary)
+{
+    uint32_t card_index_off = get_u32(fixture->bytes + 40);
+
+    /* The new deck index is still in range; only an exact membership tally can
+     * detect that deck 0 lost a card and deck 1 gained one. */
+    image_t damaged = clone_image(fixture);
+    damaged.bytes[card_index_off + 8] = 1;
+    repair_table_crc(&damaged);
+    expect_image_open_status(&damaged, KANJI_CATALOG_FORMAT);
+    free(damaged.bytes);
+
+    /* Both records remain individually in bounds. The second now aliases the
+     * beginning of the first instead of continuing at its end. */
+    damaged = clone_image(fixture);
+    put_u32(damaged.bytes + card_index_off + 12, 0);
+    repair_table_crc(&damaged);
+    expect_image_open_status(&damaged, KANJI_CATALOG_RECORD_OFFSET);
+    free(damaged.bytes);
+
+    uint32_t boundary_block_index = get_u32(boundary->bytes + 48);
+    uint32_t second_entry = boundary_block_index + 16;
+    uint32_t second_offset = get_u32(boundary->bytes + second_entry);
+    uint32_t second_length = get_u32(boundary->bytes + second_entry + 4);
+
+    /* Shift the second compressed span left and grow it by one. The span stays
+     * in range and still ends at used_size, but overlaps the first block. */
+    damaged = clone_image(boundary);
+    put_u32(damaged.bytes + second_entry, second_offset - 1);
+    put_u32(damaged.bytes + second_entry + 4, second_length + 1);
+    repair_table_crc(&damaged);
+    expect_image_open_status(&damaged, KANJI_CATALOG_BLOCK_BOUNDS);
+    free(damaged.bytes);
+
+    /* Shift the second span right and shrink it by one. Every span is in range
+     * and the data section still ends exactly, but one byte is unclaimed. */
+    damaged = clone_image(boundary);
+    put_u32(damaged.bytes + second_entry, second_offset + 1);
+    put_u32(damaged.bytes + second_entry + 4, second_length - 1);
+    repair_table_crc(&damaged);
+    expect_image_open_status(&damaged, KANJI_CATALOG_BLOCK_BOUNDS);
+    free(damaged.bytes);
+
+    /* Header and deck totals still say five cards globally, but the deck table
+     * distribution (2 + 3) disagrees with unchanged index membership (3 + 2). */
+    damaged = clone_image(fixture);
+    put_u32(damaged.bytes + 128 + 56, 2);
+    put_u32(damaged.bytes + 128 + 64 + 56, 3);
+    repair_table_crc(&damaged);
+    expect_image_open_status(&damaged, KANJI_CATALOG_FORMAT);
+    free(damaged.bytes);
+}
+
 static image_t replace_record_byte(const image_t *base, uint32_t ordinal,
                                    size_t byte_in_record, uint8_t replacement)
 {
@@ -305,13 +370,13 @@ static void test_read_corruptions(const image_t *fixture)
     image_t damaged = clone_image(fixture);
     damaged.bytes[card_index_off + 8] = 2;
     repair_table_crc(&damaged);
-    expect_failed_read(&damaged, 0, KANJI_CATALOG_DECK_INDEX);
+    expect_image_open_status(&damaged, KANJI_CATALOG_DECK_INDEX);
     free(damaged.bytes);
 
     damaged = clone_image(fixture);
     put_u32(damaged.bytes + block_index_off, UINT32_MAX - 7u);
     repair_table_crc(&damaged);
-    expect_failed_read(&damaged, 0, KANJI_CATALOG_BLOCK_BOUNDS);
+    expect_image_open_status(&damaged, KANJI_CATALOG_BLOCK_BOUNDS);
     free(damaged.bytes);
 
     damaged = clone_image(fixture);
@@ -328,13 +393,13 @@ static void test_read_corruptions(const image_t *fixture)
     damaged = clone_image(fixture);
     put_u32(damaged.bytes + card_index_off, raw_len);
     repair_table_crc(&damaged);
-    expect_failed_read(&damaged, 0, KANJI_CATALOG_RECORD_OFFSET);
+    expect_image_open_status(&damaged, KANJI_CATALOG_RECORD_OFFSET);
     free(damaged.bytes);
 
     damaged = clone_image(fixture);
     put_u32(damaged.bytes + card_index_off + 4, raw_len + 1u);
     repair_table_crc(&damaged);
-    expect_failed_read(&damaged, 0, KANJI_CATALOG_RECORD_LENGTH);
+    expect_image_open_status(&damaged, KANJI_CATALOG_RECORD_LENGTH);
     free(damaged.bytes);
 
     damaged = replace_record_byte(fixture, 0, 0, '!');
@@ -367,6 +432,7 @@ int main(void)
         test_open_and_metadata(&fixture);
         test_cards_and_boundary(&fixture, &boundary);
         test_open_corruptions(&fixture);
+        test_repaired_structural_corruptions(&fixture, &boundary);
         test_read_corruptions(&fixture);
     }
     free(boundary.bytes);

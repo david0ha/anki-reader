@@ -166,6 +166,97 @@ static bool decode_deck_record(const uint8_t record[CATALOG_DECK_SIZE],
     return true;
 }
 
+static bool validate_index_structure(kanji_catalog_t *cat,
+                                     uint32_t remaining_deck_counts[256])
+{
+    uint32_t compressed_cursor = cat->_data_off;
+    uint32_t ordinal = 0;
+
+    for (uint32_t block_id = 0; block_id < cat->_block_count; block_id++) {
+        uint32_t relative;
+        uint32_t block_entry_offset;
+        uint8_t block_entry[CATALOG_BLOCK_INDEX_SIZE];
+        if (!mul_u32(block_id, CATALOG_BLOCK_INDEX_SIZE, &relative) ||
+            !add_u32(cat->_block_index_off, relative, &block_entry_offset) ||
+            !read_bytes(cat, block_entry_offset, block_entry, sizeof block_entry,
+                        cat->_data_off, KANJI_CATALOG_BLOCK_BOUNDS)) {
+            return false;
+        }
+        uint32_t compressed_off = le32(block_entry);
+        uint32_t compressed_len = le32(block_entry + 4);
+        uint32_t raw_len = le32(block_entry + 8);
+        uint32_t compressed_end;
+        if (compressed_off != compressed_cursor || compressed_len == 0 ||
+            raw_len == 0 || raw_len > KANJI_CATALOG_MAX_RAW_BLOCK ||
+            !span_ok(compressed_off, compressed_len, cat->_used_size) ||
+            !add_u32(compressed_off, compressed_len, &compressed_end)) {
+            cat->_status = KANJI_CATALOG_BLOCK_BOUNDS;
+            return false;
+        }
+        compressed_cursor = compressed_end;
+
+        uint32_t cards_in_block = cat->_card_count - ordinal;
+        if (cards_in_block > CATALOG_BLOCK_CARDS) {
+            cards_in_block = CATALOG_BLOCK_CARDS;
+        }
+        uint32_t raw_cursor = 0;
+        for (uint32_t slot = 0; slot < cards_in_block; slot++, ordinal++) {
+            uint32_t card_relative;
+            uint32_t card_entry_offset;
+            uint8_t card_entry[CATALOG_CARD_INDEX_SIZE];
+            if (!mul_u32(ordinal, CATALOG_CARD_INDEX_SIZE, &card_relative) ||
+                !add_u32(cat->_card_index_off, card_relative,
+                         &card_entry_offset) ||
+                !read_bytes(cat, card_entry_offset, card_entry,
+                            sizeof card_entry, cat->_block_index_off,
+                            KANJI_CATALOG_BOUNDS)) {
+                return false;
+            }
+            uint32_t record_off = le32(card_entry);
+            uint32_t record_len = le32(card_entry + 4);
+            uint32_t deck_index = card_entry[8];
+            if (card_entry[9] || card_entry[10] || card_entry[11]) {
+                cat->_status = KANJI_CATALOG_FORMAT;
+                return false;
+            }
+            if (deck_index >= cat->_deck_count) {
+                cat->_status = KANJI_CATALOG_DECK_INDEX;
+                return false;
+            }
+            if (record_off != raw_cursor) {
+                cat->_status = KANJI_CATALOG_RECORD_OFFSET;
+                return false;
+            }
+            if (raw_cursor > raw_len || record_len == 0 ||
+                record_len > raw_len - raw_cursor ||
+                !add_u32(raw_cursor, record_len, &raw_cursor)) {
+                cat->_status = KANJI_CATALOG_RECORD_LENGTH;
+                return false;
+            }
+            if (remaining_deck_counts[deck_index] == 0) {
+                cat->_status = KANJI_CATALOG_FORMAT;
+                return false;
+            }
+            remaining_deck_counts[deck_index]--;
+        }
+        if (raw_cursor != raw_len) {
+            cat->_status = KANJI_CATALOG_RECORD_LENGTH;
+            return false;
+        }
+    }
+    if (ordinal != cat->_card_count || compressed_cursor != cat->_used_size) {
+        cat->_status = KANJI_CATALOG_BLOCK_BOUNDS;
+        return false;
+    }
+    for (uint32_t deck = 0; deck < cat->_deck_count; deck++) {
+        if (remaining_deck_counts[deck] != 0) {
+            cat->_status = KANJI_CATALOG_FORMAT;
+            return false;
+        }
+    }
+    return true;
+}
+
 bool kanji_catalog_open(kanji_catalog_t *cat,
                         const kanji_catalog_io_t *io,
                         uint32_t partition_size,
@@ -265,6 +356,7 @@ bool kanji_catalog_open(kanji_catalog_t *cat,
     }
 
     uint64_t deck_card_total = 0;
+    uint32_t remaining_deck_counts[256] = {0};
     for (uint32_t index = 0; index < deck_count; index++) {
         uint32_t offset;
         uint8_t record[CATALOG_DECK_SIZE];
@@ -278,11 +370,13 @@ bool kanji_catalog_open(kanji_catalog_t *cat,
             return false;
         }
         deck_card_total += deck.card_count;
+        remaining_deck_counts[index] = deck.card_count;
     }
     if (deck_card_total != card_count) {
         cat->_status = KANJI_CATALOG_FORMAT;
         return false;
     }
+    if (!validate_index_structure(cat, remaining_deck_counts)) return false;
 
     cat->_open = true;
     cat->_status = KANJI_CATALOG_OK;
