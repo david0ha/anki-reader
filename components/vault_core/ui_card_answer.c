@@ -22,8 +22,8 @@ lv_obj_t *ui_card_answer_create(lv_obj_t *par)
     const kanji_answer_layout_t *l = kanji_answer_layout();
     a.root = ui_fill_white(par, 0, 0, c->main.w, c->main.h);
 
-    a.hero = ui_lab_w(a.root, LOCAL_X(l->hero.x), LOCAL_Y(l->hero.y),
-                      l->hero.w, UI_F_HERO, LV_TEXT_ALIGN_LEFT, "");
+    a.hero = ui_lab_headword(a.root, LOCAL_X(l->hero.x), LOCAL_Y(l->hero.y),
+                             l->hero.w, l->hero.h, UI_F_HERO, "");
     a.reading = ui_lab_w(a.root, LOCAL_X(l->reading.x), LOCAL_Y(l->reading.y),
                          l->reading.w, UI_F_HEAD, LV_TEXT_ALIGN_LEFT, "");
     a.meaning = ui_lab_w(a.root, LOCAL_X(l->meaning.x), LOCAL_Y(l->meaning.y),
@@ -78,7 +78,6 @@ void ui_card_answer_update(const kanji_t *k, kanji_grade_t cursor)
     const bool have = k && k->card.valid;
     const lv_font_t *face = ui_hero_face(have ? k->card.front : "");
     lv_obj_set_style_text_font(a.hero, face, 0);
-    lv_obj_set_height(a.hero, lv_font_get_line_height(face));
     ui_set(a.hero, have ? k->card.front : "");
     if (have && k->card.reading[0]) ui_setf(a.reading, "%s  %s", S_READING, k->card.reading);
     else ui_set(a.reading, "");

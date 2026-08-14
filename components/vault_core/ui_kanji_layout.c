@@ -41,7 +41,7 @@ static const kanji_chrome_t CHROME = {
 };
 
 static const kanji_question_layout_t QUESTION = {
-    .hero      = { MAIN_X, 88, MAIN_W, 72 },
+    .hero      = { MAIN_X, 88, MAIN_W, 105 },
     .prompt    = { MAIN_X, 224, MAIN_W, 28 },
     .secondary = { MAIN_X, 264, MAIN_W, 48 },
     .counts    = { MAIN_X, 328, MAIN_W, 24 },
@@ -53,19 +53,19 @@ static const kanji_question_layout_t QUESTION = {
 };
 
 static const kanji_answer_layout_t ANSWER = {
-    .hero         = { MAIN_X, MAIN_Y, MAIN_W, 64 },
-    .reading      = { MAIN_X, 124, MAIN_W, 24 },
-    .meaning      = { MAIN_X, 154, MAIN_W, 32 },
-    .examples     = { MAIN_X, 192, MAIN_W, 90 },
-    .example_step = 30,
+    .hero         = { MAIN_X, MAIN_Y, MAIN_W, 105 },
+    .reading      = { MAIN_X, 164, MAIN_W, 24 },
+    .meaning      = { MAIN_X, 194, MAIN_W, 35 },
+    .examples     = { MAIN_X, 236, MAIN_W, 72 },
+    .example_step = 24,
     .example_rows = KANJI_EXAMPLES_MAX,
     .prompt       = { MAIN_X, 312, MAIN_W, 24 },
     .dock         = { MAIN_X, DOCK_Y, MAIN_W, DOCK_H },
     .cell         = { CELL(0), CELL(1), CELL(2), CELL(3) },
     .cell_label   = { LABEL(0), LABEL(1), LABEL(2), LABEL(3) },
     .cell_span    = { SPAN(0), SPAN(1), SPAN(2), SPAN(3) },
-    .band         = { MAIN_X, MAIN_Y, MAIN_W, 64 },
-    .level        = { MAIN_X, 124, MAIN_W, 24 },
+    .band         = { MAIN_X, MAIN_Y, MAIN_W, 105 },
+    .level        = { MAIN_X, 164, MAIN_W, 24 },
 };
 
 #define SHEET_COMMON \

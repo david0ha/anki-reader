@@ -94,13 +94,18 @@ lv_obj_t *ui_lab(lv_obj_t *par, int x, int y, const lv_font_t *f, const char *tx
 lv_obj_t *ui_lab_w(lv_obj_t *par, int x, int y, int w,
                    const lv_font_t *f, lv_text_align_t align, const char *txt);
 
+/* A fixed headword box that wraps without ellipsis. `h` is sized from the
+ * fallback face's measured worst case, so every model-valid front remains
+ * visible; short covered words still use the serif face. */
+lv_obj_t *ui_lab_headword(lv_obj_t *par, int x, int y, int w, int h,
+                          const lv_font_t *f, const char *txt);
+
 /* White-on-black text for selected surfaces and exceptional-state stamps. */
 lv_obj_t *ui_lab_inv(lv_obj_t *par, int x, int y, int w,
                      const lv_font_t *f, lv_text_align_t align, const char *txt);
 
-/* Let a label wrap inside `height` px instead of ellipsizing. The exception,
- * not the rule: only the provisioning overlay's body wants this, because an
- * ellipsis in the middle of an AP name and its instructions is useless. */
+/* Let a fixed prose label wrap inside `height` px instead of ellipsizing.
+ * Provisioning, description, comments, and FSRS use this for bounded bodies. */
 void ui_lab_wrap(lv_obj_t *label, int height);
 
 void ui_set(lv_obj_t *label, const char *txt);

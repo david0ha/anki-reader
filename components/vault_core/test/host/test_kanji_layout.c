@@ -98,6 +98,25 @@ static void test_description_prose_has_a_full_reading_page(void)
     CHECK(plain->body.h >= 320);
 }
 
+static void test_maximum_valid_headword_has_full_fallback_wrap_capacity(void)
+{
+    const kanji_question_layout_t *q = kanji_question_layout();
+    const kanji_answer_layout_t *a = kanji_answer_layout();
+    /* Generated 28 px fallback: 35 px line height, <=29 px advance. A valid
+     * front has at most 39 bytes, so even 39 single-byte widest glyphs need no
+     * more than three 520 px lines. These are hand-measured font bounds, not
+     * values computed by the layout under test. */
+    const int max_lines = 3;
+    const int line_height = 35;
+    const int max_advance = 29;
+    CHECK((KANJI_FRONT_MAX - 1) * max_advance <= q->hero.w * max_lines);
+    CHECK((KANJI_FRONT_MAX - 1) * max_advance <= a->hero.w * max_lines);
+    CHECK(q->hero.h >= max_lines * line_height);
+    CHECK(a->hero.h >= max_lines * line_height);
+    CHECK(q->hero.y + q->hero.h <= q->prompt.y);
+    CHECK(a->hero.y + a->hero.h <= a->reading.y);
+}
+
 static void test_dock_converts_to_exact_half_open_bounds(void)
 {
     int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
@@ -127,6 +146,7 @@ int main(void)
     test_question_regions_do_not_overlap();
     test_all_three_answer_examples_are_reachable();
     test_description_prose_has_a_full_reading_page();
+    test_maximum_valid_headword_has_full_fallback_wrap_capacity();
     test_dock_converts_to_exact_half_open_bounds();
     test_content_dependent_helpers();
     TH_REPORT("kanji_layout");

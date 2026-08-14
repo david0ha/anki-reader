@@ -172,7 +172,7 @@ void ui_pager_set(lv_obj_t *pager, int page, int pages)
 static void build_overlay(lv_obj_t *par)
 {
     s.overlay = ui_fill_white(par, 0, 0, UI_W, UI_H);
-    ui_fill(s.overlay, UI_PAD, 64, UI_W - 2 * UI_PAD, 4);
+    ui_fill(s.overlay, UI_PAD, 64, UI_W - 2 * UI_PAD, 2);
     s.overlay_title = ui_lab_w(s.overlay, UI_PAD, 88, UI_W - 2 * UI_PAD,
                                UI_F_TITLE, LV_TEXT_ALIGN_LEFT, "");
     s.overlay_body = ui_lab_w(s.overlay, UI_PAD, 144, UI_W - 2 * UI_PAD,
@@ -257,7 +257,12 @@ void ui_kanji_set_data(const kanji_t *k)
 void ui_kanji_set_nav(const kanji_nav_t *nav)
 {
     if (!nav) return;
+    const bool dock_only = kanji_nav_is_grade_only_transition(&s.nav, nav);
     s.nav = *nav;
+    if (dock_only) {
+        ui_card_answer_dock(s.has_data ? &s.data : NULL, s.nav.grade);
+        return;
+    }
     show_only(kanji_nav_screen(&s.nav));
     update_chrome();
     refresh_current();

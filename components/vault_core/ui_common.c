@@ -101,6 +101,17 @@ lv_obj_t *ui_lab_w(lv_obj_t *par, int x, int y, int w,
     return l;
 }
 
+lv_obj_t *ui_lab_headword(lv_obj_t *par, int x, int y, int w, int h,
+                          const lv_font_t *f, const char *txt)
+{
+    lv_obj_t *l = label_base(par, x, y, f);
+    lv_obj_set_size(l, w, h);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, 0);
+    lv_label_set_text(l, txt ? txt : "");
+    return l;
+}
+
 void ui_lab_wrap(lv_obj_t *label, int height)
 {
     if (!label) return;

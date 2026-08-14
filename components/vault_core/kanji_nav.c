@@ -360,3 +360,19 @@ bool kanji_nav_can_press(const kanji_nav_t *nav, kanji_button_t button,
     kanji_nav_t probe = *nav;
     return kanji_nav_press(&probe, button, k).action != KANJI_ACT_NONE;
 }
+
+bool kanji_nav_is_grade_only_transition(const kanji_nav_t *before,
+                                        const kanji_nav_t *after)
+{
+    if (!before || !after) return false;
+    const bool before_grade_valid = before->grade >= KANJI_GRADE_AGAIN &&
+                                    before->grade <= KANJI_GRADE_EASY;
+    const bool after_grade_valid = after->grade >= KANJI_GRADE_AGAIN &&
+                                   after->grade <= KANJI_GRADE_EASY;
+    return before->revealed && after->revealed &&
+           before->sheet == KANJI_SHEET_NONE &&
+           after->sheet == KANJI_SHEET_NONE &&
+           before->sheet_page == after->sheet_page &&
+           before_grade_valid && after_grade_valid &&
+           before->grade != after->grade;
+}

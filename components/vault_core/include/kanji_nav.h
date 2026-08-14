@@ -146,6 +146,12 @@ kanji_nav_result_t kanji_nav_press(kanji_nav_t *nav, kanji_button_t btn,
 bool kanji_nav_can_press(const kanji_nav_t *nav, kanji_button_t button,
                          const kanji_t *k);
 
+/* True only when an already-visible answer changes its valid grade cursor and
+ * every other navigation field is unchanged. UI callers may then mutate and
+ * refresh the dock without touching any other object. */
+bool kanji_nav_is_grade_only_transition(const kanji_nav_t *before,
+                                        const kanji_nav_t *after);
+
 /* Jump straight to `screen`, for the companion app. Returns whether the screen
  * was ACCEPTED, not whether anything moved — a refused screen leaves *nav
  * exactly as it was, and the caller compares before and after to decide whether

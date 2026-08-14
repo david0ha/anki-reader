@@ -650,6 +650,47 @@ static void test_key2_always_refreshes_and_never_moves_the_nav(void)
     }
 }
 
+static void test_only_a_changed_valid_answer_grade_is_dock_only(void)
+{
+    static const kanji_grade_t transitions[][2] = {
+        { KANJI_GRADE_AGAIN, KANJI_GRADE_HARD },
+        { KANJI_GRADE_HARD,  KANJI_GRADE_GOOD },
+        { KANJI_GRADE_GOOD,  KANJI_GRADE_EASY },
+        { KANJI_GRADE_EASY,  KANJI_GRADE_AGAIN },
+    };
+    for (size_t i = 0; i < sizeof transitions / sizeof transitions[0]; i++) {
+        kanji_nav_t before_edge = at_answer();
+        before_edge.grade = transitions[i][0];
+        kanji_nav_t after_edge = before_edge;
+        after_edge.grade = transitions[i][1];
+        CHECK(kanji_nav_is_grade_only_transition(&before_edge, &after_edge));
+    }
+
+    const kanji_nav_t before = at_answer();
+    kanji_nav_t after = before;
+    after.grade = KANJI_GRADE_EASY;
+
+    CHECK(!kanji_nav_is_grade_only_transition(&before, &before));
+    CHECK(!kanji_nav_is_grade_only_transition(NULL, &after));
+    CHECK(!kanji_nav_is_grade_only_transition(&before, NULL));
+
+    kanji_nav_t changed = after;
+    changed.revealed = false;
+    CHECK(!kanji_nav_is_grade_only_transition(&before, &changed));
+    changed = after;
+    changed.sheet = KANJI_SHEET_DESCRIPTION;
+    CHECK(!kanji_nav_is_grade_only_transition(&before, &changed));
+    changed = after;
+    changed.sheet_page++;
+    CHECK(!kanji_nav_is_grade_only_transition(&before, &changed));
+    changed = after;
+    changed.grade = (kanji_grade_t)KANJI_GRADE_COUNT + 1;
+    CHECK(!kanji_nav_is_grade_only_transition(&before, &changed));
+    changed = before;
+    changed.grade = (kanji_grade_t)0;
+    CHECK(!kanji_nav_is_grade_only_transition(&changed, &after));
+}
+
 static void test_control_availability_delegates_to_navigation(void)
 {
     kanji_t empty = no_card();
@@ -826,6 +867,7 @@ int main(void)
     test_the_sheet_and_screen_vocabularies_round_trip();
     test_no_screen_the_app_can_set_is_a_dead_end();
     test_key2_always_refreshes_and_never_moves_the_nav();
+    test_only_a_changed_valid_answer_grade_is_dock_only();
     test_control_availability_delegates_to_navigation();
     test_control_availability_matches_every_state_space_oracle();
     test_the_legend_says_what_the_buttons_currently_do();

@@ -1,12 +1,12 @@
 /*
  * ui_kanji.h — the whole on-glass UI, for the 648x480 e-Paper panel.
  *
- * Five screens under a shared header and footer, redrawn from the kanjis.ai
- * Shorts player:
+ * Five paper-dominant screens share a dictionary index rail, quiet masthead,
+ * and physical-control footer:
  *
- *   문제   the headword alone, filled black — the "video"
- *   정답   the headword, its reading, the Korean senses, an example, and the
- *          four-rating FSRS dock
+ *   문제   the headword, next action, recovery state, and queue counts
+ *   정답   the headword, reading, Korean senses, three examples, and the
+ *          isolated four-rating FSRS dock
  *   설명   the shape story, the memory hook and the headword's components
  *   댓글   what people said under this card
  *   FSRS   what the scheduler is, in three pages, plus this card's own numbers
@@ -33,9 +33,9 @@
 extern "C" {
 #endif
 
-/* Everything the header reports that is about the board rather than the study
- * session. Passed as a struct so adding an indicator does not change three
- * signatures. */
+/* Everything the shared chrome reports that is about the board rather than the
+ * study session. Passed as a struct so adding an indicator does not change
+ * three signatures. */
 typedef struct {
     bool online;          /* Wi-Fi associated and the last poll succeeded */
     bool stale;           /* showing a card older than one poll interval  */
@@ -50,11 +50,12 @@ void ui_kanji_create(lv_obj_t *parent);
  * fine. Pass NULL to blank the content and show the "no data" state. */
 void ui_kanji_set_data(const kanji_t *k);
 
-/* Show the screen the nav state names, and draw the grade cursor and the sheet
- * page it carries. Cheap: it hides and shows panes, it does not rebuild them. */
+/* Show the screen/page named by nav. A valid answer-to-answer grade-only change
+ * mutates dock objects exclusively; all other changes refresh the active pane
+ * and shared chrome. */
 void ui_kanji_set_nav(const kanji_nav_t *nav);
 
-/* Header indicators. */
+/* Rail and masthead indicators. */
 void ui_kanji_set_status(const ui_status_t *st);
 
 /* The rectangle the grade cursor lives in, in panel coordinates. `x2` and
