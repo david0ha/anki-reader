@@ -141,8 +141,17 @@ static void update_header(void)
         ui_set(s.track, "");
     }
 
-    /* One badge, in priority order: a board that is offline is offline whatever
-     * else is also true of it. */
+    /* One badge, and the order is the point.
+     *
+     * OFFLINE first: a board that cannot reach its proxy is offline whatever
+     * else is also true of it, and that is the one state the learner has to act
+     * on. DEMO before STALE because 오래됨 measures how long ago a fetch
+     * succeeded, and the built-in card was never fetched — badging it stale
+     * would put an age on something that does not have one. (Today the two
+     * cannot both be true: push_status_to_ui() only reports online when a fetch
+     * succeeded, which always replaced the demo card, or when no URL is set,
+     * which forces stale false. The order is written to survive that changing.)
+     */
     if (!s.status.online)      ui_set(s.badge, S_BADGE_OFFLINE);
     else if (s.data.demo)      ui_set(s.badge, S_BADGE_DEMO);
     else if (s.status.stale)   ui_set(s.badge, S_BADGE_STALE);
@@ -195,9 +204,10 @@ void ui_pager_set(lv_obj_t *pager, int page, int pages)
 
 static void build_overlay(lv_obj_t *par)
 {
-    s.overlay = ui_pane(par, 0, 0, UI_W, UI_H);
-    lv_obj_set_style_bg_color(s.overlay, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(s.overlay, LV_OPA_COVER, 0);
+    /* Opaque, not transparent: the overlay's job is to hide the card behind it
+     * completely, and a see-through provisioning message over a half-drawn
+     * study screen is unreadable at 1 bit. */
+    s.overlay = ui_fill_white(par, 0, 0, UI_W, UI_H);
 
     ui_fill(s.overlay, 0, 0, UI_W, 6);
     s.overlay_title = ui_lab_w(s.overlay, UI_PAD, 120, UI_W - 2 * UI_PAD,
@@ -260,9 +270,7 @@ static void refresh_current(void)
 
 void ui_kanji_create(lv_obj_t *parent)
 {
-    lv_obj_t *root = ui_pane(parent, 0, 0, UI_W, UI_H);
-    lv_obj_set_style_bg_color(root, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    lv_obj_t *root = ui_fill_white(parent, 0, 0, UI_W, UI_H);
 
     build_header(root);
     build_footer(root);

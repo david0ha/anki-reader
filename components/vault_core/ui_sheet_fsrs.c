@@ -52,9 +52,7 @@ lv_obj_t *ui_sheet_fsrs_create(lv_obj_t *par)
     const kanji_sheet_layout_t *l = kanji_sheet_layout(true);
     const kanji_chrome_t *ch = kanji_chrome_layout();
 
-    f.root = ui_pane(par, 0, 0, ch->content.w, ch->content.h);
-    lv_obj_set_style_bg_color(f.root, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(f.root, LV_OPA_COVER, 0);
+    f.root = ui_fill_white(par, 0, 0, ch->content.w, ch->content.h);
     ui_sheet_band_create(f.root, &f.band, S_SHEET_FSRS);
 
     f.title = ui_lab_w(f.root, l->body.x, LOCAL_Y(l->body.y), l->body.w,

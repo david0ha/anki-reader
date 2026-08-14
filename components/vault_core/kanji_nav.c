@@ -18,14 +18,32 @@ void kanji_nav_reset(kanji_nav_t *nav)
     nav->grade      = KANJI_GRADE_GOOD;
 }
 
+/* The one place the two vocabularies meet. A sheet and the screen it puts on
+ * the glass are the same fact, and it is needed in both directions — sheet ->
+ * screen for the router and the footer, screen -> sheet for the companion app.
+ * Written as two switches they drift, and the drift is invisible from either
+ * side alone: the app asks for 댓글, the board opens 설명, and /api/state then
+ * honestly reports 설명 to an app that believes it asked for something else. */
+static const struct {
+    kanji_sheet_t  sheet;
+    kanji_screen_t screen;
+} SHEET_SCREEN[] = {
+    { KANJI_SHEET_DESCRIPTION, KANJI_SCREEN_DESCRIPTION },
+    { KANJI_SHEET_COMMENTS,    KANJI_SCREEN_COMMENTS    },
+    { KANJI_SHEET_FSRS,        KANJI_SCREEN_FSRS        },
+};
+
+/* Every sheet but NONE is in the table. A new sheet with no row would silently
+ * render as the question side. */
+_Static_assert(sizeof SHEET_SCREEN / sizeof SHEET_SCREEN[0] ==
+                   KANJI_SHEET_COUNT - 1,
+               "every kanji_sheet_t except NONE needs a row in SHEET_SCREEN");
+
 kanji_screen_t kanji_nav_screen(const kanji_nav_t *nav)
 {
     if (!nav) return KANJI_SCREEN_QUESTION;
-    switch (nav->sheet) {
-    case KANJI_SHEET_DESCRIPTION: return KANJI_SCREEN_DESCRIPTION;
-    case KANJI_SHEET_COMMENTS:    return KANJI_SCREEN_COMMENTS;
-    case KANJI_SHEET_FSRS:        return KANJI_SCREEN_FSRS;
-    default: break;
+    for (size_t i = 0; i < sizeof SHEET_SCREEN / sizeof SHEET_SCREEN[0]; i++) {
+        if (SHEET_SCREEN[i].sheet == nav->sheet) return SHEET_SCREEN[i].screen;
     }
     return nav->revealed ? KANJI_SCREEN_ANSWER : KANJI_SCREEN_QUESTION;
 }
@@ -241,19 +259,19 @@ bool kanji_nav_set_screen(kanji_nav_t *nav, kanji_screen_t screen,
         next.sheet = KANJI_SHEET_NONE;
         next.revealed = true;
         break;
-    case KANJI_SCREEN_DESCRIPTION:
-    case KANJI_SCREEN_COMMENTS:
-    case KANJI_SCREEN_FSRS: {
-        /* open_sheet() is the same gate BOOT goes through. */
-        const kanji_sheet_t sheet =
-            screen == KANJI_SCREEN_DESCRIPTION ? KANJI_SHEET_DESCRIPTION :
-            screen == KANJI_SCREEN_COMMENTS    ? KANJI_SHEET_COMMENTS
-                                               : KANJI_SHEET_FSRS;
-        if (!open_sheet(&next, k, sheet)) return false;
+    default: {
+        /* A sheet, named by the same table kanji_nav_screen() reads, and opened
+         * through the same gate BOOT goes through. */
+        const kanji_sheet_t *sheet = NULL;
+        for (size_t i = 0; i < sizeof SHEET_SCREEN / sizeof SHEET_SCREEN[0]; i++) {
+            if (SHEET_SCREEN[i].screen == screen) {
+                sheet = &SHEET_SCREEN[i].sheet;
+                break;
+            }
+        }
+        if (!sheet || !open_sheet(&next, k, *sheet)) return false;
         break;
     }
-    default:
-        return false;
     }
 
     next.sheet_page = 0;

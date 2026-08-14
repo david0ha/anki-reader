@@ -39,9 +39,7 @@ lv_obj_t *ui_sheet_desc_create(lv_obj_t *par)
     const kanji_sheet_layout_t *l = kanji_sheet_layout(false);
     const kanji_chrome_t *c = kanji_chrome_layout();
 
-    d.root = ui_pane(par, 0, 0, c->content.w, c->content.h);
-    lv_obj_set_style_bg_color(d.root, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(d.root, LV_OPA_COVER, 0);
+    d.root = ui_fill_white(par, 0, 0, c->content.w, c->content.h);
     ui_sheet_band_create(d.root, &d.band, S_SHEET_DESC);
 
     const int x = l->body.x;

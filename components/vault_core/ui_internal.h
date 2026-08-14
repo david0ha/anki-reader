@@ -69,10 +69,15 @@ lv_obj_t *ui_pane(lv_obj_t *par, int x, int y, int w, int h);
 /* A solid black rectangle — rules, bars, filled chips, the header band. */
 lv_obj_t *ui_fill(lv_obj_t *par, int x, int y, int w, int h);
 
-/* A solid WHITE rectangle. Only useful on top of a filled area, which on this
- * board means the immersive player: the action rail's chips and the scrubber
- * are white marks on black, and a transparent object would show the fill
- * through them. */
+/* A solid WHITE rectangle. Two uses, and both need the opacity rather than
+ * transparency:
+ *
+ *   - a white mark on top of a filled area — the action rail's chips and the
+ *     scrubber, where a transparent object would show the black through;
+ *   - the root of a screen that is paper rather than player, so the sheet
+ *     covers whatever the previous screen left in the framebuffer instead of
+ *     letting it show through.
+ */
 lv_obj_t *ui_fill_white(lv_obj_t *par, int x, int y, int w, int h);
 
 /* A white rectangle with a black border of `bw` px. */

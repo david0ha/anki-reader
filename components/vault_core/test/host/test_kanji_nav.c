@@ -403,6 +403,59 @@ static void test_setting_a_screen_obeys_the_same_rules_as_a_button(void)
     CHECK(!kanji_nav_set_screen(NULL, KANJI_SCREEN_FSRS, &k));
 }
 
+/* A sheet and the screen it shows are one fact, and it must read the same in
+ * both directions.
+ *
+ * kanji_nav_screen() maps sheet -> screen for the router and the footer;
+ * kanji_nav_set_screen() maps screen -> sheet for the companion app. Written as
+ * two independent switches they can drift, and the failure is that the phone
+ * and the buttons disagree about which screen a sheet is: the app asks for
+ * 댓글, the board opens 설명, and /api/state then honestly reports 설명 to an
+ * app that believes it asked for something else. */
+static void test_the_sheet_and_screen_vocabularies_round_trip(void)
+{
+    kanji_t k = rich_card();
+
+    const kanji_sheet_t SHEETS[] = {
+        KANJI_SHEET_DESCRIPTION, KANJI_SHEET_COMMENTS, KANJI_SHEET_FSRS,
+    };
+    for (size_t i = 0; i < sizeof SHEETS / sizeof SHEETS[0]; i++) {
+        /* sheet -> screen -> sheet */
+        kanji_nav_t from;
+        kanji_nav_reset(&from);
+        from.sheet = SHEETS[i];
+        const kanji_screen_t screen = kanji_nav_screen(&from);
+
+        kanji_nav_t back;
+        kanji_nav_reset(&back);
+        CHECK(kanji_nav_set_screen(&back, screen, &k));
+        CHECK_INT(back.sheet, SHEETS[i]);
+
+        /* and screen -> sheet -> screen */
+        CHECK_INT(kanji_nav_screen(&back), screen);
+    }
+
+    /* Every sheet except NONE has a screen of its own, and no two share one. */
+    for (int a = KANJI_SHEET_NONE + 1; a < KANJI_SHEET_COUNT; a++) {
+        for (int b = a + 1; b < KANJI_SHEET_COUNT; b++) {
+            kanji_nav_t na, nb;
+            kanji_nav_reset(&na); kanji_nav_reset(&nb);
+            na.sheet = (kanji_sheet_t)a;
+            nb.sheet = (kanji_sheet_t)b;
+            CHECK(kanji_nav_screen(&na) != kanji_nav_screen(&nb));
+        }
+    }
+
+    /* And no sheet claims a card side. */
+    for (int s = KANJI_SHEET_NONE + 1; s < KANJI_SHEET_COUNT; s++) {
+        kanji_nav_t n;
+        kanji_nav_reset(&n);
+        n.sheet = (kanji_sheet_t)s;
+        const kanji_screen_t got = kanji_nav_screen(&n);
+        CHECK(got != KANJI_SCREEN_QUESTION && got != KANJI_SCREEN_ANSWER);
+    }
+}
+
 /* Whatever the app leaves on the glass, one press gets back to the card.
  *
  * A sheet the phone opened has to close the same way a sheet BOOT opened does —
@@ -541,6 +594,7 @@ int main(void)
     test_every_comment_is_reachable_by_paging();
     test_the_fsrs_sheet_has_one_page_per_page_of_copy();
     test_setting_a_screen_obeys_the_same_rules_as_a_button();
+    test_the_sheet_and_screen_vocabularies_round_trip();
     test_no_screen_the_app_can_set_is_a_dead_end();
     test_key2_always_refreshes_and_never_moves_the_nav();
     test_the_legend_says_what_the_buttons_currently_do();

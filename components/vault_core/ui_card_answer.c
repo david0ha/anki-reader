@@ -40,9 +40,7 @@ lv_obj_t *ui_card_answer_create(lv_obj_t *par)
     const kanji_answer_layout_t *l = kanji_answer_layout();
     const kanji_chrome_t *c = kanji_chrome_layout();
 
-    a.root = ui_pane(par, 0, 0, c->content.w, c->content.h);
-    lv_obj_set_style_bg_color(a.root, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(a.root, LV_OPA_COVER, 0);
+    a.root = ui_fill_white(par, 0, 0, c->content.w, c->content.h);
 
     ui_fill(a.root, l->band.x, LOCAL_Y(l->band.y), l->band.w, l->band.h);
 
