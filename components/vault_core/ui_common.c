@@ -112,6 +112,16 @@ lv_obj_t *ui_lab_headword(lv_obj_t *par, int x, int y, int w, int h,
     return l;
 }
 
+void ui_apply_headword(lv_obj_t *label, const char *front)
+{
+    if (!label) return;
+    char display[KANJI_FRONT_MAX];
+    kanji_headword_display_text(display, front);
+    lv_obj_set_style_text_font(label, ui_hero_face(display), 0);
+    /* lv_label_set_text() copies `display` before this stack frame returns. */
+    ui_set(label, display);
+}
+
 void ui_lab_wrap(lv_obj_t *label, int height)
 {
     if (!label) return;

@@ -76,9 +76,8 @@ lv_obj_t *ui_rule(lv_obj_t *par, int x, int y, int w, int h);
  *
  *   - a white mark on top of a selected black surface, where a transparent
  *     object would show the black through;
- *   - the root of a screen that is paper rather than player, so the sheet
- *     covers whatever the previous screen left in the framebuffer instead of
- *     letting it show through.
+ *   - an opaque screen root that covers the previous pane's framebuffer pixels
+ *     instead of letting them show through.
  */
 lv_obj_t *ui_fill_white(lv_obj_t *par, int x, int y, int w, int h);
 
@@ -99,6 +98,10 @@ lv_obj_t *ui_lab_w(lv_obj_t *par, int x, int y, int w,
  * visible; short covered words still use the serif face. */
 lv_obj_t *ui_lab_headword(lv_obj_t *par, int x, int y, int w, int h,
                           const lv_font_t *f, const char *txt);
+
+/* Normalize a raw model front for display, select the face from that canonical
+ * text, and copy it into `label`. The raw snapshot remains untouched. */
+void ui_apply_headword(lv_obj_t *label, const char *front);
 
 /* White-on-black text for selected surfaces and exceptional-state stamps. */
 lv_obj_t *ui_lab_inv(lv_obj_t *par, int x, int y, int w,

@@ -88,6 +88,12 @@ const kanji_sheet_layout_t    *kanji_sheet_layout(bool with_stats);
 bool kanji_hero_is_large(const char *front);
 int kanji_center_x(const kanji_rect_t *outer, int w);
 
+/* Canonical display-only headword text. Raw model/parser/hash data is left
+ * untouched; ASCII display whitespace is collapsed and trimmed into the
+ * model-sized destination. */
+size_t kanji_headword_display_text(char dst[KANJI_FRONT_MAX],
+                                   const char *front);
+
 #ifdef __cplusplus
 }
 #endif

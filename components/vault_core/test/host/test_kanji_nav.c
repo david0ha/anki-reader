@@ -670,24 +670,48 @@ static void test_only_a_changed_valid_answer_grade_is_dock_only(void)
     kanji_nav_t after = before;
     after.grade = KANJI_GRADE_EASY;
 
-    CHECK(!kanji_nav_is_grade_only_transition(&before, &before));
+    kanji_nav_t same_grade = before;
+    CHECK(!kanji_nav_is_grade_only_transition(&before, &same_grade));
     CHECK(!kanji_nav_is_grade_only_transition(NULL, &after));
     CHECK(!kanji_nav_is_grade_only_transition(&before, NULL));
 
     kanji_nav_t changed = after;
     changed.revealed = false;
     CHECK(!kanji_nav_is_grade_only_transition(&before, &changed));
+    changed = before;
+    changed.revealed = false;
+    CHECK(!kanji_nav_is_grade_only_transition(&changed, &after));
     changed = after;
     changed.sheet = KANJI_SHEET_DESCRIPTION;
     CHECK(!kanji_nav_is_grade_only_transition(&before, &changed));
+    changed = before;
+    changed.sheet = KANJI_SHEET_DESCRIPTION;
+    CHECK(!kanji_nav_is_grade_only_transition(&changed, &after));
     changed = after;
     changed.sheet_page++;
     CHECK(!kanji_nav_is_grade_only_transition(&before, &changed));
+    changed = before;
+    changed.sheet_page++;
+    CHECK(!kanji_nav_is_grade_only_transition(&changed, &after));
+
+    kanji_nav_t invalid_before = before;
+    kanji_nav_t invalid_after = after;
+    invalid_before.sheet_page = invalid_after.sheet_page = -1;
+    CHECK(!kanji_nav_is_grade_only_transition(&invalid_before, &invalid_after));
+    invalid_before.sheet_page = invalid_after.sheet_page = 1;
+    CHECK(!kanji_nav_is_grade_only_transition(&invalid_before, &invalid_after));
+
     changed = after;
     changed.grade = (kanji_grade_t)KANJI_GRADE_COUNT + 1;
     CHECK(!kanji_nav_is_grade_only_transition(&before, &changed));
+    changed = after;
+    changed.grade = (kanji_grade_t)0;
+    CHECK(!kanji_nav_is_grade_only_transition(&before, &changed));
     changed = before;
     changed.grade = (kanji_grade_t)0;
+    CHECK(!kanji_nav_is_grade_only_transition(&changed, &after));
+    changed = before;
+    changed.grade = (kanji_grade_t)KANJI_GRADE_COUNT + 1;
     CHECK(!kanji_nav_is_grade_only_transition(&changed, &after));
 }
 

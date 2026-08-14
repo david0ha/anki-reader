@@ -1,6 +1,8 @@
 /* Fixed-grid contract for the 648x480 Lexicographic Instrument. */
 #include "th.h"
 
+#include <string.h>
+
 #include "ui_kanji_layout.h"
 
 #define CHECK_RECT(r, X, Y, W, H) do { \
@@ -117,6 +119,36 @@ static void test_maximum_valid_headword_has_full_fallback_wrap_capacity(void)
     CHECK(a->hero.y + a->hero.h <= a->reading.y);
 }
 
+static void test_display_headword_canonicalizes_maximum_whitespace_content(void)
+{
+    char raw[KANJI_FRONT_MAX];
+    static const char whitespace[] = { ' ', '\n', '\r', '\t', '\f', '\v' };
+    for (int i = 0; i < KANJI_FRONT_MAX - 1; i++) {
+        raw[i] = (i % 2 == 0) ? 'W' : whitespace[(i / 2) % 5];
+    }
+    raw[KANJI_FRONT_MAX - 1] = '\0';
+    CHECK_INT((int)strlen(raw), KANJI_FRONT_MAX - 1);
+
+    char display[KANJI_FRONT_MAX];
+    const size_t written = kanji_headword_display_text(display, raw);
+    CHECK_STR(display,
+              "W W W W W W W W W W W W W W W W W W W W");
+    CHECK_INT((int)written, 39);
+    CHECK(written < KANJI_FRONT_MAX);
+    CHECK(strpbrk(display, "\n\r\t\f\v") == NULL);
+    CHECK((int)written * 29 <= kanji_question_layout()->hero.w * 3);
+
+    const char face_raw[] = "一\n\n二\t\r三";
+    char face_display[KANJI_FRONT_MAX];
+    kanji_headword_display_text(face_display, face_raw);
+    CHECK_STR(face_display, "一 二 三");
+    CHECK(!kanji_hero_is_large(face_raw));
+    CHECK(kanji_hero_is_large(face_display));
+
+    kanji_headword_display_text(face_display, " \t会\r\nう\v ");
+    CHECK_STR(face_display, "会 う");
+}
+
 static void test_dock_converts_to_exact_half_open_bounds(void)
 {
     int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
@@ -147,6 +179,7 @@ int main(void)
     test_all_three_answer_examples_are_reachable();
     test_description_prose_has_a_full_reading_page();
     test_maximum_valid_headword_has_full_fallback_wrap_capacity();
+    test_display_headword_canonicalizes_maximum_whitespace_content();
     test_dock_converts_to_exact_half_open_bounds();
     test_content_dependent_helpers();
     TH_REPORT("kanji_layout");

@@ -76,9 +76,7 @@ void ui_card_answer_dock(const kanji_t *k, kanji_grade_t cursor)
 void ui_card_answer_update(const kanji_t *k, kanji_grade_t cursor)
 {
     const bool have = k && k->card.valid;
-    const lv_font_t *face = ui_hero_face(have ? k->card.front : "");
-    lv_obj_set_style_text_font(a.hero, face, 0);
-    ui_set(a.hero, have ? k->card.front : "");
+    ui_apply_headword(a.hero, have ? k->card.front : "");
     if (have && k->card.reading[0]) ui_setf(a.reading, "%s  %s", S_READING, k->card.reading);
     else ui_set(a.reading, "");
 

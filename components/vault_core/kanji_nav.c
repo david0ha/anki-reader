@@ -372,7 +372,7 @@ bool kanji_nav_is_grade_only_transition(const kanji_nav_t *before,
     return before->revealed && after->revealed &&
            before->sheet == KANJI_SHEET_NONE &&
            after->sheet == KANJI_SHEET_NONE &&
-           before->sheet_page == after->sheet_page &&
+           before->sheet_page == 0 && after->sheet_page == 0 &&
            before_grade_valid && after_grade_valid &&
            before->grade != after->grade;
 }

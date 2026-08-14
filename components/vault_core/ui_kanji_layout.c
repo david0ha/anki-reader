@@ -128,3 +128,9 @@ int kanji_center_x(const kanji_rect_t *outer, int w)
     if (w >= outer->w) return outer->x;
     return outer->x + (outer->w - w) / 2;
 }
+
+size_t kanji_headword_display_text(char dst[KANJI_FRONT_MAX],
+                                   const char *front)
+{
+    return kanji_text_collapse_whitespace(dst, KANJI_FRONT_MAX, front);
+}

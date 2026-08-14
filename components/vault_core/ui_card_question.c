@@ -33,9 +33,7 @@ lv_obj_t *ui_card_question_create(lv_obj_t *par)
 void ui_card_question_update(const kanji_t *k)
 {
     const bool have = k && k->card.valid;
-    const lv_font_t *face = ui_hero_face(have ? k->card.front : "");
-    lv_obj_set_style_text_font(q.hero, face, 0);
-    ui_set(q.hero, have ? k->card.front : "");
+    ui_apply_headword(q.hero, have ? k->card.front : "");
 
     if (have) {
         ui_set(q.prompt, S_TAP_TO_REVEAL);
