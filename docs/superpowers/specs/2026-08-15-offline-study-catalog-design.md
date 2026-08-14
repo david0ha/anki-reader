@@ -182,15 +182,15 @@ one previously committed bank readable.
 Submitting a local grade follows one ordering rule:
 
 1. Calculate the next catalog ordinal.
-2. Append and verify the rating record.
-3. Update RAM state.
-4. Decode the next card.
-5. Publish it and reset navigation to the question.
+2. Decode the next card into a temporary snapshot.
+3. Append and verify the rating record.
+4. Update RAM state.
+5. Publish the already-decoded card and reset navigation to the question.
 
-If persistence fails, the current answer remains visible and the card does not
-advance. Every accepted grade advances one ordinal regardless of grade in this
-phase; the grade changes persisted repetitions/lapses/last-grade state, not a
-wall-clock schedule.
+If decoding or persistence fails, the current answer remains visible and the
+card does not advance. Every accepted grade advances one ordinal regardless of
+grade in this phase; the grade changes persisted
+repetitions/lapses/last-grade state, not a wall-clock schedule.
 
 ## 8. Runtime source arbitration and boot
 
