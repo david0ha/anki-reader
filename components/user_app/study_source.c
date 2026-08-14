@@ -32,6 +32,53 @@ void study_runtime_init(study_runtime_t *runtime)
     kanji_nav_reset(&runtime->nav);
 }
 
+uint32_t study_runtime_publication_revision(const study_runtime_t *runtime)
+{
+    return runtime != NULL ? runtime->publication_revision : 0;
+}
+
+bool study_runtime_publication_accepts(const study_runtime_t *runtime,
+                                       uint32_t revision)
+{
+    return runtime != NULL && revision == runtime->publication_revision;
+}
+
+void study_runtime_advance_source(study_runtime_t *runtime)
+{
+    if (runtime != NULL) {
+        source_guard_advance(&runtime->source_guard);
+    }
+}
+
+study_draw_token_t study_runtime_capture_draw(
+    const study_runtime_t *runtime,
+    study_draw_guard_kind_t kind)
+{
+    study_draw_token_t token = { .kind = kind };
+    if (runtime != NULL) {
+        token.publication_revision = runtime->publication_revision;
+        token.source_generation =
+            source_guard_capture(&runtime->source_guard);
+    }
+    return token;
+}
+
+bool study_runtime_accepts_draw(const study_runtime_t *runtime,
+                                const study_draw_token_t *token)
+{
+    if (runtime == NULL || token == NULL ||
+        !study_runtime_publication_accepts(
+            runtime, token->publication_revision)) {
+        return false;
+    }
+    if (token->kind == STUDY_DRAW_PUBLICATION_ONLY) {
+        return true;
+    }
+    return token->kind == STUDY_DRAW_PUBLICATION_AND_SOURCE &&
+           source_guard_accepts(&runtime->source_guard,
+                                token->source_generation);
+}
+
 study_restore_result_t study_runtime_restore(study_runtime_t *runtime,
                                              study_catalog_ops_t catalog,
                                              study_state_lock_t state)
@@ -58,6 +105,8 @@ study_restore_result_t study_runtime_restore(study_runtime_t *runtime,
     }
     runtime->hash = kanji_hash(&runtime->data);
     kanji_nav_reset(&runtime->nav);
+    runtime->publication_revision++;
+    runtime->remote_publication_generation_valid = false;
     unlock_state(state);
     return candidate != NULL ? STUDY_RESTORE_CATALOG : STUDY_RESTORE_DEMO;
 }
@@ -123,14 +172,28 @@ study_remote_result_t study_runtime_commit_remote(study_runtime_t *runtime,
 
     const uint32_t hash = kanji_hash(fetched);
     const bool transitioned = runtime->data.source != fetched->source;
-    const bool changed = hash != runtime->hash || advanced || transitioned;
+    const bool remote_epoch_changed =
+        fetched->source == KANJI_SOURCE_REMOTE &&
+        (!runtime->remote_publication_generation_valid ||
+         runtime->remote_publication_generation != generation);
+    const bool changed = hash != runtime->hash || advanced || transitioned ||
+                         remote_epoch_changed;
     if (advanced) {
         runtime->pending_grade_valid = false;
     }
     runtime->data = *fetched;
     runtime->hash = hash;
+    if (fetched->source == KANJI_SOURCE_REMOTE) {
+        runtime->remote_publication_generation = generation;
+        runtime->remote_publication_generation_valid = true;
+    } else {
+        runtime->remote_publication_generation_valid = false;
+    }
     if (advanced || transitioned) {
         kanji_nav_reset(&runtime->nav);
+    }
+    if (changed) {
+        runtime->publication_revision++;
     }
     return changed ? STUDY_REMOTE_PUBLISHED : STUDY_REMOTE_UNCHANGED;
 }
@@ -167,6 +230,7 @@ study_local_result_t study_runtime_process_local_grade(
                 runtime->data = *next;
                 runtime->hash = kanji_hash(&runtime->data);
                 kanji_nav_reset(&runtime->nav);
+                runtime->publication_revision++;
                 result = STUDY_LOCAL_PUBLISHED;
             } else {
                 result = STUDY_LOCAL_HIDDEN;

@@ -25,14 +25,28 @@ typedef struct {
     char remote_card_id[KANJI_ID_MAX];
 } study_grade_request_t;
 
+typedef enum {
+    STUDY_DRAW_PUBLICATION_ONLY = 0,
+    STUDY_DRAW_PUBLICATION_AND_SOURCE,
+} study_draw_guard_kind_t;
+
+typedef struct {
+    study_draw_guard_kind_t kind;
+    uint32_t publication_revision;
+    uint32_t source_generation;
+} study_draw_token_t;
+
 typedef struct {
     kanji_t data;
     uint32_t hash;
     uint16_t catalog_ordinal;
     source_guard_t source_guard;
+    uint32_t publication_revision;
+    uint32_t remote_publication_generation;
     kanji_nav_t nav;
     study_grade_request_t pending_grade;
     bool pending_grade_valid;
+    bool remote_publication_generation_valid;
     uint32_t pending_grade_generation;
 } study_runtime_t;
 
@@ -70,6 +84,21 @@ typedef enum {
 } study_local_result_t;
 
 void study_runtime_init(study_runtime_t *runtime);
+
+/* A publication revision identifies the card/nav snapshot a queued draw was
+ * created for. It is intentionally independent from the HTTP source guard. */
+uint32_t study_runtime_publication_revision(const study_runtime_t *runtime);
+bool study_runtime_publication_accepts(const study_runtime_t *runtime,
+                                       uint32_t revision);
+void study_runtime_advance_source(study_runtime_t *runtime);
+/* Local catalog draws use PUBLICATION_ONLY so a queued URL edit cannot strand
+ * them. Remote card/status draws use PUBLICATION_AND_SOURCE so data from the
+ * replaced endpoint cannot reach the panel. Call while holding the state lock. */
+study_draw_token_t study_runtime_capture_draw(
+    const study_runtime_t *runtime,
+    study_draw_guard_kind_t kind);
+bool study_runtime_accepts_draw(const study_runtime_t *runtime,
+                                const study_draw_token_t *token);
 
 /* Used by both cold boot and URL clear. Catalog callbacks are invoked before
  * the state lock is taken; the final card/hash/ordinal/nav swap is atomic. */

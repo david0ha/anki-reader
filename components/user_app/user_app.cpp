@@ -116,7 +116,7 @@ typedef enum {
 typedef struct {
     app_cmd_kind_t kind;
     int  ival;
-    uint32_t source_generation;
+    study_draw_token_t draw_token;
     char text[PROV_URL_MAX_LEN + 1];
     char overlay_title[64];
     char overlay_body[192];
@@ -132,6 +132,7 @@ static SemaphoreHandle_t s_poll_wake;
 static SemaphoreHandle_t s_ui_ready;
 static user_app_task_resources_t s_task_resources;
 static bool s_initialized;
+static bool s_http_port_ready;
 
 static inline void state_lock(void)   { xSemaphoreTake(s_mtx, portMAX_DELAY); }
 static inline void state_unlock(void) { xSemaphoreGive(s_mtx); }
@@ -372,7 +373,7 @@ static void action_set_url(const char *url)
     const bool changed = strcmp(s_cfg.study_url, url) != 0;
     strlcpy(s_cfg.study_url, url, sizeof(s_cfg.study_url));
     if (changed) {
-        source_guard_advance(&s_source_guard);
+        study_runtime_advance_source(&s_study);
     }
     state_unlock();
 
@@ -402,7 +403,7 @@ static void action_set_network_config(const prov_config_t *cfg)
     const bool source_changed = strcmp(s_cfg.study_url, cfg->study_url) != 0;
     s_cfg = *cfg;
     if (source_changed) {
-        source_guard_advance(&s_source_guard);
+        study_runtime_advance_source(&s_study);
     }
     state_unlock();
 
@@ -480,12 +481,18 @@ static void handle_cmd(const app_cmd_t *c)
     case APP_CMD_DATA:
     case APP_CMD_CARD_ADVANCED: {
         state_lock();
-        bool current = source_guard_accepts(&s_source_guard, c->source_generation);
+        const bool current =
+            study_runtime_accepts_draw(&s_study, &c->draw_token);
         state_unlock();
         if (!current) {
-            ESP_LOGI(TAG, "stale queued card discarded after source change");
+            ESP_LOGI(TAG, "stale queued draw discarded after "
+                          "publication/source change");
             break;
         }
+        /* Local catalog draws are publication-only, so a URL change cannot
+         * strand a card already queued behind SET_URL. Remote data/status
+         * draws additionally carry the HTTP source generation and are dropped
+         * if they came from the URL that SET_URL just replaced. */
         push_status_to_ui();
         push_data_to_ui();
         present_full();
@@ -641,7 +648,7 @@ static void UiTask(void *arg)
 /* --- the card poller (KanjiTask only) -------------------------------------- */
 
 /* Post a command to UiTask. The only way anything off UiTask causes a repaint. */
-static void notify_ui(app_cmd_kind_t kind, uint32_t source_generation)
+static void notify_ui(app_cmd_kind_t kind, study_draw_token_t draw_token)
 {
     if (!s_cmd_queue) {
         return;
@@ -649,7 +656,7 @@ static void notify_ui(app_cmd_kind_t kind, uint32_t source_generation)
     app_cmd_t c;
     memset(&c, 0, sizeof(c));
     c.kind = kind;
-    c.source_generation = source_generation;
+    c.draw_token = draw_token;
     /* Do not advance the render fingerprint and then silently lose its draw.
      * UiTask is the queue's sole consumer and never waits on KanjiTask, so this
      * bounded producer can safely wait until a slot is available. */
@@ -665,11 +672,16 @@ static kanji_t s_fetched;
  * already on the glass; the caller decides whether that is worth a refresh.
  * `advanced` resets the interaction state, because a new card is a new question
  * and leaving the previous card's answer revealed would show it. */
-static bool commit(uint32_t generation, bool advanced)
+static bool commit(uint32_t generation, bool advanced,
+                   study_draw_token_t *draw_token)
 {
     state_lock();
     const study_remote_result_t result = study_runtime_commit_remote(
         &s_study, &s_fetched, generation, advanced);
+    if (result == STUDY_REMOTE_PUBLISHED && draw_token != NULL) {
+        *draw_token = study_runtime_capture_draw(
+            &s_study, STUDY_DRAW_PUBLICATION_AND_SOURCE);
+    }
     if (result != STUDY_REMOTE_STALE) {
         s_last_ok_us = esp_timer_get_time();
         s_last_result = KANJI_FETCH_OK;
@@ -685,7 +697,7 @@ static bool commit(uint32_t generation, bool advanced)
 
 static void process_local_grade(const study_grade_request_t *request)
 {
-    uint32_t generation = 0;
+    study_draw_token_t draw_token = {};
     uint16_t next_ordinal = request->catalog_ordinal;
 
     xSemaphoreTake(s_catalog_mtx, portMAX_DELAY);
@@ -693,7 +705,8 @@ static void process_local_grade(const study_grade_request_t *request)
         &s_study, request, catalog_ops(), study_lock_ops());
     if (result == STUDY_LOCAL_PUBLISHED) {
         state_lock();
-        generation = source_guard_capture(&s_source_guard);
+        draw_token = study_runtime_capture_draw(
+            &s_study, STUDY_DRAW_PUBLICATION_ONLY);
         next_ordinal = s_catalog_ordinal;
         state_unlock();
     }
@@ -707,7 +720,7 @@ static void process_local_grade(const study_grade_request_t *request)
     if (result == STUDY_LOCAL_PUBLISHED) {
         ESP_LOGI(TAG, "local %s persisted; catalog advanced to %u",
                  kanji_grade_name(request->grade), next_ordinal);
-        notify_ui(APP_CMD_CARD_ADVANCED, generation);
+        notify_ui(APP_CMD_CARD_ADVANCED, draw_token);
     } else {
         ESP_LOGI(TAG, "local grade persisted after source takeover; panel unchanged");
     }
@@ -770,24 +783,30 @@ static void KanjiTask(void *arg)
                             : kanji_service_fetch(url, &s_fetched);
 
                 if (r == KANJI_FETCH_OK) {
-                    if (commit(generation, grading)) {
+                    study_draw_token_t draw_token = {};
+                    if (commit(generation, grading, &draw_token)) {
                         ESP_LOGI(TAG, "card %s — refreshing",
                                  grading ? "graded" : "changed");
                         notify_ui(grading ? APP_CMD_CARD_ADVANCED : APP_CMD_DATA,
-                                  generation);
+                                  draw_token);
                     } else {
                         /* The single most common outcome, and the one that must not
                          * cost a panel refresh. */
                         ESP_LOGD(TAG, "study: unchanged, panel untouched");
                     }
                 } else {
+                    study_draw_token_t draw_token = {};
                     state_lock();
                     if (grading) {
                         s_pending_grade_valid = false;
                     }
                     bool current_source =
                         source_guard_accepts(&s_source_guard, generation);
-                    if (current_source) s_last_result = r;
+                    if (current_source) {
+                        s_last_result = r;
+                        draw_token = study_runtime_capture_draw(
+                            &s_study, STUDY_DRAW_PUBLICATION_AND_SOURCE);
+                    }
                     state_unlock();
                     if (!current_source) {
                         ESP_LOGI(TAG, "study source changed during fetch; "
@@ -799,7 +818,7 @@ static void KanjiTask(void *arg)
                         /* The badge in the header is the only thing that changed,
                          * and it is worth one refresh: a learner pressing KEY1 into
                          * a dead proxy otherwise gets no feedback at all. */
-                        notify_ui(APP_CMD_DATA, generation);
+                        notify_ui(APP_CMD_DATA, draw_token);
                     }
                 }
             }
@@ -884,9 +903,10 @@ static bool task_prepare(void *context,
         ESP_LOGW(TAG, "offline catalog unavailable; using demo fallback");
     }
 
-    /* Create the global TLS-connect gate before KanjiTask can call http_get(). */
-    http_port_init();
-    return true;
+    /* Create the global TLS-connect gate before KanjiTask can call http_get().
+     * A later lifecycle failure deletes both tasks before cleanup releases it. */
+    s_http_port_ready = http_port_init();
+    return s_http_port_ready;
 }
 
 static bool task_create(void *context, user_app_task_kind_t kind,
@@ -940,6 +960,10 @@ static void task_publish(void *context,
 static void task_cleanup_complete(void *context)
 {
     (void)context;
+    if (s_http_port_ready) {
+        http_port_deinit();
+        s_http_port_ready = false;
+    }
     s_initialized = false;
     s_mtx = NULL;
     s_catalog_mtx = NULL;

@@ -24,9 +24,20 @@
 static const char *g_body;      /* NULL = transport failure */
 static int         g_status;
 static int         g_calls;
+static int         g_init_calls;
+static int         g_deinit_calls;
 static char        g_last_url[512];
 
-void http_port_init(void) { }
+bool http_port_init(void)
+{
+    g_init_calls++;
+    return true;
+}
+
+void http_port_deinit(void)
+{
+    g_deinit_calls++;
+}
 
 char *http_get(const char *url, int *out_status)
 {
@@ -50,6 +61,16 @@ char *http_get(const char *url, int *out_status)
 }
 
 /* --- fixtures ------------------------------------------------------------- */
+
+static void test_port_lifecycle_contract_is_explicit(void)
+{
+    g_init_calls = 0;
+    g_deinit_calls = 0;
+    CHECK(http_port_init());
+    http_port_deinit();
+    CHECK_INT(g_init_calls, 1);
+    CHECK_INT(g_deinit_calls, 1);
+}
 
 static const char *CARD =
     "{\"v\":1,\"session\":{\"deck\":\"N5\",\"streak\":3},"
@@ -348,6 +369,7 @@ static void test_every_result_has_a_stable_name(void)
 
 int main(void)
 {
+    test_port_lifecycle_contract_is_explicit();
     test_each_failure_is_told_apart_from_the_others();
     test_no_url_is_not_a_network_call();
     test_a_failed_fetch_leaves_the_previous_card_intact();

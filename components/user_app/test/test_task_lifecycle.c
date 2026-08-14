@@ -20,6 +20,8 @@ typedef struct {
     int live_tasks;
     int removed_members;
     bool prepared;
+    bool prepare_gate_live;
+    bool prepare_gate_released;
     bool published;
     bool cleaned;
 } fake_init_t;
@@ -68,7 +70,11 @@ static bool prepare(void *context, const user_app_task_resources_t *resources)
     fake_init_t *fake = context;
     CHECK(resources->cmd_queue != NULL);
     fake->prepared = true;
-    return !fails(fake);
+    if (fails(fake)) {
+        return false;
+    }
+    fake->prepare_gate_live = true;
+    return true;
 }
 
 static bool create_task(void *context, user_app_task_kind_t kind,
@@ -119,7 +125,12 @@ static void publish(void *context, const user_app_task_resources_t *resources)
 
 static void cleanup_complete(void *context)
 {
-    ((fake_init_t *)context)->cleaned = true;
+    fake_init_t *fake = context;
+    if (fake->prepare_gate_live) {
+        fake->prepare_gate_live = false;
+        fake->prepare_gate_released = true;
+    }
+    fake->cleaned = true;
 }
 
 static user_app_task_ops_t fake_ops(fake_init_t *fake)
@@ -155,6 +166,8 @@ static void every_init_failure_is_atomic_and_unpublished(void)
         CHECK(fake.cleaned);
         CHECK(fake.live_tasks == 0);
         CHECK(fake.live_resources == 0);
+        CHECK(!fake.prepare_gate_live);
+        CHECK(fake.prepare_gate_released == (fail_at >= 11));
         CHECK(fake.removed_members == (fail_at >= 10 ? 2 :
                                        fail_at == 9 ? 1 : 0));
         CHECK(resources.state_mutex == NULL);
@@ -178,6 +191,8 @@ static void success_publishes_only_after_both_tasks_and_ui_readiness(void)
     CHECK(!fake.cleaned);
     CHECK(fake.live_tasks == 2);
     CHECK(fake.live_resources == 6);
+    CHECK(fake.prepare_gate_live);
+    CHECK(!fake.prepare_gate_released);
     CHECK(resources.ui_ready == NULL);
     CHECK(resources.cmd_queue != NULL);
 }

@@ -208,7 +208,86 @@ The explicit no-subagent constraint overrode the normal external-review
 dispatch. A separate post-implementation diff/invariant pass checked rollback
 order, queue-set emptiness, ISR timing, task readiness, external API gating,
 catalog/state lock order, source-capture behavior, frame use, and Task 7 file
-isolation. No open Critical or Important issue remains in this lane.
+isolation. That pass reported no open Critical or Important issue; the later
+scoped re-review below found and closed one additional queue-order defect.
+
+## Scoped re-review addendum
+
+### Draw identity RED and fix
+
+The scoped re-review reproduced a queue ordering that the first token policy
+did not model: KanjiTask can publish a local next card while an already queued
+`SET_URL(non-empty)` is ahead of its `CARD_ADVANCED` command. A source-only
+generation check then rejected the local draw even though the runtime and
+catalog had advanced, leaving the panel on the old revealed answer.
+
+The production-module test was written first and failed to compile on the
+missing `study_draw_token_t`, `study_runtime_capture_draw()`, and
+`study_runtime_accepts_draw()` symbols. The fix separates two identities:
+
+- `publication_revision` advances on restore, visible local grade publication,
+  and changed/advanced/source-transition remote publication;
+- `source_guard` remains the HTTP endpoint/fetch generation.
+
+Queued local catalog draws carry `STUDY_DRAW_PUBLICATION_ONLY`, so a non-empty
+URL edit alone cannot strand them. Remote card and remote status/error draws
+carry `STUDY_DRAW_PUBLICATION_AND_SOURCE`, so a command committed before a
+queued endpoint replacement is rejected. Restore/URL clear or any later card
+publication changes the revision and invalidates either kind of older draw.
+The production `handle_cmd()`, local-grade path, remote commit path, HTTP-error
+path, and URL/network-config source changes all call these tested helpers.
+
+The test also covers a same-payload fetch from the replacement endpoint. The
+runtime records the generation of the last remote publication, so the first
+valid commit for a new endpoint is a new publication even when its card hash is
+identical. This guarantees a current-source draw follows a rejected old-source
+command; later same-generation/same-card polls remain unchanged and do not
+refresh.
+
+### HTTP gate RED and fix
+
+The lifecycle fake was extended first to acquire a prepare-owned gate. Before
+the cleanup callback released it, failure injection at UI creation, UI-ready
+wait, and KanjiTask creation produced six intended assertions (live gate plus
+missing release for each stage). The HTTP seam test was then changed first and
+failed on the former `void http_port_init(void)` declaration.
+
+`http_port_init()` now returns whether the FreeRTOS TLS-connect mutex exists,
+and `http_port_deinit()` releases it. A failed allocation makes lifecycle
+prepare fail atomically. Every later startup failure deletes tasks first and
+then releases the gate through `cleanup_complete`; a successful startup keeps
+it for KanjiTask. The curl simulator and service fake implement the same
+explicit API. The gate deinit contract requires all fetch tasks to have
+stopped, which is true on every lifecycle rollback path.
+
+### Re-review verification
+
+- focused user-app: source guard, study runtime/draw queue ordering, lifecycle,
+  and saturated startup delivery all report zero failures;
+- ASan+UBSan with both halt-on-error options: study runtime and lifecycle report
+  zero failures (the first sanitizer pass found and fixed an undersized fake
+  event log before final evidence);
+- provisioning: `40 tests, 87 checks, 0 failures`;
+- portable host: 9/9, including the explicit HTTP lifecycle contract;
+- catalog-store transaction: 1/1;
+- simulator: `[100%] Built target kanji_sim` with the new HTTP seam;
+- ESP-IDF 5.4.3 objects: `user_app.cpp`, `study_source.c`,
+  `task_lifecycle.c`, `http_port_esp.c`, and `main.cpp` compile with the real
+  ESP32-S3 toolchain.
+
+The hard frame replay remains GREEN. Updated/new relevant static frames are:
+
+```text
+study_runtime_capture_draw             64
+study_runtime_accepts_draw             32
+study_runtime_commit_remote            48
+process_local_grade                   112
+http_port_init                         32
+http_port_deinit                       32
+UserApp_TaskInit                       96
+```
+
+No hardware was flashed.
 
 Commit identity is reported in the parent handoff because a commit cannot
 contain its own final hash.

@@ -40,8 +40,18 @@ static const char *TAG = "http";
  * starts (so http_get never has to lazily create it under a race). */
 static SemaphoreHandle_t s_tls_connect_lock;
 
-void http_port_init(void) {
-    if (!s_tls_connect_lock) s_tls_connect_lock = xSemaphoreCreateMutex();
+bool http_port_init(void) {
+    if (!s_tls_connect_lock) {
+        s_tls_connect_lock = xSemaphoreCreateMutex();
+    }
+    return s_tls_connect_lock != NULL;
+}
+
+void http_port_deinit(void) {
+    if (s_tls_connect_lock) {
+        vSemaphoreDelete(s_tls_connect_lock);
+        s_tls_connect_lock = NULL;
+    }
 }
 
 typedef struct { char *buf; size_t len; size_t cap; bool oom; } acc_t;

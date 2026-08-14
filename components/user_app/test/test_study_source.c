@@ -25,9 +25,19 @@ typedef struct {
     bool persist_ok;
     uint16_t ordinal;
     kanji_t current;
-    int events[8];
+    int events[32];
     int event_count;
 } fake_catalog_t;
+
+static void record_event(fake_catalog_t *catalog, int event)
+{
+    CHECK(catalog->event_count <
+          (int)(sizeof(catalog->events) / sizeof(catalog->events[0])));
+    if (catalog->event_count <
+        (int)(sizeof(catalog->events) / sizeof(catalog->events[0]))) {
+        catalog->events[catalog->event_count++] = event;
+    }
+}
 
 static kanji_t card(const char *id, kanji_source_t source)
 {
@@ -49,7 +59,7 @@ static bool fake_available(void *context)
 static const kanji_t *fake_current(void *context)
 {
     fake_catalog_t *catalog = context;
-    catalog->events[catalog->event_count++] = EVENT_CURRENT;
+    record_event(catalog, EVENT_CURRENT);
     return catalog->available ? &catalog->current : NULL;
 }
 
@@ -62,11 +72,11 @@ static bool fake_grade(void *context, kanji_grade_t grade)
 {
     fake_catalog_t *catalog = context;
     (void)grade;
-    catalog->events[catalog->event_count++] = EVENT_DECODE;
+    record_event(catalog, EVENT_DECODE);
     if (!catalog->decode_ok) {
         return false;
     }
-    catalog->events[catalog->event_count++] = EVENT_PERSIST;
+    record_event(catalog, EVENT_PERSIST);
     if (!catalog->persist_ok) {
         return false;
     }
@@ -78,7 +88,7 @@ static bool fake_grade(void *context, kanji_grade_t grade)
 static void fake_lock(void *context)
 {
     fake_catalog_t *catalog = context;
-    catalog->events[catalog->event_count++] = EVENT_PUBLISH;
+    record_event(catalog, EVENT_PUBLISH);
 }
 
 static void fake_unlock(void *context)
@@ -239,7 +249,7 @@ static void captured_source_prevents_remote_local_cross_consumption(void)
     const uint32_t remote_generation = runtime.pending_grade_generation;
     CHECK(study_runtime_remote_grade_ready(&runtime, remote_generation,
                                            "http://study"));
-    source_guard_advance(&runtime.source_guard);
+    study_runtime_advance_source(&runtime);
     CHECK(!study_runtime_remote_grade_ready(&runtime, remote_generation,
                                             "http://study"));
     CHECK(!study_runtime_remote_grade_ready(&runtime, remote_generation, ""));
@@ -258,11 +268,93 @@ static void stale_remote_result_preserves_catalog(void)
     study_runtime_init(&runtime);
     (void)study_runtime_restore(&runtime, ops(&catalog), lock_ops(&catalog));
     const uint32_t stale = source_guard_capture(&runtime.source_guard);
-    source_guard_advance(&runtime.source_guard);
+    study_runtime_advance_source(&runtime);
     const kanji_t remote = card("remote", KANJI_SOURCE_REMOTE);
     CHECK(study_runtime_commit_remote(&runtime, &remote, stale, false) ==
           STUDY_REMOTE_STALE);
     CHECK(strcmp(runtime.data.card.id, "catalog") == 0);
+}
+
+static void publication_revision_tracks_draws_not_source_only_changes(void)
+{
+    fake_catalog_t catalog = {
+        .available = true,
+        .decode_ok = true,
+        .persist_ok = true,
+        .current = card("local-answer", KANJI_SOURCE_CATALOG),
+        .ordinal = 27,
+    };
+    study_runtime_t runtime;
+    study_runtime_init(&runtime);
+    (void)study_runtime_restore(&runtime, ops(&catalog), lock_ops(&catalog));
+    const uint32_t boot_revision =
+        study_runtime_publication_revision(&runtime);
+
+    CHECK(study_runtime_capture_grade(&runtime, KANJI_GRADE_GOOD) ==
+          STUDY_GRADE_LOCAL);
+    const study_grade_request_t local = runtime.pending_grade;
+    CHECK(study_runtime_process_local_grade(
+              &runtime, &local, ops(&catalog), lock_ops(&catalog)) ==
+          STUDY_LOCAL_PUBLISHED);
+    const study_draw_token_t local_draw = study_runtime_capture_draw(
+        &runtime, STUDY_DRAW_PUBLICATION_ONLY);
+    CHECK(local_draw.publication_revision != boot_revision);
+
+    /* Exact queue order under review: the local CARD_ADVANCED token is made,
+     * then an older SET_URL(non-empty) command runs first. That source-only
+     * change must not invalidate the card publication waiting behind it. */
+    study_runtime_advance_source(&runtime);
+    CHECK(study_runtime_accepts_draw(&runtime, &local_draw));
+
+    /* URL clear restores another card/nav snapshot and invalidates local draw. */
+    catalog.current = card("restored", KANJI_SOURCE_CATALOG);
+    catalog.ordinal = 28;
+    (void)study_runtime_restore(&runtime, ops(&catalog), lock_ops(&catalog));
+    CHECK(!study_runtime_accepts_draw(&runtime, &local_draw));
+
+    /* Exact remote queue order: remote data (or its status/error draw) commits
+     * and captures both tokens, SET_URL(non-empty) runs ahead of the draw, and
+     * the old-source command must be rejected even though the card revision is
+     * otherwise still current. */
+    uint32_t generation = source_guard_capture(&runtime.source_guard);
+    kanji_t remote = card("remote-before-url", KANJI_SOURCE_REMOTE);
+    CHECK(study_runtime_commit_remote(&runtime, &remote, generation, false) ==
+          STUDY_REMOTE_PUBLISHED);
+    const study_draw_token_t old_remote_draw = study_runtime_capture_draw(
+        &runtime, STUDY_DRAW_PUBLICATION_AND_SOURCE);
+    const study_draw_token_t old_remote_status = study_runtime_capture_draw(
+        &runtime, STUDY_DRAW_PUBLICATION_AND_SOURCE);
+    CHECK(study_runtime_accepts_draw(&runtime, &old_remote_draw));
+    CHECK(study_runtime_accepts_draw(&runtime, &old_remote_status));
+    study_runtime_advance_source(&runtime);
+    CHECK(!study_runtime_accepts_draw(&runtime, &old_remote_draw));
+    CHECK(!study_runtime_accepts_draw(&runtime, &old_remote_status));
+    generation = source_guard_capture(&runtime.source_guard);
+    CHECK(study_runtime_commit_remote(&runtime, &remote, generation, false) ==
+          STUDY_REMOTE_PUBLISHED);
+    const study_draw_token_t current_remote_draw = study_runtime_capture_draw(
+        &runtime, STUDY_DRAW_PUBLICATION_AND_SOURCE);
+    CHECK(study_runtime_accepts_draw(&runtime, &current_remote_draw));
+    CHECK(study_runtime_commit_remote(&runtime, &remote, generation, false) ==
+          STUDY_REMOTE_UNCHANGED);
+    CHECK(study_runtime_accepts_draw(&runtime, &current_remote_draw));
+
+    /* A later remote publication also supersedes a queued local-only draw. */
+    catalog.current = card("local-again", KANJI_SOURCE_CATALOG);
+    (void)study_runtime_restore(&runtime, ops(&catalog), lock_ops(&catalog));
+    CHECK(study_runtime_capture_grade(&runtime, KANJI_GRADE_EASY) ==
+          STUDY_GRADE_LOCAL);
+    const study_grade_request_t second_local = runtime.pending_grade;
+    CHECK(study_runtime_process_local_grade(
+              &runtime, &second_local, ops(&catalog), lock_ops(&catalog)) ==
+          STUDY_LOCAL_PUBLISHED);
+    const study_draw_token_t second_local_draw = study_runtime_capture_draw(
+        &runtime, STUDY_DRAW_PUBLICATION_ONLY);
+    generation = source_guard_capture(&runtime.source_guard);
+    remote = card("remote-after-local", KANJI_SOURCE_REMOTE);
+    CHECK(study_runtime_commit_remote(&runtime, &remote, generation, false) ==
+          STUDY_REMOTE_PUBLISHED);
+    CHECK(!study_runtime_accepts_draw(&runtime, &second_local_draw));
 }
 
 int main(void)
@@ -272,6 +364,7 @@ int main(void)
     local_decode_or_state_failure_keeps_card_and_ordinal();
     captured_source_prevents_remote_local_cross_consumption();
     stale_remote_result_preserves_catalog();
+    publication_revision_tracks_draws_not_source_only_changes();
 
     printf("study source: %d failures\n", failures);
     return failures ? 1 : 0;
