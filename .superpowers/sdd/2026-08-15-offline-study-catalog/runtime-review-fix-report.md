@@ -329,5 +329,49 @@ Final evidence after the fix:
 
 No hardware was flashed.
 
+## Final nav-epoch and catalog-release review
+
+### Remote epoch navigation reset
+
+The first valid response from a replacement remote endpoint was already forced
+into a new publication, even for byte-identical card data, but its navigation
+reset only covered `advanced || transitioned`. With remote URL A and URL B both
+producing a remote card, `transitioned` is false; A's revealed answer or open
+sheet could therefore survive onto B's first card.
+
+The production-module test first put A on a revealed description sheet at page
+2 with the Easy cursor, switched to B, and committed B's byte-identical card.
+RED reported four failures: revealed, sheet, page, and grade all retained A's
+state. `remote_epoch_changed` is now also a `kanji_nav_reset()` condition. The
+same sequence returns to the question, no sheet, page zero, and Good cursor.
+
+### Catalog ownership rollback and retry
+
+Lifecycle prepare creates the catalog workspace before it creates the HTTP
+gate or either task. The public, idempotent `catalog_store_release()` API is now
+consumed by `user_app`: prepare marks catalog ownership before init, successful
+startup retains it, and every rollback after prepare releases it after tasks
+have been deleted. Failed catalog init is safe because release is idempotent.
+
+The lifecycle fake acquired a catalog allocation during prepare before cleanup
+was changed. RED reported 12 assertions across prepare/HTTP, UI creation,
+UI-ready, KanjiTask creation, and retry: missing releases, live stores after
+failure, and a retry peak of two live stores. GREEN now proves:
+
+- failures before prepare allocate/release zero stores;
+- prepare and every later injected failure allocate once, release once, and
+  leave zero live stores;
+- successful startup keeps one live store and performs no release;
+- failure followed by successful retry yields two lifetime allocations, one
+  release, one live store, and a maximum simultaneous live count of one.
+
+Focused user-app and ASan+UBSan study/lifecycle tests report zero failures;
+provisioning remains `40 tests, 87 checks, 0 failures`. ESP-IDF 5.4.3 compiles
+`study_source.c`, `task_lifecycle.c`, and `user_app.cpp` with the new public
+catalog API. The hard 2 KiB frame gate passes; remote commit remains 48 bytes,
+prepare/cleanup 32 bytes each, and `UserApp_TaskInit` 96 bytes.
+
+No hardware was flashed.
+
 Commit identity is reported in the parent handoff because a commit cannot
 contain its own final hash.

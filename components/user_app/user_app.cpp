@@ -133,6 +133,7 @@ static SemaphoreHandle_t s_ui_ready;
 static user_app_task_resources_t s_task_resources;
 static bool s_initialized;
 static bool s_http_port_ready;
+static bool s_catalog_store_prepared;
 
 static inline void state_lock(void)   { xSemaphoreTake(s_mtx, portMAX_DELAY); }
 static inline void state_unlock(void) { xSemaphoreGive(s_mtx); }
@@ -894,6 +895,7 @@ static bool task_prepare(void *context,
     /* The catalog is the boot source and is initialized before either task can
      * run or provisioning can begin. The built-in snapshot is used only when
      * the catalog partition/state cannot produce a valid current card. */
+    s_catalog_store_prepared = true;
     (void)catalog_store_init();
     const bool catalog_ready = restore_catalog_or_demo();
     if (catalog_ready) {
@@ -963,6 +965,10 @@ static void task_cleanup_complete(void *context)
     if (s_http_port_ready) {
         http_port_deinit();
         s_http_port_ready = false;
+    }
+    if (s_catalog_store_prepared) {
+        catalog_store_release();
+        s_catalog_store_prepared = false;
     }
     s_initialized = false;
     s_mtx = NULL;

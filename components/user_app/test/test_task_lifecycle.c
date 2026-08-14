@@ -19,6 +19,10 @@ typedef struct {
     int live_resources;
     int live_tasks;
     int removed_members;
+    int catalog_allocations;
+    int catalog_releases;
+    int live_catalogs;
+    int max_live_catalogs;
     bool prepared;
     bool prepare_gate_live;
     bool prepare_gate_released;
@@ -70,6 +74,13 @@ static bool prepare(void *context, const user_app_task_resources_t *resources)
     fake_init_t *fake = context;
     CHECK(resources->cmd_queue != NULL);
     fake->prepared = true;
+    /* Production owns the catalog before the fallible HTTP gate. Operation 10
+     * therefore models HTTP allocation failure with a live store to release. */
+    fake->catalog_allocations++;
+    fake->live_catalogs++;
+    if (fake->live_catalogs > fake->max_live_catalogs) {
+        fake->max_live_catalogs = fake->live_catalogs;
+    }
     if (fails(fake)) {
         return false;
     }
@@ -130,6 +141,10 @@ static void cleanup_complete(void *context)
         fake->prepare_gate_live = false;
         fake->prepare_gate_released = true;
     }
+    if (fake->live_catalogs > 0) {
+        fake->live_catalogs--;
+        fake->catalog_releases++;
+    }
     fake->cleaned = true;
 }
 
@@ -166,6 +181,10 @@ static void every_init_failure_is_atomic_and_unpublished(void)
         CHECK(fake.cleaned);
         CHECK(fake.live_tasks == 0);
         CHECK(fake.live_resources == 0);
+        CHECK(fake.catalog_allocations == (fail_at >= 10 ? 1 : 0));
+        CHECK(fake.catalog_releases == (fail_at >= 10 ? 1 : 0));
+        CHECK(fake.live_catalogs == 0);
+        CHECK(fake.max_live_catalogs <= 1);
         CHECK(!fake.prepare_gate_live);
         CHECK(fake.prepare_gate_released == (fail_at >= 11));
         CHECK(fake.removed_members == (fail_at >= 10 ? 2 :
@@ -191,16 +210,44 @@ static void success_publishes_only_after_both_tasks_and_ui_readiness(void)
     CHECK(!fake.cleaned);
     CHECK(fake.live_tasks == 2);
     CHECK(fake.live_resources == 6);
+    CHECK(fake.catalog_allocations == 1);
+    CHECK(fake.catalog_releases == 0);
+    CHECK(fake.live_catalogs == 1);
+    CHECK(fake.max_live_catalogs == 1);
     CHECK(fake.prepare_gate_live);
     CHECK(!fake.prepare_gate_released);
     CHECK(resources.ui_ready == NULL);
     CHECK(resources.cmd_queue != NULL);
 }
 
+static void retry_after_failure_replaces_released_catalog_once(void)
+{
+    fake_init_t fake = { .fail_at = 13 };
+    user_app_task_resources_t first_resources;
+    user_app_task_ops_t init_ops = fake_ops(&fake);
+    CHECK(user_app_task_lifecycle_start(&init_ops, &first_resources) ==
+          USER_APP_INIT_KANJI_TASK_FAILED);
+    CHECK(fake.live_catalogs == 0);
+
+    fake.fail_at = 0;
+    fake.operation = 0;
+    fake.cleaned = false;
+    user_app_task_resources_t retry_resources;
+    CHECK(user_app_task_lifecycle_start(&init_ops, &retry_resources) ==
+          USER_APP_INIT_OK);
+    CHECK(fake.catalog_allocations == 2);
+    CHECK(fake.catalog_releases == 1);
+    CHECK(fake.live_catalogs == 1);
+    CHECK(fake.max_live_catalogs == 1);
+    CHECK(fake.prepare_gate_live);
+    CHECK(fake.published);
+}
+
 int main(void)
 {
     every_init_failure_is_atomic_and_unpublished();
     success_publishes_only_after_both_tasks_and_ui_readiness();
+    retry_after_failure_replaces_released_catalog_once();
     printf("task lifecycle: %d failures\n", failures);
     return failures ? 1 : 0;
 }

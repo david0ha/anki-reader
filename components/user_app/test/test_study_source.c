@@ -326,6 +326,10 @@ static void publication_revision_tracks_draws_not_source_only_changes(void)
         &runtime, STUDY_DRAW_PUBLICATION_AND_SOURCE);
     CHECK(study_runtime_accepts_draw(&runtime, &old_remote_draw));
     CHECK(study_runtime_accepts_draw(&runtime, &old_remote_status));
+    runtime.nav.revealed = true;
+    runtime.nav.sheet = KANJI_SHEET_DESCRIPTION;
+    runtime.nav.sheet_page = 2;
+    runtime.nav.grade = KANJI_GRADE_EASY;
     study_runtime_advance_source(&runtime);
     CHECK(!study_runtime_accepts_draw(&runtime, &old_remote_draw));
     CHECK(!study_runtime_accepts_draw(&runtime, &old_remote_status));
@@ -345,6 +349,10 @@ static void publication_revision_tracks_draws_not_source_only_changes(void)
     generation = source_guard_capture(&runtime.source_guard);
     CHECK(study_runtime_commit_remote(&runtime, &remote, generation, false) ==
           STUDY_REMOTE_PUBLISHED);
+    CHECK(!runtime.nav.revealed);
+    CHECK(runtime.nav.sheet == KANJI_SHEET_NONE);
+    CHECK(runtime.nav.sheet_page == 0);
+    CHECK(runtime.nav.grade == KANJI_GRADE_GOOD);
     const study_draw_token_t current_remote_draw = study_runtime_capture_draw(
         &runtime, STUDY_DRAW_PUBLICATION_AND_SOURCE);
     CHECK(study_runtime_accepts_draw(&runtime, &current_remote_draw));

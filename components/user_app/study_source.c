@@ -207,7 +207,7 @@ study_remote_result_t study_runtime_commit_remote(study_runtime_t *runtime,
     } else {
         runtime->remote_publication_generation_valid = false;
     }
-    if (advanced || transitioned) {
+    if (advanced || transitioned || remote_epoch_changed) {
         kanji_nav_reset(&runtime->nav);
     }
     if (changed) {
