@@ -49,14 +49,17 @@ extern "C" {
  * The hero face is Japanese-only — 56 px of Hangul is flash this board does not
  * have to spend — so it is never selected by size alone; see ui_hero_face().
  *
- * Montserrat 14 is the one Latin face kept, for the header's track counter,
- * where a run of digits wants a proper numeral face. The larger Montserrats
- * this UI inherited are gone: nothing drew them, and each was flash. */
+ * Montserrat 18 is the one Latin face kept, for utility labels and counters
+ * where a run of digits wants a proper numeral face. The other Montserrats
+ * this UI inherited are gone: nothing draws them, and each costs flash. */
 #define UI_F_BODY       (&ui_font_kr_16)
 #define UI_F_HEAD       (&ui_font_kr_20)
 #define UI_F_TITLE      (&ui_font_kr_28)
 #define UI_F_HERO       (&ui_font_jp_56)
-#define UI_F_NUM_SM     (&lv_font_montserrat_14)
+#define UI_F_UTILITY    (&lv_font_montserrat_18)
+/* Legacy alias consumed by the pre-redesign UI; Task 4 migrates its call site
+ * and removes this compatibility definition. */
+#define UI_F_NUM_SM     UI_F_UTILITY
 
 /* --- shapes ---------------------------------------------------------------
  * All coordinates are relative to `par`. Every one of these returns an object
