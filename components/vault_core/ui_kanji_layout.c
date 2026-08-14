@@ -1,191 +1,105 @@
-/*
- * ui_kanji_layout.c — the geometry declared in ui_kanji_layout.h.
- *
- * Every number here was chosen against a 648x480 panel and is asserted by
- * test_kanji_layout.c. Nothing in this file draws, allocates, or calls libm:
- * the whole point is that the layout can be checked on a laptop in a
- * millisecond, and that the firmware and the simulator lay out from the same
- * bytes rather than from two copies of the same arithmetic.
- */
+/* Pure integer layout shared by firmware, simulator, and host tests. */
 #include "ui_kanji_layout.h"
 
-/* --- the grid ------------------------------------------------------------- */
+#define EDGE      16
+#define RAIL_W    80
+#define GUTTER    16
+#define MAIN_X   112
+#define MAIN_W   520
+#define MAIN_Y    56
+#define MAIN_H   368
+#define FOOTER_Y 440
+#define FOOTER_H  40
 
-#define PAD          14      /* content inset from the panel edge */
-#define HEADER_H     44
-#define FOOTER_H     34
-#define RULE          2      /* the hairline under/over the chrome */
+#define FOOTER_SLOT_W 154
+#define DOCK_Y        344
+#define DOCK_H         80
+#define CELL_W        (MAIN_W / KANJI_GRADE_COUNT)
 
-#define CONTENT_Y    (HEADER_H + RULE)                                  /* 46  */
-#define CONTENT_H    (KANJI_SCREEN_H - CONTENT_Y - FOOTER_H - RULE)     /* 398 */
-
-/* --- shared chrome -------------------------------------------------------- */
+#define KEYCAP(i) { EDGE + (i) * FOOTER_SLOT_W, FOOTER_Y + 8, 24, 24 }
+#define ACTION(i) { EDGE + (i) * FOOTER_SLOT_W + 30, FOOTER_Y + 10, \
+                    FOOTER_SLOT_W - 30, 22 }
+#define CELL(i)   { MAIN_X + (i) * CELL_W, DOCK_Y, CELL_W, DOCK_H }
+#define LABEL(i)  { MAIN_X + (i) * CELL_W + 8, DOCK_Y + 10, CELL_W - 16, 24 }
+#define SPAN(i)   { MAIN_X + (i) * CELL_W + 8, DOCK_Y + 44, CELL_W - 16, 20 }
 
 static const kanji_chrome_t CHROME = {
-    .header = { 0, 0, KANJI_SCREEN_W, HEADER_H },
-
-    /* The wordmark, then the two stat chips, then the track pill hard right —
-     * the order the web app's header has, so a learner who uses both reads
-     * them the same way. */
-    .brand  = { PAD, 10, 120, 24 },
-    .chips  = { 326, 13, 204, 18 },
-    .track  = { KANJI_SCREEN_W - PAD - 96, 13, 96, 18 },
-
-    .content = { 0, CONTENT_Y, KANJI_SCREEN_W, CONTENT_H },
-
-    .footer = { 0, KANJI_SCREEN_H - FOOTER_H, KANJI_SCREEN_W, FOOTER_H },
-    /* Four equal columns across the padded width: 648 - 2*14 = 620 = 4 * 155.
-     * Equal on purpose — the legend's job is to be scanned, and a column that
-     * is wider because its label is longer makes the eye stop. */
-    .key = {
-        { PAD + 0 * 155, KANJI_SCREEN_H - FOOTER_H + 6, 155, 22 },
-        { PAD + 1 * 155, KANJI_SCREEN_H - FOOTER_H + 6, 155, 22 },
-        { PAD + 2 * 155, KANJI_SCREEN_H - FOOTER_H + 6, 155, 22 },
-        { PAD + 3 * 155, KANJI_SCREEN_H - FOOTER_H + 6, 155, 22 },
-    },
-
-    .rule_top    = HEADER_H,
-    .rule_bottom = CONTENT_Y + CONTENT_H,
+    .rail          = { EDGE, EDGE, RAIL_W, 408 },
+    .rail_rule     = { EDGE + RAIL_W, EDGE, 1, 408 },
+    .rail_identity = { EDGE, EDGE, RAIL_W, 96 },
+    .rail_progress = { EDGE, 328, RAIL_W, 96 },
+    .main          = { MAIN_X, MAIN_Y, MAIN_W, MAIN_H },
+    .masthead      = { MAIN_X, EDGE, MAIN_W, 24 },
+    .brand         = { MAIN_X, EDGE, 96, 24 },
+    .session       = { 224, EDGE, 288, 24 },
+    .battery       = { 520, EDGE, 112, 24 },
+    .footer        = { EDGE, FOOTER_Y, KANJI_SCREEN_W - 2 * EDGE, FOOTER_H },
+    .keycap        = { KEYCAP(0), KEYCAP(1), KEYCAP(2), KEYCAP(3) },
+    .key_action    = { ACTION(0), ACTION(1), ACTION(2), ACTION(3) },
+    .header        = { MAIN_X, EDGE, MAIN_W, 24 },
+    .key           = { ACTION(0), ACTION(1), ACTION(2), ACTION(3) },
 };
-
-/* --- the question screen -------------------------------------------------- */
-
-/* The rail lives in the player's right margin rather than floating over the
- * headword. On a phone the rail is a translucent overlay and the card slot
- * keeps symmetric padding so the glyph stays centred; on a 1-bit panel there is
- * no translucency, so an overlay would simply collide. The hero box is narrowed
- * to clear it — 464 px still holds sixteen characters at the small face and
- * eight at the large one, which is more than the catalog's longest headword. */
-#define RAIL_X       560
-#define HERO_W       464
-#define HERO_X       ((KANJI_SCREEN_W - HERO_W) / 2)      /* 92 */
 
 static const kanji_question_layout_t QUESTION = {
-    .player   = { 0, CONTENT_Y, KANJI_SCREEN_W, CONTENT_H },
-
-    /* The headword sits between the header and the caption block rather than
-     * in the geometric middle of the player: the caption owns the bottom third
-     * the way it does on a Short, so centring against the whole player would
-     * leave the word floating high with a hole under it. */
-    .hero     = { HERO_X, 140, HERO_W, 100 },
-    .prompt   = { HERO_X, 252, HERO_W, 24 },
-
-    /* Bottom left, the way a Short captions its channel. */
-    .caption  = { 24, 300, 380, 52 },
-    .queue    = { 24, 356, 380, 26 },
-
-    .rail       = { RAIL_X, 140, 72, 200 },
-    .rail_step  = 64,
-    .rail_items = 3,
-
-    /* A line along the player's foot: how far into today's queue this card is.
-     * The web app's is a red scrubber; here it is the one place a filled bar
-     * carries meaning, so it gets the panel's full width. */
-    .scrubber = { 0, CONTENT_Y + CONTENT_H - 4, KANJI_SCREEN_W, 4 },
+    .hero      = { MAIN_X, 88, MAIN_W, 72 },
+    .prompt    = { MAIN_X, 224, MAIN_W, 28 },
+    .secondary = { MAIN_X, 264, MAIN_W, 48 },
+    .counts    = { MAIN_X, 328, MAIN_W, 24 },
+    .player    = { MAIN_X, MAIN_Y, MAIN_W, MAIN_H },
+    .caption   = { MAIN_X, 264, MAIN_W, 48 },
+    .queue     = { MAIN_X, 328, MAIN_W, 24 },
+    .rail      = { EDGE, EDGE, RAIL_W, 408 },
+    .scrubber  = { MAIN_X, 423, MAIN_W, 1 },
 };
-
-/* --- the answer screen ---------------------------------------------------- */
-
-/* The dock is the only rectangle on this board that is refreshed on its own, so
- * its x bounds are multiples of 8 (81 bytes to a framebuffer row): the window
- * the driver refreshes is then exactly the window that was drawn. 632 = 4 x 158
- * keeps the four cells equal to the pixel, which matters because an unequal
- * dock reads as one rating being recommended — a claim FSRS does not make. */
-#define DOCK_X        8
-#define DOCK_W      632
-#define DOCK_Y      358
-#define DOCK_H       80
-#define CELL_W      (DOCK_W / KANJI_GRADE_COUNT)          /* 158 */
-
-#define CELL(i)      { DOCK_X + (i) * CELL_W, DOCK_Y, CELL_W, DOCK_H }
-#define CELL_LABEL(i){ DOCK_X + (i) * CELL_W + 8, 368, CELL_W - 16, 26 }
-#define CELL_SPAN(i) { DOCK_X + (i) * CELL_W + 8, 398, CELL_W - 16, 22 }
 
 static const kanji_answer_layout_t ANSWER = {
-    /* The headword stays inverted after the reveal so the eye can find it
-     * again without re-reading the page; everything that has to be read as
-     * prose moves onto white below it. */
-    .band    = { 0, CONTENT_Y, KANJI_SCREEN_W, 124 },
-    .hero    = { 24, 56, 440, 72 },
-    .reading = { 24, 132, 440, 24 },
-    .level   = { RAIL_X, 60, 64, 28 },
-
-    .meaning  = { PAD, 178, KANJI_SCREEN_W - 2 * PAD, 48 },
-    /* Three rows, because a card with three examples that silently shows two
-     * is a card that lies about the catalog. The vertical budget below the
-     * band is 178..438 and every block in it is sized to the pixel; there is
-     * no slack, which is why the prompt is a rectangle here rather than a
-     * number in the screen file where nothing would check it. */
-    .examples = { PAD, 232, KANJI_SCREEN_W - 2 * PAD, 96 },
-    .example_step = 32,
-    .example_rows = 3,
-    .prompt   = { DOCK_X, 332, DOCK_W, 22 },
-
-    .dock = { DOCK_X, DOCK_Y, DOCK_W, DOCK_H },
-    .cell       = { CELL(0), CELL(1), CELL(2), CELL(3) },
-    .cell_label = { CELL_LABEL(0), CELL_LABEL(1), CELL_LABEL(2), CELL_LABEL(3) },
-    .cell_span  = { CELL_SPAN(0), CELL_SPAN(1), CELL_SPAN(2), CELL_SPAN(3) },
+    .hero         = { MAIN_X, MAIN_Y, MAIN_W, 64 },
+    .reading      = { MAIN_X, 124, MAIN_W, 24 },
+    .meaning      = { MAIN_X, 154, MAIN_W, 32 },
+    .examples     = { MAIN_X, 192, MAIN_W, 90 },
+    .example_step = 30,
+    .example_rows = KANJI_EXAMPLES_MAX,
+    .prompt       = { MAIN_X, 312, MAIN_W, 24 },
+    .dock         = { MAIN_X, DOCK_Y, MAIN_W, DOCK_H },
+    .cell         = { CELL(0), CELL(1), CELL(2), CELL(3) },
+    .cell_label   = { LABEL(0), LABEL(1), LABEL(2), LABEL(3) },
+    .cell_span    = { SPAN(0), SPAN(1), SPAN(2), SPAN(3) },
+    .band         = { MAIN_X, MAIN_Y, MAIN_W, 64 },
+    .level        = { MAIN_X, 124, MAIN_W, 24 },
 };
 
-/* --- the sheets ----------------------------------------------------------- */
-
-/* A sheet is for reading, so its inverted strip is a strip: enough to say which
- * card this is about and which sheet you are on, and not one pixel more. */
-#define SHEET_BAND_H   56
-#define SHEET_BODY_X   PAD
-#define SHEET_BODY_Y   (CONTENT_Y + SHEET_BAND_H + 10)                  /* 112 */
-#define SHEET_BODY_W   (KANJI_SCREEN_W - 2 * PAD)                       /* 620 */
-
-#define STATS_Y        364
-#define STATS_H        74
-#define STAT_W         (SHEET_BODY_W / KANJI_STAT_CELLS)                /* 124 */
-#define STAT(i)        { PAD + (i) * STAT_W, 372, STAT_W, 58 }
-
-#define PLAIN_BODY_H   (CONTENT_Y + CONTENT_H - 6 - SHEET_BODY_Y)       /* 326 */
-#define STATS_BODY_H   (STATS_Y - 8 - SHEET_BODY_Y)                     /* 244 */
-
 #define SHEET_COMMON \
-    .band       = { 0, CONTENT_Y, KANJI_SCREEN_W, SHEET_BAND_H }, \
-    .band_word  = { PAD, CONTENT_Y + 10, 300, 36 }, \
-    .band_title = { 380, CONTENT_Y + 16, 254, 28 }
+    .headword = { MAIN_X, MAIN_Y, 280, 32 }, \
+    .title    = { 400, 60, 160, 28 }
 
 static const kanji_sheet_layout_t SHEET_PLAIN = {
     SHEET_COMMON,
-    .body  = { SHEET_BODY_X, SHEET_BODY_Y, SHEET_BODY_W, PLAIN_BODY_H },
-    /* No strip: zero height, so a caller that draws it unconditionally draws
-     * nothing rather than into a stale rectangle. */
+    .body  = { MAIN_X, 104, MAIN_W, 320 },
     .stats = { 0, 0, 0, 0 },
     .stat  = { {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} },
-    .pager = { SHEET_BODY_X + SHEET_BODY_W - 70,
-               SHEET_BODY_Y + PLAIN_BODY_H - 26, 60, 22 },
+    .pager = { 572, 64, 60, 20 },
+    .band = { MAIN_X, MAIN_Y, MAIN_W, 32 },
+    .band_word = { MAIN_X, MAIN_Y, 280, 32 },
+    .band_title = { 400, 60, 160, 28 },
 };
+
+#define STAT_W (MAIN_W / KANJI_STAT_CELLS)
+#define STAT(i) { MAIN_X + (i) * STAT_W, 356, STAT_W, 68 }
 
 static const kanji_sheet_layout_t SHEET_WITH_STATS = {
     SHEET_COMMON,
-    .body  = { SHEET_BODY_X, SHEET_BODY_Y, SHEET_BODY_W, STATS_BODY_H },
-    .stats = { PAD, STATS_Y, SHEET_BODY_W, STATS_H },
+    .body  = { MAIN_X, 104, MAIN_W, 232 },
+    .stats = { MAIN_X, 348, MAIN_W, 76 },
     .stat  = { STAT(0), STAT(1), STAT(2), STAT(3), STAT(4) },
-    .pager = { SHEET_BODY_X + SHEET_BODY_W - 70,
-               SHEET_BODY_Y + STATS_BODY_H - 26, 60, 22 },
+    .pager = { 572, 64, 60, 20 },
+    .band = { MAIN_X, MAIN_Y, MAIN_W, 32 },
+    .band_word = { MAIN_X, MAIN_Y, 280, 32 },
+    .band_title = { 400, 60, 160, 28 },
 };
 
-/* --- accessors ------------------------------------------------------------ */
-
-const kanji_chrome_t *kanji_chrome_layout(void)
-{
-    return &CHROME;
-}
-
-const kanji_question_layout_t *kanji_question_layout(void)
-{
-    return &QUESTION;
-}
-
-const kanji_answer_layout_t *kanji_answer_layout(void)
-{
-    return &ANSWER;
-}
-
+const kanji_chrome_t *kanji_chrome_layout(void) { return &CHROME; }
+const kanji_question_layout_t *kanji_question_layout(void) { return &QUESTION; }
+const kanji_answer_layout_t *kanji_answer_layout(void) { return &ANSWER; }
 const kanji_sheet_layout_t *kanji_sheet_layout(bool with_stats)
 {
     return with_stats ? &SHEET_WITH_STATS : &SHEET_PLAIN;
@@ -201,19 +115,11 @@ void kanji_rect_to_half_open(const kanji_rect_t *r,
     if (y2) *y2 = r->y + r->h;
 }
 
-/* --- content-dependent choices -------------------------------------------- */
-
-/* Five characters at 56 px is about 300 px, which clears the rail with room to
- * spare. Six would not, and a headword that has to be ellipsized has stopped
- * being a headword — so the face shrinks instead. */
 #define HERO_LARGE_MAX_CHARS 5
 
 bool kanji_hero_is_large(const char *front)
 {
-    const int n = kanji_utf8_len(front);
-    /* Nothing to draw still picks the large face: the empty-card screen keeps
-     * the hero's height rather than collapsing the layout around a gap. */
-    return n <= HERO_LARGE_MAX_CHARS;
+    return kanji_utf8_len(front) <= HERO_LARGE_MAX_CHARS;
 }
 
 int kanji_center_x(const kanji_rect_t *outer, int w)

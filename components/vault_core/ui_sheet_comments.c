@@ -1,25 +1,10 @@
-/*
- * ui_sheet_comments.c — 댓글.
- *
- * Two to a page. Three would fit only if all three were one line, and a comment
- * that silently loses its last line reads as a rendering bug rather than as a
- * long comment — so the page count comes from kanji_sheet_pages() and KEY0
- * walks it.
- *
- * Replies are already flattened away by the proxy: a thread indent inside two
- * rows reads as a rendering artefact, not as a conversation.
- */
+/* Paper comments sheet, two fixed rows per page. */
 #include "ui_internal.h"
 
-/* How many rows this file draws. It is kanji_nav.h's number, not a second copy:
- * kanji_sheet_pages() decides how far KEY0 walks, and if the two disagree the
- * learner either cannot reach the last comment or pages onto a blank. The
- * assertion below is what stops that from ever being a runtime discovery. */
-#define PER_PAGE     KANJI_COMMENTS_PER_PAGE
-_Static_assert(PER_PAGE == 2, "the block geometry below is laid out for two rows");
-
-#define BLOCK_H    130
-#define BODY_H      (BLOCK_H - 34)
+#define PER_PAGE KANJI_COMMENTS_PER_PAGE
+#define BLOCK_H  136
+#define BODY_H    92
+_Static_assert(PER_PAGE == 2, "comment geometry is two rows");
 
 typedef struct {
     lv_obj_t *author;
@@ -40,64 +25,52 @@ static comments_ui_t c;
 
 lv_obj_t *ui_sheet_comments_create(lv_obj_t *par)
 {
-    const kanji_sheet_layout_t *l = kanji_sheet_layout(false);
     const kanji_chrome_t *ch = kanji_chrome_layout();
-
-    c.root = ui_fill_white(par, 0, 0, ch->content.w, ch->content.h);
+    const kanji_sheet_layout_t *l = kanji_sheet_layout(false);
+    c.root = ui_fill_white(par, 0, 0, ch->main.w, ch->main.h);
     ui_sheet_band_create(c.root, &c.band, S_SHEET_COMMENTS);
-
-    const int x = l->body.x;
-    const int w = l->body.w;
+    const int x = LOCAL_X(l->body.x);
     const int y0 = LOCAL_Y(l->body.y);
-
-    c.count = ui_lab_w(c.root, x, y0, w, UI_F_HEAD, LV_TEXT_ALIGN_LEFT, "");
-
+    c.count = ui_lab_w(c.root, x, y0, l->body.w, UI_F_HEAD,
+                       LV_TEXT_ALIGN_LEFT, "");
     for (int i = 0; i < PER_PAGE; i++) {
         const int y = y0 + 32 + i * BLOCK_H;
-        c.row[i].author = ui_lab_w(c.root, x, y, w - 90, UI_F_HEAD,
+        c.row[i].author = ui_lab_w(c.root, x, y, l->body.w - 96, UI_F_HEAD,
                                    LV_TEXT_ALIGN_LEFT, "");
-        c.row[i].likes = ui_lab_w(c.root, x + w - 88, y + 2, 88, UI_F_BODY,
+        c.row[i].likes = ui_lab_w(c.root, x + l->body.w - 96, y, 96, UI_F_BODY,
                                   LV_TEXT_ALIGN_RIGHT, "");
-        c.row[i].body = ui_lab_w(c.root, x, y + 30, w, UI_F_BODY,
+        c.row[i].body = ui_lab_w(c.root, x, y + 28, l->body.w, UI_F_BODY,
                                  LV_TEXT_ALIGN_LEFT, "");
         ui_lab_wrap(c.row[i].body, BODY_H);
-        /* A rule under each comment, the way a comment list separates its
-         * rows. Drawn once at build time — it is furniture, not content. */
-        ui_fill(c.root, x, y + BLOCK_H - 12, w, 1);
+        ui_rule(c.root, x, y + BLOCK_H - 8, l->body.w, 1);
     }
-
-    c.empty = ui_lab_w(c.root, x, y0 + 60, w, UI_F_HEAD,
-                       LV_TEXT_ALIGN_CENTER, S_NO_COMMENTS);
-    c.pager = ui_lab_w(c.root, l->pager.x, LOCAL_Y(l->pager.y), l->pager.w,
-                       UI_F_BODY, LV_TEXT_ALIGN_RIGHT, "");
+    c.empty = ui_lab_w(c.root, x, y0 + 48, l->body.w, UI_F_HEAD,
+                       LV_TEXT_ALIGN_LEFT, S_NO_COMMENTS);
+    c.pager = ui_lab_w(c.root, LOCAL_X(l->pager.x), LOCAL_Y(l->pager.y),
+                       l->pager.w, UI_F_BODY, LV_TEXT_ALIGN_RIGHT, "");
     return c.root;
 }
 
 void ui_sheet_comments_update(const kanji_t *k, int page)
 {
     const bool have = k && k->card.valid;
-    const int n = have ? k->card.comment_count : 0;
-
+    const int count = have ? k->card.comment_count : 0;
+    const int pages = kanji_sheet_pages(k, KANJI_SHEET_COMMENTS);
+    if (page < 0 || page >= pages) page = 0;
     ui_sheet_band_update(&c.band, k);
+    ui_set(c.band.title, S_SHEET_COMMENTS);
+    if (count > 0) ui_setf(c.count, "%s %d", S_SHEET_COMMENTS, k->card.comment_total);
+    else ui_set(c.count, "");
 
-    if (n > 0) {
-        ui_setf(c.count, "%s %d", S_SHEET_COMMENTS,
-                have ? k->card.comment_total : 0);
-    } else {
-        ui_set(c.count, "");
-    }
-
-    if (page < 0) page = 0;
     const int first = page * PER_PAGE;
-
     for (int i = 0; i < PER_PAGE; i++) {
         const int idx = first + i;
-        const bool on = idx < n;
+        const bool on = idx < count;
         if (on) {
-            const kanji_comment_t *m = &k->card.comments[idx];
-            ui_set(c.row[i].author, m->author[0] ? m->author : "");
-            ui_setf(c.row[i].likes, "%s %d", S_LIKES, m->likes);
-            ui_set(c.row[i].body, m->body);
+            const kanji_comment_t *comment = &k->card.comments[idx];
+            ui_set(c.row[i].author, comment->author);
+            ui_setf(c.row[i].likes, "%s %d", S_LIKES, comment->likes);
+            ui_set(c.row[i].body, comment->body);
         } else {
             ui_set(c.row[i].author, "");
             ui_set(c.row[i].likes, "");
@@ -107,8 +80,6 @@ void ui_sheet_comments_update(const kanji_t *k, int page)
         ui_show(c.row[i].likes, on);
         ui_show(c.row[i].body, on);
     }
-
-    ui_show(c.empty, n == 0);
-    ui_pager_set(c.pager, page,
-                 kanji_sheet_pages(k, KANJI_SHEET_COMMENTS));
+    ui_show(c.empty, count == 0);
+    ui_pager_set(c.pager, page, pages);
 }

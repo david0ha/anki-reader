@@ -33,18 +33,17 @@ extern "C" {
  * panel is reads worse than one that already knows. */
 #define UI_W            KANJI_SCREEN_W
 #define UI_H            KANJI_SCREEN_H
-#define UI_PAD          14      /* content inset from the panel edge */
-#define UI_RULE          2      /* the black hairline under/over the chrome */
+#define UI_PAD          16      /* approved panel edge */
+#define UI_RULE          1      /* ordinary separation rule */
 
-/* The screens are placed at the content origin, so a layout rectangle's
- * pane-local y is its panel y minus that origin. */
-#define LOCAL_Y(v) ((v) - kanji_chrome_layout()->content.y)
+/* Screen panes begin at the main-column origin. Layout rectangles are panel
+ * coordinates, so both axes must be converted before creating pane children. */
+#define LOCAL_X(v) ((v) - kanji_chrome_layout()->main.x)
+#define LOCAL_Y(v) ((v) - kanji_chrome_layout()->main.y)
 
 /* --- fonts ----------------------------------------------------------------
- * All four faces carry 완성형 Hangul, ASCII, kana and JIS X 0208 kanji (see
- * ui_fonts.h), so any of them can draw any string the network sends — which
- * matters here more than on most boards, because a single example sentence
- * mixes all three scripts.
+ * The body, heading, and title faces carry the complete multilingual set (see
+ * ui_fonts.h), so they can draw mixed Korean/Japanese network strings.
  *
  * The hero face is Japanese-only — 56 px of Hangul is flash this board does not
  * have to spend — so it is never selected by size alone; see ui_hero_face().
@@ -57,9 +56,6 @@ extern "C" {
 #define UI_F_TITLE      (&ui_font_kr_28)
 #define UI_F_HERO       (&ui_font_jp_56)
 #define UI_F_UTILITY    (&lv_font_montserrat_18)
-/* Legacy alias consumed by the pre-redesign UI; Task 4 migrates its call site
- * and removes this compatibility definition. */
-#define UI_F_NUM_SM     UI_F_UTILITY
 
 /* --- shapes ---------------------------------------------------------------
  * All coordinates are relative to `par`. Every one of these returns an object
@@ -72,11 +68,14 @@ lv_obj_t *ui_pane(lv_obj_t *par, int x, int y, int w, int h);
 /* A solid black rectangle — rules, bars, filled chips, the header band. */
 lv_obj_t *ui_fill(lv_obj_t *par, int x, int y, int w, int h);
 
+/* A one-pixel black separator. One dimension must be 1. */
+lv_obj_t *ui_rule(lv_obj_t *par, int x, int y, int w, int h);
+
 /* A solid WHITE rectangle. Two uses, and both need the opacity rather than
  * transparency:
  *
- *   - a white mark on top of a filled area — the action rail's chips and the
- *     scrubber, where a transparent object would show the black through;
+ *   - a white mark on top of a selected black surface, where a transparent
+ *     object would show the black through;
  *   - the root of a screen that is paper rather than player, so the sheet
  *     covers whatever the previous screen left in the framebuffer instead of
  *     letting it show through.
@@ -95,7 +94,7 @@ lv_obj_t *ui_lab(lv_obj_t *par, int x, int y, const lv_font_t *f, const char *tx
 lv_obj_t *ui_lab_w(lv_obj_t *par, int x, int y, int w,
                    const lv_font_t *f, lv_text_align_t align, const char *txt);
 
-/* White-on-black text, for the header band and state chips. */
+/* White-on-black text for selected surfaces and exceptional-state stamps. */
 lv_obj_t *ui_lab_inv(lv_obj_t *par, int x, int y, int w,
                      const lv_font_t *f, lv_text_align_t align, const char *txt);
 
@@ -147,9 +146,8 @@ void ui_draw_rect_abs(lv_layer_t *L, int x1, int y1, int x2, int y2,
  * Nothing in a screen file talks to the panel, keeps state beyond its widgets,
  * or knows which screen is on glass.
  *
- * The two card sides take the nav state as well as the card: the answer's grade
- * dock draws a cursor, and the question's prompt names the button that reveals.
- * The sheets take a page index because they are paged by KEY0. */
+ * The answer takes a grade cursor as well as the card. Reading sheets take a
+ * semantic page index selected by the first physical key. */
 lv_obj_t *ui_card_question_create(lv_obj_t *par);
 void      ui_card_question_update(const kanji_t *k);
 
@@ -161,7 +159,7 @@ void      ui_card_answer_update(const kanji_t *k, kanji_grade_t cursor);
 void      ui_card_answer_dock(const kanji_t *k, kanji_grade_t cursor);
 
 lv_obj_t *ui_sheet_desc_create(lv_obj_t *par);
-void      ui_sheet_desc_update(const kanji_t *k);
+void      ui_sheet_desc_update(const kanji_t *k, int page);
 
 lv_obj_t *ui_sheet_comments_create(lv_obj_t *par);
 void      ui_sheet_comments_update(const kanji_t *k, int page);
@@ -169,8 +167,8 @@ void      ui_sheet_comments_update(const kanji_t *k, int page);
 lv_obj_t *ui_sheet_fsrs_create(lv_obj_t *par);
 void      ui_sheet_fsrs_update(const kanji_t *k, int page);
 
-/* The inverted strip every sheet wears: which card, and which sheet. Built by
- * the sheet, filled by the router, so the three cannot drift apart. */
+/* The paper title row every sheet shares: headword at left, page title at
+ * right. The rail carries the sheet identity and page position. */
 typedef struct {
     lv_obj_t *word;
     lv_obj_t *title;

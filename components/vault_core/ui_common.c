@@ -38,6 +38,12 @@ lv_obj_t *ui_fill(lv_obj_t *par, int x, int y, int w, int h)
     return o;
 }
 
+lv_obj_t *ui_rule(lv_obj_t *par, int x, int y, int w, int h)
+{
+    if (w != 1 && h != 1) return NULL;
+    return ui_fill(par, x, y, w, h);
+}
+
 lv_obj_t *ui_fill_white(lv_obj_t *par, int x, int y, int w, int h)
 {
     lv_obj_t *o = ui_pane(par, x, y, w, h);

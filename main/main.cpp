@@ -65,21 +65,19 @@ static void OnProvisioningEvent(prov_event_t event, const char *info, void *user
 	char body[192];
 	switch (event) {
 	case PROV_EVENT_STA_CONNECTING:
-		snprintf(body, sizeof(body), "Connecting to\n%s", info ? info : "");
+		snprintf(body, sizeof(body), S_WIFI_CONNECTING, info ? info : "");
 		SetStatus(S_WIFI_TITLE, body);
 		break;
 	case PROV_EVENT_STA_CONNECTED:
-		snprintf(body, sizeof(body), "Connected\n%s", info ? info : "");
+		snprintf(body, sizeof(body), S_WIFI_CONNECTED, info ? info : "");
 		SetStatus(S_WIFI_TITLE, body);
 		break;
 	case PROV_EVENT_PORTAL_STARTED:
-		snprintf(body, sizeof(body),
-		         "1. Join Wi-Fi:\n%s\n\n2. Stay connected,\nthen open the page it offers",
-		         info ? info : "");
+		snprintf(body, sizeof(body), S_WIFI_PORTAL, info ? info : "");
 		SetStatus(S_WIFI_TITLE, body);
 		break;
 	case PROV_EVENT_CONFIG_SAVED:
-		snprintf(body, sizeof(body), "Saved \"%s\"\n%s", info ? info : "", S_RESTARTING);
+		snprintf(body, sizeof(body), S_WIFI_SAVED, info ? info : "", S_RESTARTING);
 		SetStatus(S_WIFI_TITLE, body);
 		break;
 	}

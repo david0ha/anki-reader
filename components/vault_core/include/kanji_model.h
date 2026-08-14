@@ -44,11 +44,10 @@ extern "C" {
 #define KANJI_LABEL_MAX        24   /* "N5", "복습", "9일 뒤", a deck name    */
 #define KANJI_DECK_MAX         40
 #define KANJI_ID_MAX           40   /* a UUID plus NUL                        */
-/* One paragraph of explanation. 480 bytes is 160 Hangul syllables, which is
- * what the 설명 sheet's shape block holds: four wrapped lines at 16 px across
- * 620 px. Sized to the rectangle rather than to a round number, because a cap
- * below the box leaves white space the catalog had text for, and one above it
- * clips mid-sentence. */
+/* One explanation paragraph. The 520x320 prose page uses the 16 px body face
+ * at a 20 px line height. Even KANJI_BODY_MAX - 1 single-byte worst-width
+ * glyphs wrap to at most fifteen lines (300 px), preserving the full model
+ * limit without clipping. */
 #define KANJI_BODY_MAX        480
 #define KANJI_AUTHOR_MAX       32
 #define KANJI_COMMENT_MAX     240

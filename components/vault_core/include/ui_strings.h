@@ -23,6 +23,8 @@
 #define S_BADGE_DEMO       "DEMO"
 #define S_BADGE_STALE      "오래됨"
 #define S_BADGE_OFFLINE    "오프라인"
+#define S_RAIL_COMPLETE    "완료"
+#define S_RAIL_EMPTY       "없음"
 #define S_NO_DATA          "데이터 없음"
 #define S_WAITING          "불러오는 중..."
 
@@ -30,16 +32,16 @@
 #define S_STREAK           "연속"
 #define S_REVIEWED_TODAY   "오늘"
 #define S_TRACK            "TRK"
+#define S_BATTERY          "배터리"
 
 /* --- the footer key legend ------------------------------------------------
- * The three labels are supplied by kanji_nav.c per screen — a fixed legend on
- * a board whose KEY0 means 정답 on one screen and 등급 on the next is a lie
- * printed in 16 px. These are the fixed parts around them. */
+ * The action labels are supplied by kanji_nav.c per screen. The visible key
+ * caps name the physical controls as 1 / 2 / 3 / i. */
 
-#define S_KEY0             "KEY0"
-#define S_KEY1             "KEY1"
-#define S_KEY2             "KEY2"
-#define S_BOOT             "BOOT"
+#define S_KEY0             "1"
+#define S_KEY1             "2"
+#define S_KEY2             "3"
+#define S_BOOT             "i"
 #define S_KEY_REFRESH      "새로고침"
 #define S_KEY_WIFI         "길게 Wi-Fi"
 
@@ -62,11 +64,12 @@
 
 /* --- the question screen -------------------------------------------------- */
 
-#define S_TAP_TO_REVEAL    "KEY0 을 눌러 정답 보기"
+#define S_TAP_TO_REVEAL    "정답 보기"
+#define S_NO_DATA_SUB      "새로고침으로 다시 확인해 주세요."
 #define S_NEW_CARD         "새 카드"
-#define S_LEFT_NEW         "새로 배울"
-#define S_LEFT_REVIEW      "복습할"
-#define S_RETRY            "다시 볼"
+#define S_LEFT_NEW         "새"
+#define S_LEFT_REVIEW      "복습"
+#define S_RETRY            "다시"
 #define S_UNIT_CARDS       "장"
 
 /* --- the answer screen ---------------------------------------------------- */
@@ -161,6 +164,10 @@
 
 #define S_WIFI_TITLE       "Wi-Fi 설정"
 #define S_RESTARTING       "재시작 중..."
+#define S_WIFI_CONNECTING  "Wi-Fi 연결 중\n%s"
+#define S_WIFI_CONNECTED   "Wi-Fi 연결됨\n%s"
+#define S_WIFI_PORTAL      "1. Wi-Fi에 연결하세요:\n%s\n\n2. 연결을 유지한 뒤 안내된 페이지를 여세요."
+#define S_WIFI_SAVED       "\"%s\" 저장됨\n%s"
 
 /* Every character that only ever appears in a runtime-composed string —
  * snprintf'd digits, separators, units. gen_fonts.py folds this into the face
