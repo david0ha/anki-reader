@@ -1,15 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native'
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Screen } from '../components/Screen'
@@ -20,22 +10,28 @@ import { InfoRow } from '../components/InfoRow'
 import { StatTile } from '../components/StatTile'
 import { ScreenMessage } from '../components/ScreenMessage'
 import { useDevice } from '../lib/device'
-import { Esp32Error, type DeviceState } from '../lib/esp32'
-import { captureErrorMessage, captureMemo, captureUrlFor } from '../lib/capture'
+import { Esp32Error, SCREEN_COUNT, type DeviceState } from '../lib/esp32'
 import { DEFAULT_HOST, discoverDevice } from '../lib/discovery'
 import { getDeviceBaseUrl } from '../lib/store'
 import {
-  PAGE_LABELS,
+  SCREEN_LABELS,
   fetchResultLabel,
   fetchResultMessage,
   fetchResultTone,
   formatAge,
   formatCount,
-  formatDelta,
-  formatDensity,
+  formatDifficulty,
+  formatDue,
   formatInterval,
   formatMs,
-  formatRatio,
+  formatStability,
+  formatStreak,
+  formatTrack,
+  fsrsStateLabel,
+  fsrsStateTone,
+  gradeLabel,
+  screenLabel,
+  trackFraction,
 } from '../lib/format'
 import { colors, layout, radius, space } from '../theme'
 
@@ -139,16 +135,16 @@ export default function Dashboard() {
   if (!state) {
     return (
       <Screen>
-        <Header baseUrl={baseUrl} onSettings={() => router.push('/settings')} />
+        <Header model={null} baseUrl={baseUrl} onSettings={() => router.push('/settings')} />
         <ScreenMessage loading={!error} error={error} message="Loading…" onRetry={retry} />
       </Screen>
     )
   }
 
-  const { vault, source, battery, panel } = state
+  const { session, card, source, battery, panel } = state
   return (
     <Screen edges={['top']}>
-      <Header baseUrl={baseUrl} onSettings={() => router.push('/settings')} />
+      <Header model={state.model} baseUrl={baseUrl} onSettings={() => router.push('/settings')} />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -164,7 +160,7 @@ export default function Dashboard() {
             icon="cloud-download"
             tone={fetchResultTone(source.lastResult)}
           />
-          {vault.demo ? <Chip label="demo data" icon="flask" tone="warn" /> : null}
+          {card.demo ? <Chip label="demo card" icon="flask" tone="warn" /> : null}
           {source.stale ? <Chip label="stale" icon="time" tone="warn" /> : null}
           {battery.present ? (
             <Chip
@@ -175,76 +171,104 @@ export default function Dashboard() {
           ) : null}
         </View>
 
-        {/* The vault, as the board understands it. */}
+        {/* The card on the glass. The reading and the meaning are shown here whatever screen the
+            board is on: this is the phone, and hiding the answer from the person holding it would
+            be a quiz nobody asked for. */}
         <Card style={styles.hero}>
-          <Text style={styles.heroName} numberOfLines={1}>
-            {vault.name || 'No vault'}
-          </Text>
-          <Text style={styles.heroMeta}>
-            {vault.valid
-              ? `snapshot ${vault.generatedAt || '—'} · ${formatAge(source.ageSeconds)}`
-              : 'no snapshot yet'}
+          {card.valid ? (
+            <>
+              <Text style={styles.heroFront} numberOfLines={1}>
+                {card.front}
+              </Text>
+              {card.reading ? <Text style={styles.heroReading}>{card.reading}</Text> : null}
+              {card.meaning ? <Text style={styles.heroMeaning}>{card.meaning}</Text> : null}
+            </>
+          ) : (
+            <>
+              <Text style={styles.heroFront}>{session.complete ? '오늘 학습 완료' : '—'}</Text>
+              <Text style={styles.heroMeaning}>
+                {session.complete
+                  ? 'Today’s queue is empty. The board has stopped asking.'
+                  : 'No card yet.'}
+              </Text>
+            </>
+          )}
+          <Text style={styles.heroDeck} numberOfLines={1}>
+            {session.deck || 'no deck'} · {formatAge(source.ageSeconds)}
           </Text>
         </Card>
 
+        {/* Today's queue. */}
         <View style={styles.tiles}>
+          <StatTile label="Reviewed today" value={formatCount(session.reviewedToday)} />
+          <StatTile label="Streak" value={formatStreak(session.streak)} />
+          <StatTile label="New left" value={formatCount(session.leftNew)} />
           <StatTile
-            label="Notes"
-            value={formatCount(vault.notes)}
-            footnote={`${formatDelta(vault.addedToday)} today · ${formatDelta(vault.added7d)} this week`}
+            label="Reviews left"
+            value={formatCount(session.leftReview)}
+            tone={session.leftReview > 0 ? 'warn' : 'neutral'}
           />
-          <StatTile
-            label="Links"
-            value={formatCount(vault.links)}
-            footnote={`${formatDensity(vault.links, vault.notes)} per note`}
-          />
-          <StatTile
-            label="Orphans"
-            value={formatCount(vault.orphans)}
-            footnote={`${formatRatio(vault.orphans, vault.notes)} of the vault`}
-            tone={vault.orphans > 0 ? 'warn' : 'neutral'}
-          />
-          <StatTile label="Tags" value={formatCount(vault.tags)} />
         </View>
 
-        {/* Capture. Only offered when the board has a snapshot URL, because that URL is the
-            address this writes to — a board on demo data has nowhere to put a memo. */}
-        {captureUrlFor(source.url) ? (
-          <Section title="Quick memo">
-            <MemoBox
-              sourceUrl={source.url}
-              // The board polls every few minutes; ask it to poll now so source state stays current.
-              onSaved={() => command(() => client.refresh())}
-            />
-          </Section>
-        ) : null}
-
-        <Section title="Agents & queue">
-          <Card style={styles.rows}>
-            <InfoRow
-              label="Agents running"
-              value={`${vault.agentsRunning} of ${vault.agents}`}
-              tone={vault.agentsRunning > 0 ? 'up' : 'dim'}
-            />
-            <InfoRow label="Recent notes" value={formatCount(vault.recent)} />
-            <InfoRow label="Inbox" value={formatCount(vault.inbox)} last />
+        <Section title="Today’s queue">
+          <Card style={styles.progressCard}>
+            <View style={styles.progressHead}>
+              <Text style={styles.progressLabel}>Position</Text>
+              <Text style={styles.progressValue}>
+                {formatTrack(session.track, session.trackTotal)}
+              </Text>
+            </View>
+            <View style={styles.progressTrack}>
+              <View
+                style={[
+                  styles.progressFill,
+                  { width: `${trackFraction(session.track, session.trackTotal) * 100}%` },
+                ]}
+              />
+            </View>
           </Card>
         </Section>
 
-        {/* The panel is a single fixed composition, so there is deliberately no page switcher. */}
+        {/* The five screens the three side buttons cycle. The phone drives the same nav state a
+            press does, so a tap here and a press there cannot disagree about which screen is up. */}
         <Section title="On the panel">
+          <View style={styles.chipRow}>
+            {SCREEN_LABELS.map((label, i) => (
+              <Chip
+                key={label}
+                label={label}
+                active={state.screen === i}
+                disabled={busy}
+                onPress={() => command(() => client.setScreen(i))}
+              />
+            ))}
+          </View>
           <Card style={styles.rows}>
+            <InfoRow label="Screen" value={state.screenTitle || screenLabel(state.screen)} />
             <InfoRow
-              label="Composition"
-              value={state.pageTitle || PAGE_LABELS[state.page] || 'Artwork'}
+              label="Answer"
+              value={state.revealed ? 'shown' : 'hidden'}
+              tone={state.revealed ? 'up' : 'dim'}
             />
-            <InfoRow label="Canvas" value="648 × 480 landscape" last />
+            <InfoRow label="Grade cursor" value={gradeLabel(state.grade)} last />
           </Card>
-          <Text style={styles.pageNote}>
-            A full-height tarot card sits beside today&apos;s headline, flow, caution and action.
-            There is no header or footer chrome. The panel redraws only when the daily reading
-            changes.
+          <Text style={styles.panelNote}>
+            KEY0 and KEY1 do what the footer says on the screen that is up; KEY2 re-polls, and BOOT
+            cycles the three sheets. A full refresh of this panel takes seconds, so the board only
+            redraws when the card actually changed.
           </Text>
+        </Section>
+
+        {/* What the scheduler thinks of the card on the glass. */}
+        <Section title="FSRS">
+          <Card style={styles.rows}>
+            <InfoRow label="State" value={fsrsStateLabel(card.fsrsState)} tone={fsrsStateTone(card.fsrsState)} />
+            <InfoRow label="Next due" value={formatDue(card.due)} />
+            <InfoRow label="Reviews" value={formatCount(card.reps)} />
+            <InfoRow label="Lapses" value={formatCount(card.lapses)} tone={card.lapses > 0 ? 'warn' : 'neutral'} />
+            <InfoRow label="Stability" value={formatStability(card.stabilityDays)} />
+            <InfoRow label="Difficulty" value={formatDifficulty(card.difficultyPct)} last />
+          </Card>
         </Section>
 
         {/* Where the data comes from, and how the last poll went. */}
@@ -290,7 +314,7 @@ export default function Dashboard() {
           />
         </View>
         <Text style={styles.actionsNote}>
-          Polling only redraws the panel if the snapshot changed. The self-test sweeps the panel for
+          Polling only redraws the panel if the card changed. The self-test sweeps the panel for
           about a minute.
         </Text>
 
@@ -304,9 +328,11 @@ function humanError(e: Esp32Error): string {
   switch (e.code) {
     case 'network_error':
       return 'Couldn’t reach the board. Check it’s powered on and on the same Wi-Fi.'
-    case 'page_range':
-      return 'That page doesn’t exist on the board.'
-    case 'vault_url_invalid':
+    case 'screen_range':
+      // The client only ever offers SCREEN_COUNT screens, so this means the board has fewer of
+      // them than this app was built against.
+      return `That screen doesn’t exist on the board (this app knows ${SCREEN_COUNT}).`
+    case 'study_url_invalid':
       return 'The board wouldn’t accept that address.'
     case 'busy':
       return 'The board is busy redrawing. Try again in a moment.'
@@ -315,11 +341,21 @@ function humanError(e: Esp32Error): string {
   }
 }
 
-function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: () => void }) {
+function Header({
+  model,
+  baseUrl,
+  onSettings,
+}: {
+  model: string | null
+  baseUrl: string | null
+  onSettings: () => void
+}) {
   return (
     <View style={styles.header}>
       <View style={styles.headerText}>
-        <Text style={styles.headerTitle}>Obsidian Board</Text>
+        {/* The board names itself (DEVICE_MODEL). Reading it back beats hardcoding a second copy
+            of the name here that a firmware rename would silently make wrong. */}
+        <Text style={styles.headerTitle}>{model || 'Kanjis Board'}</Text>
         <Text style={styles.headerSub} numberOfLines={1}>
           {baseUrl ?? ''}
         </Text>
@@ -328,64 +364,6 @@ function Header({ baseUrl, onSettings }: { baseUrl: string | null; onSettings: (
         <Ionicons name="settings-outline" size={22} color={colors.text} />
       </Pressable>
     </View>
-  )
-}
-
-/**
- * Type a memo, write it into the vault.
- *
- * The write goes to the machine serving the snapshot, not to the board — see src/lib/capture.ts.
- * Most producers will not accept it, so "this server doesn't do capture" is an ordinary answer
- * and gets its own sentence rather than a generic failure.
- */
-function MemoBox({ sourceUrl, onSaved }: { sourceUrl: string; onSaved: () => void }) {
-  const [text, setText] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const save = async () => {
-    if (saving || !text.trim()) return
-    setSaving(true)
-    setSaved(null)
-    setError(null)
-    try {
-      const { path } = await captureMemo(sourceUrl, text)
-      setText('')
-      setSaved(path || 'Saved to your inbox.')
-      onSaved()
-    } catch (e) {
-      setError(captureErrorMessage(e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <TextInput
-        value={text}
-        onChangeText={(t) => {
-          setText(t)
-          setSaved(null)
-          setError(null)
-        }}
-        placeholder="Something to deal with later…"
-        placeholderTextColor={colors.textFaint}
-        multiline
-        style={styles.memoInput}
-        editable={!saving}
-      />
-      {error ? <Text style={styles.memoError}>{error}</Text> : null}
-      {saved ? <Text style={styles.memoSaved}>Saved · {saved}</Text> : null}
-      <Button
-        label="Add to inbox"
-        variant="secondary"
-        disabled={!text.trim()}
-        loading={saving}
-        onPress={save}
-      />
-    </KeyboardAvoidingView>
   )
 }
 
@@ -437,17 +415,27 @@ const styles = StyleSheet.create({
   },
   hero: {
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
     paddingVertical: 20,
   },
-  heroName: {
-    fontSize: 28,
+  heroFront: {
+    fontSize: 40,
     fontWeight: '700',
     color: colors.text,
   },
-  heroMeta: {
+  heroReading: {
+    fontSize: 16,
+    color: colors.textDim,
+  },
+  heroMeaning: {
+    fontSize: 15,
+    color: colors.text,
+    textAlign: 'center',
+  },
+  heroDeck: {
     fontSize: 12,
     color: colors.textFaint,
+    marginTop: 4,
   },
   tiles: {
     flexDirection: 'row',
@@ -468,36 +456,37 @@ const styles = StyleSheet.create({
   rows: {
     padding: 0,
   },
-  pageNote: {
+  progressCard: {
+    gap: 10,
+  },
+  progressHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  progressLabel: {
+    fontSize: 14,
+    color: colors.textDim,
+  },
+  progressValue: {
+    fontSize: 14,
+    color: colors.text,
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceAlt,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent,
+  },
+  panelNote: {
     fontSize: 12,
     color: colors.textFaint,
     lineHeight: 16,
-  },
-  memoInput: {
-    minHeight: 84,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 12,
-    color: colors.text,
-    fontSize: 16,
-    textAlignVertical: 'top',
-    marginBottom: 10,
-  },
-  memoError: {
-    fontSize: 12,
-    color: colors.down,
-    lineHeight: 16,
-    marginBottom: 8,
-  },
-  memoSaved: {
-    fontSize: 12,
-    color: colors.up,
-    lineHeight: 16,
-    marginBottom: 8,
   },
   sourceNote: {
     fontSize: 12,

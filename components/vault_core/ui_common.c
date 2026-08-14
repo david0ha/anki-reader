@@ -38,6 +38,14 @@ lv_obj_t *ui_fill(lv_obj_t *par, int x, int y, int w, int h)
     return o;
 }
 
+lv_obj_t *ui_fill_white(lv_obj_t *par, int x, int y, int w, int h)
+{
+    lv_obj_t *o = ui_pane(par, x, y, w, h);
+    lv_obj_set_style_bg_color(o, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    return o;
+}
+
 lv_obj_t *ui_frame(lv_obj_t *par, int x, int y, int w, int h, int bw)
 {
     lv_obj_t *o = ui_pane(par, x, y, w, h);
@@ -94,13 +102,6 @@ void ui_lab_wrap(lv_obj_t *label, int height)
     lv_obj_set_height(label, height);
 }
 
-void ui_lab_opaque(lv_obj_t *label)
-{
-    if (!label) return;
-    lv_obj_set_style_bg_color(label, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(label, LV_OPA_COVER, 0);
-}
-
 lv_obj_t *ui_lab_inv(lv_obj_t *par, int x, int y, int w,
                      const lv_font_t *f, lv_text_align_t align, const char *txt)
 {
@@ -130,6 +131,58 @@ void ui_show(lv_obj_t *obj, bool visible)
     else         lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* --- font coverage -------------------------------------------------------- */
+
+/* The stride comes from kanji_utf8_seq_len(), not a copy of it. This walk and
+ * kanji_hero_is_large()'s character count are the two halves of one decision —
+ * which face the headword gets — so a byte of disagreement between them shows
+ * up as a tofu box at 56 px in the middle of the card. */
+
+static uint32_t decode(const char *s, size_t n)
+{
+    const unsigned char *b = (const unsigned char *)s;
+    switch (n) {
+    case 2: return ((uint32_t)(b[0] & 0x1F) << 6) | (b[1] & 0x3F);
+    case 3: return ((uint32_t)(b[0] & 0x0F) << 12) | ((uint32_t)(b[1] & 0x3F) << 6) |
+                   (b[2] & 0x3F);
+    case 4: return ((uint32_t)(b[0] & 0x07) << 18) | ((uint32_t)(b[1] & 0x3F) << 12) |
+                   ((uint32_t)(b[2] & 0x3F) << 6) | (b[3] & 0x3F);
+    default: return b[0];
+    }
+}
+
+bool ui_font_can_draw(const lv_font_t *f, const char *s)
+{
+    if (!f) return false;
+    if (!s) return true;
+
+    for (size_t i = 0; s[i] != '\0'; ) {
+        const size_t n = kanji_utf8_seq_len((unsigned char)s[i]);
+        for (size_t k = 1; k < n; k++) {
+            if (s[i + k] == '\0') return false;   /* a truncated sequence */
+        }
+        const uint32_t cp = decode(s + i, n);
+        i += n;
+
+        /* A space has no outline in most faces but every face can set it. */
+        if (cp == ' ' || cp == '\n' || cp == '\r' || cp == '\t') continue;
+
+        lv_font_glyph_dsc_t g;
+        if (!lv_font_get_glyph_dsc(f, &g, cp, 0)) return false;
+    }
+    return true;
+}
+
+const lv_font_t *ui_hero_face(const char *front)
+{
+    if (kanji_hero_is_large(front) && ui_font_can_draw(UI_F_HERO, front)) {
+        return UI_F_HERO;
+    }
+    /* The title face carries both scripts whole, so it is the fallback that
+     * cannot itself fail. */
+    return UI_F_TITLE;
+}
+
 /* --- immediate-mode drawing ---------------------------------------------- */
 
 static lv_color_t ink(bool white)
@@ -149,21 +202,6 @@ void ui_draw_line_abs(lv_layer_t *L, int x1, int y1, int x2, int y2, int w, bool
     d.p1.x = x1; d.p1.y = y1;
     d.p2.x = x2; d.p2.y = y2;
     lv_draw_line(L, &d);
-}
-
-/* A disc, not a circle: LVGL draws an arc of width `w` at radius `r`, so a
- * width equal to the radius fills all the way to the centre. */
-void ui_draw_disc_abs(lv_layer_t *L, int cx, int cy, int r, bool white)
-{
-    lv_draw_arc_dsc_t d;
-    lv_draw_arc_dsc_init(&d);
-    d.color = ink(white);
-    d.width = r;
-    d.radius = r;
-    d.center.x = cx; d.center.y = cy;
-    d.start_angle = 0; d.end_angle = 360;
-    d.opa = LV_OPA_COVER;
-    lv_draw_arc(L, &d);
 }
 
 void ui_draw_ring_abs(lv_layer_t *L, int cx, int cy, int r, int w, int a0, int a1)
@@ -194,30 +232,4 @@ void ui_draw_rect_abs(lv_layer_t *L, int x1, int y1, int x2, int y2,
     }
     lv_area_t a = { x1, y1, x2, y2 };
     lv_draw_rect(L, &d, &a);
-}
-
-void ui_group_int(char *out, size_t n, int v)
-{
-    if (!out || n == 0) return;
-
-    char digits[16];
-    bool neg = v < 0;
-    /* Negate through long: -INT_MIN does not fit in an int, and a counter that
-     * arrives as INT_MIN is exactly the sort of thing a broken producer sends. */
-    long a = neg ? -(long)v : (long)v;
-    int  nd = snprintf(digits, sizeof(digits), "%ld", a);
-    if (nd < 0) { out[0] = '\0'; return; }
-    if (nd > (int)sizeof(digits) - 1) nd = (int)sizeof(digits) - 1;
-
-    size_t o = 0;
-    if (neg && o + 1 < n) out[o++] = '-';
-    for (int i = 0; i < nd; i++) {
-        if (i > 0 && (nd - i) % 3 == 0) {
-            if (o + 1 >= n) break;
-            out[o++] = ',';
-        }
-        if (o + 1 >= n) break;
-        out[o++] = digits[i];
-    }
-    out[o] = '\0';
 }

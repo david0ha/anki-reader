@@ -44,17 +44,23 @@ Three traps, all fatal to the display if ignored:
 
 | Button | GPIO | `user_config.h` | Action |
 |---|---|---|---|
-| KEY0 | 2 | `BTN_KEY0_PIN` | reserved; artwork unchanged |
-| KEY1 | 3 | `BTN_KEY1_PIN` | poll the vault source now |
-| KEY2 | 5 | `BTN_KEY2_PIN` | tap reserved; **held 5 s → reboot into Wi-Fi setup** |
-| BOOT | 0 | `BTN_BOOT_PIN` | reserved; artwork unchanged |
+| KEY0 | 2 | `BTN_KEY0_PIN` | reveal the answer · walk the grade cursor · page a sheet |
+| KEY1 | 3 | `BTN_KEY1_PIN` | open 설명 · commit the rating · close a sheet |
+| KEY2 | 5 | `BTN_KEY2_PIN` | refresh; **held 5 s → reboot into Wi-Fi setup** |
+| BOOT | 0 | `BTN_BOOT_PIN` | open FSRS · open 설명 · next sheet |
+
+Three of the four do different things on different screens. That mapping is not here and not in the
+button driver — it is a pure state machine in `components/vault_core/kanji_nav.c`, host-tested from
+every button in every reachable state. The driver's whole job is to turn an edge into a
+`button_event_t`; what the press *means* is decided somewhere a laptop can check it.
 
 KEY0–2 are the EE04's three side buttons; all are press-to-GND with the internal pull-up enabled.
 BOOT is the button on the XIAO module itself — also the bootloader strap pin, so holding it while
 pressing RESET enters download mode, which is unrelated to the firmware's use of it.
 
 The long press is detected by *sampling the pin*, not by timing two edges: the driver interrupts on
-the press only, so a release generates no event to time against.
+the press only, so a release generates no event to time against. It is also caught in `user_app`
+before the state machine sees anything, because the state machine has no notion of duration.
 
 ## Battery
 
@@ -75,8 +81,11 @@ The JST 2.0 battery input also passes a hardware slide switch; it must be ON for
 
 The EE05 this project forked from routed GPIO5/GPIO6 to an I2C side header. On the **EE04 those
 same two pins are KEY2 and the battery divider's enable**, and the board has no RTC of its own. The
-I2C bus and the PCF85063A driver are therefore gone entirely. The current artwork has no clock,
-header or footer chrome.
+I2C bus and the PCF85063A driver are therefore gone entirely.
+
+Nothing misses them. This UI prints no clock and computes no interval: every span on the glass —
+`9일 뒤`, `10분 뒤`, `복습` — is worded by `tools/kanji_server.py` against the *server's* clock and
+arrives as a string. Adding an RTC would give the board a number it has no use for.
 
 ## Unused
 

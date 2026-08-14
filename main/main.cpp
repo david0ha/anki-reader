@@ -8,8 +8,7 @@
 
 #include "epd_panel.h"
 #include "lvgl_bsp.h"
-#include "ui_artwork.h"
-#include "ui_artwork_layout.h"
+#include "ui_kanji.h"
 #include "ui_strings.h"
 #include "user_app.h"
 #include "user_config.h"
@@ -37,20 +36,23 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 	for (int y = area->y1; y <= area->y2; y++) {
 		for (int x = area->x1; x <= area->x2; x++) {
 			/* FULL mode always passes the base of the entire logical 648x480
-			 * framebuffer, even when only a smaller invalidated area is flushed. */
-			uint16_t pixel = buffer[y * ARTWORK_SCREEN_W + x];
+			 * framebuffer, even when only a smaller invalidated area is flushed.
+			 * The stride is the PANEL's width, from the driver that owns it —
+			 * taking it from a UI header made the flush silently wrong the day
+			 * that header stopped being about the whole screen. */
+			uint16_t pixel = buffer[y * EPD_PANEL_W + x];
 			epd_set_pixel(x, y, (pixel < 0x7fff) ? EPD_BLACK : EPD_WHITE);
 		}
 	}
 	lv_disp_flush_ready(drv);
 }
 
-// --- Provisioning status, shown on the vault UI's overlay ------------------
+// --- Provisioning status, shown on the study UI's overlay ------------------
 
 static void SetStatus(const char *title, const char *body)
 {
 	if (Lvgl_lock(-1)) {
-		ui_artwork_set_overlay(title, body);
+		ui_kanji_set_overlay(title, body);
 		Lvgl_unlock();
 	}
 	Lvgl_RenderNow();
@@ -87,8 +89,9 @@ extern "C" void app_main(void)
 {
 	UserApp_AppInit();
 
-	// Keep the configured timezone for timestamped diagnostics and future
-	// producers. The daily tarot intentionally shows no live clock or app chrome.
+	// Keep the configured timezone for timestamped diagnostics. Nothing on the
+	// glass is a clock: the board has no RTC, and every span the UI prints
+	// ("9일 뒤") is worded by the proxy against the server's clock.
 	setenv("TZ", CONFIG_OBSIDIAN_TIMEZONE, 1);
 	tzset();
 
@@ -105,7 +108,9 @@ extern "C" void app_main(void)
 		.host = SPI3_HOST,
 	};
 	ESP_ERROR_CHECK(epd_init(&pins));
-	/* The artwork renders in the panel's native 648x480 coordinate system. */
+	/* The UI is laid out in the panel's native 648x480 coordinate system —
+	 * see components/vault_core/ui_kanji_layout.c, which is where every
+	 * rectangle on the glass comes from. */
 	Lvgl_PortInit(EPD_WIDTH, EPD_HEIGHT, Lvgl_FlushCallback);
 
 	// Build the real UI up front and drive provisioning through its overlay,
@@ -116,18 +121,18 @@ extern "C" void app_main(void)
 	}
 
 	prov_options_t opts;
-	provisioning_default_options(&opts);   // AP prefix "Obsidian Board", 15s timeout
+	provisioning_default_options(&opts);   // AP prefix, 15s timeout
 	opts.event_cb = OnProvisioningEvent;
 
 	prov_config_t cfg;
 	bool connected = provisioning_run(&opts, &cfg);  // blocks (and reboots) until configured
 
 	if (connected) {
-		ESP_LOGI(TAG, "online — vault URL '%s'",
-		         cfg.vault_url[0] ? cfg.vault_url : "(none: demo snapshot)");
+		ESP_LOGI(TAG, "online — study URL '%s'",
+		         cfg.study_url[0] ? cfg.study_url : "(none: demo card)");
 		net_time_sync(10000);
 		if (Lvgl_lock(-1)) {
-			ui_artwork_set_overlay(NULL, NULL);   // dismiss the setup overlay
+			ui_kanji_set_overlay(NULL, NULL);   // dismiss the setup overlay
 			Lvgl_unlock();
 		}
 		// The pinout lives here and nowhere else; user_app takes the buttons

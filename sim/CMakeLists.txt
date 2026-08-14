@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(vault_sim C)
+project(kanji_sim C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -20,65 +20,34 @@ set(CJSON ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/cJSON)
 # Reuse the IDF project's LVGL source (fetched into managed_components/).
 add_subdirectory(${EX}/managed_components/lvgl__lvgl ${CMAKE_BINARY_DIR}/lvgl)
 
-# The vault core is compiled verbatim — same UI, same fonts, same logic as the
-# firmware. Only the HTTP port is host-specific.
-add_executable(sim
-    main_sim.c
+# The core is compiled verbatim — same UI, same nav state machine, same fonts,
+# same parser as the firmware. Only the HTTP port is host-specific.
+add_executable(kanji_sim
+    main_kanji_sim.c
     http_port_curl.c
-    ${CORE}/vault_model.c
-    ${CORE}/vault_parse.c
-    ${CORE}/vault_mock.c
-    ${CORE}/vault_service.c
+    ${CORE}/kanji_model.c
+    ${CORE}/kanji_parse.c
+    ${CORE}/kanji_mock.c
+    ${CORE}/kanji_service.c
+    ${CORE}/kanji_nav.c
     ${CORE}/ui_common.c
-    ${CORE}/ui_artwork.c
-    ${CORE}/ui_artwork_layout.c
-    ${CORE}/assets/tarot/major.c
-    ${CORE}/assets/tarot/cups.c
-    ${CORE}/assets/tarot/pentacles.c
-    ${CORE}/assets/tarot/swords.c
-    ${CORE}/assets/tarot/wands.c
-    ${CORE}/assets/tarot/catalog.c
-    ${CORE}/ui_vault.c
-    ${CORE}/ui_page_stats.c
-    ${CORE}/ui_page_graph.c
-    ${CORE}/ui_page_agents.c
-    ${CORE}/ui_page_notes.c
-    ${CORE}/ui_graph.c
     ${CORE}/ui_icons.c
+    ${CORE}/ui_kanji.c
+    ${CORE}/ui_kanji_layout.c
+    ${CORE}/ui_card_question.c
+    ${CORE}/ui_card_answer.c
+    ${CORE}/ui_sheet_desc.c
+    ${CORE}/ui_sheet_comments.c
+    ${CORE}/ui_sheet_fsrs.c
     ${CORE}/fonts/ui_font_kr_16.c
     ${CORE}/fonts/ui_font_kr_20.c
     ${CORE}/fonts/ui_font_kr_28.c
+    ${CORE}/fonts/ui_font_jp_56.c
     ${CJSON}/cJSON.c)
 
 # ${CORE} (not just ${CORE}/include) is on the path so the simulator can include
 # ui_internal.h. That header is private to the UI files by design — but the
 # simulator asserts on the grid it defines, and duplicating the grid here is the
 # one way to make the assertions lie.
-target_include_directories(sim PRIVATE ${CORE}/include ${CORE} ${CJSON})
-target_link_libraries(sim lvgl curl m)
-
-# Landscape artwork acceptance renderer. This is intentionally a second binary:
-# the legacy dashboard simulator remains available as regression coverage while
-# this one exercises the exact fixed-template UI now shown on the panel.
-add_executable(artwork_sim
-    main_artwork_sim.c
-    http_port_curl.c
-    ${CORE}/vault_model.c
-    ${CORE}/vault_parse.c
-    ${CORE}/vault_mock.c
-    ${CORE}/vault_service.c
-    ${CORE}/ui_common.c
-    ${CORE}/ui_artwork.c
-    ${CORE}/ui_artwork_layout.c
-    ${CORE}/assets/tarot/major.c
-    ${CORE}/assets/tarot/cups.c
-    ${CORE}/assets/tarot/pentacles.c
-    ${CORE}/assets/tarot/swords.c
-    ${CORE}/assets/tarot/wands.c
-    ${CORE}/assets/tarot/catalog.c
-    ${CORE}/fonts/ui_font_kr_16.c
-    ${CORE}/fonts/ui_font_kr_20.c
-    ${CORE}/fonts/ui_font_kr_28.c
-    ${CJSON}/cJSON.c)
-target_include_directories(artwork_sim PRIVATE ${CORE}/include ${CORE} ${CJSON})
-target_link_libraries(artwork_sim lvgl curl m)
+target_include_directories(kanji_sim PRIVATE ${CORE}/include ${CORE} ${CJSON})
+target_link_libraries(kanji_sim lvgl curl m)

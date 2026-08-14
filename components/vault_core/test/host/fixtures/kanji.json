@@ -1,0 +1,76 @@
+{
+  "v": 1,
+  "session": {
+    "deck": "JLPT N5 Vocabulary",
+    "level": "N5",
+    "streak": 12,
+    "reviewed_today": 34,
+    "left_new": 7,
+    "left_review": 18,
+    "retry": 2,
+    "track": 35,
+    "track_total": 60,
+    "complete": false
+  },
+  "card": {
+    "id": "f00c539e-23f9-4294-bee1-c642189b105f",
+    "front": "会う",
+    "reading": "あう",
+    "level": "N5",
+    "senses": [
+      "만나다",
+      "대면하다",
+      "우연히 만나다"
+    ],
+    "examples": [
+      {
+        "text": "出会う",
+        "reading": "であう",
+        "gloss": "우연히 만나다"
+      },
+      {
+        "text": "出会い",
+        "reading": "であい",
+        "gloss": "만남"
+      }
+    ],
+    "description": "会는 사람들이 모여 서로 말하고 교류하는 모습을 바탕으로 한 글자입니다. 위쪽은 모임을 나타내는 형태이고, 아래쪽은 입(말함)을 연상시키며 '사람들이 모여 말하는(만나는) 모습'에서 '만나다'라는 뜻이 생겼습니다.",
+    "hook_title": "기억 힌트",
+    "hook_body": "会는 사람들이 모여 입으로 말을 주고받는 모습을 형상화한 글자입니다. 위의 구성은 '모임'을, 아래의 모양은 '말함/입'을 나타내어 '사람들이 모인다/만난다'는 의미가 됩니다.",
+    "parts": [
+      {
+        "glyph": "会",
+        "meaning": "모이다, 만나다",
+        "reading": "あう (훈독)"
+      }
+    ],
+    "comments": [
+      {
+        "author": "카나 선생",
+        "body": "「会う」는 사람을 만날 때 씁니다. 우연히 마주친 경우에는 「出会う」를 더 자주 씁니다.",
+        "likes": 12
+      },
+      {
+        "author": "유키",
+        "body": "「友達に会う」처럼 조사는 に를 씁니다. を를 쓰면 어색하게 들려요.",
+        "likes": 5
+      }
+    ],
+    "comment_total": 14,
+    "fsrs": {
+      "state": "review",
+      "state_label": "복습",
+      "due": "9일 뒤",
+      "reps": 5,
+      "lapses": 1,
+      "stability_days": 9,
+      "difficulty_pct": 47
+    },
+    "preview": {
+      "again": "10분 뒤",
+      "hard": "4일 뒤",
+      "good": "9일 뒤",
+      "easy": "21일 뒤"
+    }
+  }
+}

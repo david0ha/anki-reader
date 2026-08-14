@@ -49,7 +49,7 @@ export default function TurnOn() {
     case 'checking':
       ctaLabel = 'CHECKING…'
       title = 'Looking for your board'
-      body = <>Looking for Obsidian Board on its setup Wi-Fi…</>
+      body = <>Looking for Kanjis Board on its setup Wi-Fi…</>
       break
     case 'found':
       ctaLabel = 'NEXT'
@@ -64,10 +64,15 @@ export default function TurnOn() {
     case 'not-found':
       ctaLabel = 'CHECK AGAIN'
       title = 'Turn on your board'
+      // The SSID the phone's Wi-Fi list will actually show: the firmware's AP
+      // prefix (components/provisioning/provisioning.c) plus the last four of
+      // the MAC. It matches the model /api/info reports, on purpose — a board
+      // that announces one name and reports another is unidentifiable at the
+      // one moment the learner has nothing else to go on.
       body = (
         <>
           Power the board with USB-C, then in your phone’s Wi-Fi settings join the network named{' '}
-          <Text style={heroBold}>‘Obsidian Board-XXXX’</Text>. Come back and tap CHECK AGAIN.
+          <Text style={heroBold}>‘Kanjis Board-XXXX’</Text>. Come back and tap CHECK AGAIN.
         </>
       )
       break

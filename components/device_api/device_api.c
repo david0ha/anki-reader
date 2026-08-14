@@ -18,7 +18,7 @@ static const char *TAG = "device_api";
 /* Sized in device_api_json.h, where the host tests can assert the worst case
  * actually fits. */
 #define STATE_BUF_SZ DEVICE_API_STATE_BUF_SZ
-/* Control bodies are tiny ({"page":1}); the vault URL is the largest. */
+/* Control bodies are tiny ({"screen":1}); the study URL is the largest. */
 #define POST_BUF_SZ  320
 
 // ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ static esp_err_t api_state_get(httpd_req_t *req)
 // POST handlers — drive the app via the user_app_api bridge
 // ---------------------------------------------------------------------------
 
-// POST /api/refresh — no body. Poll the vault source now instead of waiting out
+// POST /api/refresh — no body. Poll the study source now instead of waiting out
 // the interval. The panel is only refreshed if what comes back differs from what
 // is already on the glass, so this is safe to call repeatedly.
 static esp_err_t api_refresh_post(httpd_req_t *req)
@@ -153,29 +153,32 @@ static esp_err_t api_refresh_post(httpd_req_t *req)
     return user_app_refresh_now() ? send_ok(req) : send_err(req, "busy");
 }
 
-// POST /api/page { page: 0 } — compatibility no-op for one composition.
-static esp_err_t api_page_post(httpd_req_t *req)
+// POST /api/screen { screen: 0..4 } — put the board on any screen the buttons can reach
+// (question, answer, 설명, 댓글, FSRS). It moves the same nav state a KEY press moves, so a
+// phone cannot park the board somewhere the buttons cannot get it out of.
+static esp_err_t api_screen_post(httpd_req_t *req)
 {
     esp_err_t sent;
     cJSON *root = parse_body(req, &sent);
     if (root == NULL) return sent;
 
     esp_err_t rc;
-    cJSON *pg = cJSON_GetObjectItem(root, "page");
-    if (!cJSON_IsNumber(pg)) {
+    cJSON *sc = cJSON_GetObjectItem(root, "screen");
+    if (!cJSON_IsNumber(sc)) {
         rc = send_err(req, "bad_json");
-    } else if (pg->valuedouble != 0.0) {
-        rc = send_err(req, "page_range");
     } else {
-        rc = user_app_set_page((int)pg->valuedouble) ? send_ok(req) : send_err(req, "page_range");
+        // The range check lives in user_app, beside the enum it checks against; a full queue
+        // reports the same code, for the same reason as the URL route below.
+        rc = user_app_set_screen((int)sc->valuedouble) ? send_ok(req)
+                                                       : send_err(req, "screen_range");
     }
     cJSON_Delete(root);
     return rc;
 }
 
-// POST /api/vault { url } — point the device at a different snapshot URL. Persisted to NVS and
-// applied live; an empty string switches to the built-in demo snapshot.
-static esp_err_t api_vault_post(httpd_req_t *req)
+// POST /api/study { url } — point the device at a different study proxy. Persisted to NVS and
+// applied live; an empty string switches to the built-in demo card.
+static esp_err_t api_study_post(httpd_req_t *req)
 {
     esp_err_t sent;
     cJSON *root = parse_body(req, &sent);
@@ -185,11 +188,11 @@ static esp_err_t api_vault_post(httpd_req_t *req)
     esp_err_t rc;
     if (!cJSON_IsString(url) || url->valuestring == NULL) {
         rc = send_err(req, "bad_json");
-    } else if (!user_app_set_vault_url(url->valuestring)) {
+    } else if (!user_app_set_study_url(url->valuestring)) {
         // One code for both "not a usable URL" and "queue full": the first is by
         // far the likelier, and the app cannot do anything different about the
         // second anyway.
-        rc = send_err(req, "vault_url_invalid");
+        rc = send_err(req, "study_url_invalid");
     } else {
         rc = send_ok(req);
     }
@@ -226,8 +229,8 @@ static void start_http(void)
         {.uri = "/api/info",         .method = HTTP_GET,  .handler = api_info_get},
         {.uri = "/api/state",        .method = HTTP_GET,  .handler = api_state_get},
         {.uri = "/api/refresh",      .method = HTTP_POST, .handler = api_refresh_post},
-        {.uri = "/api/page",         .method = HTTP_POST, .handler = api_page_post},
-        {.uri = "/api/vault",        .method = HTTP_POST, .handler = api_vault_post},
+        {.uri = "/api/screen",       .method = HTTP_POST, .handler = api_screen_post},
+        {.uri = "/api/study",        .method = HTTP_POST, .handler = api_study_post},
         {.uri = "/api/display/test", .method = HTTP_POST, .handler = api_display_test_post},
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
@@ -243,10 +246,13 @@ static void start_mdns(void)
         ESP_LOGW(TAG, "mdns_init failed: %s", esp_err_to_name(err));
         return;
     }
-    // NOT "tickerboard": that name belongs to the fortune board this project
-    // forked from, whose shipped app resolves tickerboard.local. Two devices
-    // answering the same discovery probe on one LAN is a support ticket nobody
-    // can debug from the outside.
+    // The hostname deliberately does NOT follow DEVICE_MODEL. It is what a
+    // paired app has stored and what the setup AP still calls itself, so
+    // renaming it to match the board's new job would strand every board already
+    // flashed and on a shelf to save a word. NOT "tickerboard" either: that name
+    // belongs to the fortune board this project forked from, whose shipped app
+    // resolves tickerboard.local, and two devices answering the same discovery
+    // probe on one LAN is a support ticket nobody can debug from the outside.
     mdns_hostname_set("obsidianboard");
     mdns_instance_name_set(DEVICE_MODEL);
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);

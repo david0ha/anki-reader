@@ -2,9 +2,9 @@
 // board's SoftAP JSON API); this module models only step order, progress, and per-step
 // "can proceed" gating, so the screens stay declarative and the gating is unit-testable.
 
-import { validateVaultUrl } from '../lib/vaulturl'
+import { validateStudyUrl } from '../lib/studyurl'
 
-export const ONBOARDING_STEPS = ['turn-on', 'wifi-list', 'vault', 'password', 'complete'] as const
+export const ONBOARDING_STEPS = ['turn-on', 'wifi-list', 'study', 'password', 'complete'] as const
 
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number]
 
@@ -12,7 +12,7 @@ export type OnboardingStep = (typeof ONBOARDING_STEPS)[number]
 export const ONBOARDING_ROUTES: Record<OnboardingStep, string> = {
   'turn-on': '/onboarding/turn-on',
   'wifi-list': '/onboarding/wifi-list',
-  vault: '/onboarding/vault',
+  study: '/onboarding/study',
   password: '/onboarding/password',
   complete: '/onboarding/complete',
 }
@@ -32,8 +32,8 @@ export interface OnboardingState {
   password: string
   /** Whether the chosen network is password-protected. Undefined until one is picked. */
   selectedSecured?: boolean
-  /** Where the board will fetch its snapshot. Empty = run on the built-in demo snapshot. */
-  vaultUrl: string
+  /** Where the board will fetch its card. Empty = run on the built-in demo card. */
+  studyUrl: string
 }
 
 /** Whether the bottom CTA is enabled for the given step. */
@@ -44,11 +44,11 @@ export function canProceed(step: OnboardingStep, state: OnboardingState): boolea
       return true
     case 'wifi-list':
       return state.selectedNetwork !== null
-    case 'vault':
-      // The URL is optional — blank leaves the board on its demo snapshot, which is a complete
+    case 'study':
+      // The URL is optional — blank leaves the board on its demo card, which is a complete
       // product. But a *typed* URL must be well-formed: the board's own rejection would otherwise
       // arrive on the far side of a Wi-Fi join the user cannot undo.
-      return validateVaultUrl(state.vaultUrl).ok
+      return validateStudyUrl(state.studyUrl).ok
     case 'password':
       // An open (passwordless) network needs no password; secured ones require a non-empty one.
       return state.selectedSecured === false || state.password.trim().length > 0

@@ -1,45 +1,54 @@
-# Obsidian Board — companion app
+# Kanjis Board — companion app
 
-A **local-only** React Native (Expo) app that sets up and controls the **ESP32-S3 Obsidian Board**
+A **local-only** React Native (Expo) app that sets up and controls the **ESP32-S3 Kanjis Board**
 over your home Wi-Fi. No cloud, no accounts, no API keys — the app talks **directly** to the board
-over plain HTTP on the LAN.
+over plain HTTP on the LAN, and the board never holds a kanjis.ai credential either: it polls one
+URL, served by the proxy on your own machine.
 
 It does two things:
 
 1. **Onboarding** over the board's setup Wi-Fi (SoftAP): pick your home Wi-Fi, enter the password
-   and the vault snapshot URL, and the board reboots onto your network.
-2. **Live control** over the LAN: a dashboard that polls the board, shows what it is displaying and
-   how its last poll went, changes the snapshot URL, and runs the panel self-test.
+   and the study card URL, and the board reboots onto your network.
+2. **Live control** over the LAN: a dashboard that polls the board, shows the card on the glass and
+   the state of today's session, moves the board between its five screens, changes the card URL,
+   and runs the panel self-test.
 
 The HTTP/JSON contract it implements is documented in [`../docs/app-control.md`](../docs/app-control.md).
 `src/lib/esp32.ts` is the TypeScript mirror of that document and the only file in the app that
 knows a field name.
 
+> Two names, on purpose. The setup AP and the model string `/api/info` reports are both
+> **`Kanjis Board`** — that is what the learner reads, and both come from the same literal in
+> `components/provisioning/provisioning.c`. The mDNS host stayed **`obsidianboard.local`**, because
+> boards flashed before the rename answer to it and this app resolves it; renaming it would strand
+> them for nothing.
+
 ## What the dashboard shows
 
-Not the vault — the *board*. The full snapshot is on the URL the board polls, which the phone can
-open too; what a companion app is for is the half-metre of air between the user and a device with
-no keyboard:
+Not the catalog — the *board*. What a companion app is for is the half-metre of air between the
+user and a device with three buttons and no keyboard:
 
-- **Status** — how the last poll went, whether what's on the glass is demo data or stale, battery.
-- **Counters** — notes, links, orphans, tags, with link density and orphan rate derived.
-- **Agents & queue** — how many agents are running, and how deep the note/inbox queues are.
-- **On the panel** — the single native 648 × 480 daily tarot composition: a full-height card beside
-  its headline, flow, caution and action, with no header/footer chrome or page switcher.
+- **Status** — how the last poll went, whether what's on the glass is the demo card or stale,
+  battery.
+- **The card** — the headword, its reading and its first Korean gloss. The phone shows the answer
+  whatever screen the board is on: hiding it from the person holding the phone would be a quiz
+  nobody asked for.
+- **Today's queue** — reviewed today, streak, new left, reviews left, and the position in the queue.
+- **On the panel** — which of the five screens is up (문제 / 정답 / 설명 / 댓글 / FSRS), whether the
+  answer is revealed, and where the grade dock's cursor is parked. Tapping a screen name drives the
+  same nav state a button press does, so the phone and the board cannot disagree about what is up.
+- **FSRS** — the scheduler's view of this card: state, next due, reviews, lapses, stability,
+  difficulty. `—` where the scheduler has no value yet, which is not the same as zero.
 - **Source** — the URL, the last result, when it last succeeded, how often it polls. The three
   failure codes (`transport` / `http_status` / `bad_payload`) each get their own sentence, because
   they send you to three different places.
 - **Panel** — the measured full/partial refresh times. The refresh policy for this panel is meant
   to be chosen from measurement, and this is how you read the measurements off a board on a shelf
   instead of holding a serial cable to it.
-- **Quick memo** — type something and it lands in the vault's inbox. Saving also asks the board to
-  poll, while the panel itself stays focused on the daily tarot composition.
 
-The memo box is the one thing here that does **not** talk to the board. `POST /capture` is served
-by whatever is producing the snapshot — `tools/vault_server.py --allow-capture` does, most
-producers will not — so the app derives its address from the snapshot URL the board reports, and
-treats "this server doesn't do capture" as an ordinary answer with its own sentence. The boundary
-is why it lives in `src/lib/capture.ts` and not in `src/lib/esp32.ts`.
+Grading is deliberately **not** here. The four ratings are a KEY1 press on the board, in front of
+the card, and a rating sent from a phone that is not looking at the panel would be graded against
+whatever card the proxy happens to be serving.
 
 ## Why not Expo Go?
 
@@ -75,21 +84,21 @@ EXPO_PUBLIC_ESP32_BASE_URL=http://localhost:8080 npx expo start
 routes straight to the dashboard). Open it in the iOS Simulator (which can reach the host's
 `localhost`) or an Android emulator (use `http://10.0.2.2:8080` instead of `localhost`).
 
-The mock is not a stub. Give it a real snapshot URL and it fetches it and summarises it exactly as
-the firmware would, including the three distinct failure codes — so the whole chain the board walks
-is exercised, with only the panel missing. It validates the same strict `daily_tarot` object and
-fingerprints only the card, date and copy that can change pixels, just like the firmware:
+The mock is not a stub. Give it a real card URL and it fetches it and normalizes it exactly as
+`components/vault_core/kanji_parse.c` would — same UTF-8 byte caps, same clamps, same rejections —
+then summarises it as `device_api_json.c` does, including the three distinct failure codes. So the
+whole chain the board walks is exercised, with only the panel missing:
 
 ```bash
-python3 ../tools/mock_vault_server.py --port 8123     # the vault contract, as a server
-curl -X POST http://localhost:8080/api/vault -d '{"url":"http://localhost:8123/vault.json"}'
+python3 ../tools/mock_kanji_server.py --port 8123   # the card contract, from a fixed payload
+curl -X POST http://localhost:8080/api/study -d '{"url":"http://localhost:8123/kanji.json"}'
 ```
 
-To exercise the memo box too, serve a real (or throwaway) vault with capture enabled instead:
+Point it at the real proxy instead to study against your own kanjis.ai account:
 
 ```bash
-python3 ../tools/vault_server.py ~/some/vault --port 8123 --allow-capture
-curl -X POST http://localhost:8080/api/vault -d '{"url":"http://localhost:8123/vault.json"}'
+python3 ../tools/kanji_server.py --port 8123
+curl -X POST http://localhost:8080/api/study -d '{"url":"http://localhost:8123/kanji.json"}'
 ```
 
 Provisioning test knobs in the mock: enter password **`wrong`** to exercise the auth-failure path;
@@ -104,11 +113,11 @@ npx expo run:ios      # or: npx expo run:android
 Then follow the in-app onboarding:
 
 1. **Turn on** the board (USB-C). In your phone's Wi-Fi settings, join the network named
-   `Obsidian Board-XXXX`. The app probes `http://192.168.4.1` to confirm it's reachable.
+   `Kanjis Board-XXXX`. The app probes `http://192.168.4.1` to confirm it's reachable.
 2. **Pick your Wi-Fi** from the scanned list (or "Other…" for a hidden SSID).
-3. **Enter the snapshot URL** — or skip it, and the board runs on its built-in demo data. A URL you
-   do type is validated against the firmware's own rule before anything is sent, because the
-   board's rejection would otherwise arrive on the far side of a ~45s join.
+3. **Enter the card URL** — or skip it, and the board runs on its built-in demo card. A URL you do
+   type is validated against the firmware's own rule before anything is sent, because the board's
+   rejection would otherwise arrive on the far side of a ~45s join.
 4. **Enter the Wi-Fi password.** The app `POST`s to `/api/provision` and polls `/api/status` until
    the board confirms it joined.
 5. **Setup complete** — reconnect your phone to the same home Wi-Fi, then open the dashboard. The
@@ -119,11 +128,11 @@ Then follow the in-app onboarding:
 
 ```
 [AP setup]                                    [home LAN control]
-turn-on  ─ join "Obsidian Board-XXXX"         dashboard ─ GET /api/state (poll)
-wifi-list ─ GET /api/scan                       │           POST /api/{refresh,display/test}
-vault    ─ (validate locally)                   └─ settings ─ GET /api/info + /api/state
-password ─ POST /api/provision (ssid, pass,                   POST /api/vault, change host,
-           vault_url) → poll GET /api/status                  re-onboard
+turn-on  ─ join "Kanjis Board-XXXX"         dashboard ─ GET /api/state (poll)
+wifi-list ─ GET /api/scan                       │           POST /api/{screen,refresh,display/test}
+study    ─ (validate locally)                   └─ settings ─ GET /api/info + /api/state
+password ─ POST /api/provision (ssid, pass,                   POST /api/study, change host,
+           study_url) → poll GET /api/status                  re-onboard
 complete ─ save board base URL
 ```
 
@@ -141,9 +150,9 @@ complete ─ save board base URL
 
 The web export is also the cheapest way to actually *look* at the app without a native build: serve
 the bundle and the mock board behind one origin (a small proxy forwarding `/api/*` to the board and
-`/vault.json` + `/capture` to the vault server) and the whole dashboard runs in a browser. Doing it
-that way rather than adding CORS headers to the mock keeps a browser-only problem out of the repo —
-React Native has no CORS.
+`/kanji.json` to the proxy) and the whole dashboard runs in a browser. Doing it that way rather
+than adding CORS headers to the mock keeps a browser-only problem out of the repo — React Native
+has no CORS.
 
 ## Project layout
 
@@ -153,25 +162,24 @@ app/
 ├─ babel.config.js
 ├─ jest.setup.js       mocks @react-native-async-storage for tests
 ├─ scripts/
-│  └─ mock-esp32.js    Node mock for BOTH board APIs — really fetches the snapshot URL
+│  └─ mock-esp32.js    Node mock for BOTH board APIs — really fetches the card URL
 └─ src/
    ├─ theme.ts         dark design tokens
    ├─ app/             expo-router file-based routes
    │  ├─ _layout.tsx       providers (DeviceProvider)
    │  ├─ index.tsx         entry → onboarding or dashboard
    │  ├─ dashboard.tsx     live dashboard (polls getState)
-   │  ├─ settings.tsx      board info, snapshot URL, host override, re-onboard
-   │  └─ onboarding/       turn-on → wifi-list → vault → password → complete
+   │  ├─ settings.tsx      board info, card URL, host override, re-onboard
+   │  └─ onboarding/       turn-on → wifi-list → study → password → complete
    ├─ components/      Screen, Button, Card, Chip, StatTile, InfoRow, …
    ├─ lib/
    │  ├─ esp32.ts          the board client (both API surfaces) + types  ← core
-   │  ├─ esp32.test.ts     thorough unit tests with a fake fetch
+   │  ├─ esp32.test.ts     unit tests with a fake fetch, plus the mock as a running board
    │  ├─ discovery.ts      base-URL normalize/validate/resolve (pure)
    │  ├─ store.ts          AsyncStorage: board base URL + onboarding flag
    │  ├─ device.tsx        app-wide board connection context
-   │  ├─ vaulturl.ts       snapshot-URL validation mirroring the firmware
-   │  ├─ capture.ts        writing a memo — to the vault server, NOT the board
-   │  └─ format.ts         count / age / ms / fetch-result display helpers
+   │  ├─ studyurl.ts       card-URL validation mirroring the firmware
+   │  └─ format.ts         screen / FSRS / count / age / ms display helpers
    └─ onboarding/      flow.ts (step logic) + OnboardingContext
 ```
 
@@ -179,9 +187,9 @@ app/
 
 There is **no** Supabase / AWS / MQTT / cloud auth anywhere in this app. The only network calls it
 makes are direct HTTP requests to the board's IP / `obsidianboard.local`. Wi-Fi credentials and the
-snapshot URL live on the board (NVS); the app persists only the board's base URL and an
-onboarding-complete flag in `AsyncStorage`.
+card URL live on the board (NVS); the kanjis.ai session lives in the proxy on your own machine; the
+app persists only the board's base URL and an onboarding-complete flag in `AsyncStorage`.
 
-Those two AsyncStorage keys are namespaced `obsidianboard.*`. A phone that once ran the fortune
-board's app keeps its `tickerboard.*` entries untouched — they point at different hardware on the
-same LAN.
+Those two AsyncStorage keys are namespaced `obsidianboard.*`, matching the board's own LAN identity.
+A phone that once ran the fortune board's app keeps its `tickerboard.*` entries untouched — they
+point at different hardware on the same LAN.

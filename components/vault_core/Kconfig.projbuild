@@ -1,4 +1,4 @@
-menu "Obsidian Board"
+menu "Kanjis Board"
 
 config OBSIDIAN_TIMEZONE
     string "Local timezone (POSIX TZ)"
@@ -14,12 +14,12 @@ config OBSIDIAN_POLL_SECONDS
     default 300
     range 30 86400
     help
-      How often the device fetches the vault snapshot. Polling costs nothing
+      How often the device fetches the current study card. Polling costs nothing
       visible — the panel is only refreshed when the fetched content actually
       differs from what is on the glass — so the floor here is about not
       hammering somebody's laptop, not about e-Paper wear.
 
       A snapshot older than twice this interval is reported stale through the
-      companion API; operational status is not printed on the tarot artwork.
+      companion API; operational status is not printed on the card.
 
 endmenu

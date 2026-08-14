@@ -70,14 +70,14 @@ surface it loudly instead.
 This is the constraint the whole application is arranged around.
 
 ```c
-...update widgets...      /* ui_artwork_set_data(), cheap, no panel traffic */
+...update widgets...      /* ui_kanji_set_*(), cheap, no panel traffic */
 Lvgl_RenderNow();         /* synchronous render -> flush_cb -> framebuffer */
 epd_refresh_full();       /* or epd_refresh_partial_area(...) */
 ```
 
 The LVGL flush callback **never** refreshes the panel. Exactly one task (`UiTask` in
 `components/user_app/user_app.cpp`) touches LVGL or starts a refresh; everything else — buttons, the
-HTTP API, the vault poller — posts a command and returns.
+HTTP API, the card poller — posts a command and returns.
 
 ### Full refresh
 
@@ -86,7 +86,8 @@ triggers `0x12`. Priming the old plane with black rather than with the outgoing 
 every pixel through a complete black→target transition, and is therefore what makes a full refresh
 *clear* ghosting rather than merely repaint.
 
-Used for: a changed daily tarot, switching to the offline preview, the boot screen and self-test.
+Used for: a new card, revealing the answer, opening or paging a sheet, the setup overlay, the boot
+screen and the self-test.
 
 ### Partial refresh
 
@@ -95,9 +96,18 @@ boundary — the controller addresses source lines in groups of eight, and a win
 comes out shifted rather than clipped — so the refreshed area may be up to 7 px wider on each side
 than asked for. Harmless, since the framebuffer there is already correct.
 
-The tarot composition has no ticking clock or status chrome, so normal operation does not request a
-partial refresh. The windowed path remains exercised by `epd_selftest()` and its timing remains in
-`GET /api/state`; it is useful driver coverage without spending panel cycles on invisible metadata.
+There is exactly one partial refresh in the firmware: **the grade dock.** Walking the rating cursor
+takes up to three KEY0 presses, and three full refreshes is nine seconds of the panel strobing
+before the learner has told the board anything — so `present_dock()` re-renders and refreshes only
+that strip.
+
+Its rectangle is not a constant in the driver's caller. It comes from
+`kanji_answer_layout()->dock`, the same integers the widgets were positioned from, because the one
+failure this path has is silent: refresh a window that does not contain what changed and the panel
+keeps showing the previous rating, with nothing in the log. `test_kanji_layout.c` therefore asserts
+that the dock's `x` and `w` are multiples of 8 — so the driver's outward snap is a no-op and the
+window refreshed is exactly the window drawn — and that every cell, label and span the dock draws
+lies inside it.
 
 ## The refresh policy, and how it was chosen
 
@@ -110,33 +120,42 @@ refresh of each kind actually took on this board, they are logged at every refre
 served over the network at `GET /api/state` under `panel` — so the measurement can be read off a
 phone rather than by holding a serial cable to a board on a shelf.
 
-Fixed regardless of what the numbers say: a changed card or reading is a **full** refresh, and the
-single compatibility page endpoint does not refresh or switch views.
+Fixed regardless of what the numbers say: a new card, a reveal and a screen change are **full**
+refreshes, and the grade cursor is a **partial**. That split is not a tuning knob — it is what makes
+choosing a rating feel like an input rather than a page load.
+
+The partial path promotes itself: after `EPD_PARTIAL_CHAIN_MAX` (6) windowed refreshes in a row the
+driver issues a full one instead, so ghosting inside the dock cannot accumulate across a long
+session. The caller does not track this and should not; a KEY0 press that occasionally costs a full
+refresh is the correct trade against a dock that slowly turns grey.
 
 And the rule that matters more than any of it: **a poll that returns unchanged content does not
-touch the panel at all.** `vault_tarot_hash()` fingerprints only fields that drive tarot pixels, and
-`VaultTask` compares before it notifies. On a device that mostly sits still, this is the difference
-between a silent tarot display and one that flashes at nobody every five minutes forever.
+touch the panel at all.** `kanji_hash()` fingerprints everything that reaches the glass — and
+deliberately not the card id, which does not — and `KanjiTask` compares before it notifies. On a
+device that polls every five minutes forever, this is the difference between a silent board and one
+that flashes at nobody all day.
+
+Nothing on this panel changes with the clock, either. The board has no RTC and prints no time: every
+span it shows (`9일 뒤`, `10분 뒤`) is worded by the proxy and arrives as a string. So the minute
+tick that keeps battery telemetry current never redraws anything.
 
 ### When the numbers arrive
 
-The two constants below are placed to be *decided*, not guessed at twice. Read the measurement:
+The constants below are placed to be *decided*, not guessed at twice. Read the measurement:
 
 ```bash
 curl -s http://obsidianboard.local/api/state | jq .panel
 # {"partialChain": 3, "fullRefreshMs": ..., "partialRefreshMs": ...}
 ```
 
-then run the display self-test and one changed tarot refresh.
+then run the display self-test and walk the grade cursor through all four ratings.
 
 | what you see | change | where |
 |---|---|---|
-| repeated partial self-tests reveal early ghosting | lower `EPD_PARTIAL_CHAIN_MAX` before adding any future partial UI | `components/port_bsp/epd_panel.c` |
-| repeated partial self-tests leave no residue | a future partial UI could use a longer chain; current tarot UI is unaffected | same |
+| the dock ghosts before the sixth press | lower `EPD_PARTIAL_CHAIN_MAX` | `components/port_bsp/epd_panel.h` |
+| six partials in a row leave no residue | raise it — every promotion the learner does not need is a full flash they do not see | same |
+| a partial is over ~1 s | the dock stops feeling like an input; consider a shorter dock rectangle before anything else | `components/vault_core/ui_kanji_layout.c` |
 | full refresh is over ~6 s | nothing to change — it is why API writes return before the panel has caught up | — |
-
-The partial-chain observations above apply to the self-test/driver capability. Normal tarot display
-updates are full refreshes and never build a partial chain.
 
 ## Memory
 

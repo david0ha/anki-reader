@@ -14,7 +14,7 @@ const OTHER = '__other__'
 
 export default function WifiList() {
   const router = useRouter()
-  const { selectedNetwork, setSelectedNetwork, setSelectedSecured, password, vaultUrl } =
+  const { selectedNetwork, setSelectedNetwork, setSelectedSecured, password, studyUrl } =
     useOnboarding()
   const [networks, setNetworks] = useState<ScanNetwork[]>([])
   const [loading, setLoading] = useState(true)
@@ -51,7 +51,7 @@ export default function WifiList() {
 
   // When "Other…" is chosen the SSID is entered on the password step, so we don't yet have one.
   // Treat it as secured so the password field is required.
-  const proceed = other || canProceed('wifi-list', { selectedNetwork, password, vaultUrl })
+  const proceed = other || canProceed('wifi-list', { selectedNetwork, password, studyUrl })
 
   return (
     <StepScaffold
@@ -60,7 +60,7 @@ export default function WifiList() {
       ctaLabel="NEXT"
       ctaVariant="secondary"
       canProceed={proceed}
-      onNext={() => router.push(ONBOARDING_ROUTES.vault)}
+      onNext={() => router.push(ONBOARDING_ROUTES.study)}
     >
       <View style={styles.header}>
         <IconBadge name="wifi" size={44} />

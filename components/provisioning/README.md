@@ -2,7 +2,7 @@
 
 Wi-Fi provisioning with a captive-portal fallback. On boot the device joins the saved
 network; if that fails (or nothing is saved yet) it raises a SoftAP and serves a setup page
-where the user enters Wi-Fi credentials and the vault snapshot URL. The submission is stored in
+where the user enters Wi-Fi credentials and the study URL. The submission is stored in
 NVS and the device reboots and connects.
 
 ## Boot flow
@@ -14,9 +14,9 @@ load config (NVS)
       │                          │
       no                        fail
       ▼                          ▼
-  start SoftAP "Obsidian Board-XXXX" (open) + captive portal
+  start SoftAP "Kanjis Board-XXXX" (open) + captive portal
       │
-  user submits SSID / password / vault_url  →  save to NVS  →  reboot
+  user submits SSID / password / study_url  →  save to NVS  →  reboot
 ```
 
 The auto-fallback is simply the loop closing on itself: a bad password means the next boot's
@@ -28,7 +28,7 @@ STA attempt fails and the portal comes back up.
 
 | File | Responsibility |
 |------|----------------|
-| `prov_config.{h,c}` | config model (`ssid` / `password` / `vault_url`) + credential and URL validation |
+| `prov_config.{h,c}` | config model (`ssid` / `password` / `study_url`) + credential and URL validation |
 | `form_parse.{h,c}`  | `x-www-form-urlencoded` decode + field extraction |
 | `prov_json.{h,c}`   | JSON building + string escaping for the `/api/*` responses |
 
@@ -47,15 +47,15 @@ STA attempt fails and the portal comes back up.
 
 | Method | Path              | Purpose |
 |--------|-------------------|---------|
-| GET    | `/`               | setup page (network list and saved vault URL rendered server-side) |
-| POST   | `/save`           | browser form: `ssid=…&password=…&vault_url=…` → result page, then reboot |
+| GET    | `/`               | setup page (network list and saved study URL rendered server-side) |
+| POST   | `/save`           | browser form: `ssid=…&password=…&study_url=…` → result page, then reboot |
 | GET    | `/api/info`       | `{"deviceId","model","apSsid"}` |
 | GET    | `/api/scan`       | `{"networks":[{"ssid","rssi","secure"}, …]}` (served from the cache) |
 | POST   | `/api/provision`  | app form body → `202`, then an async connect test |
 | GET    | `/api/status`     | `{"state":"idle\|connecting\|connected\|failed","ssid?","reason?"}` |
 | *      | *(other)*         | 302 → `http://192.168.4.1/` (OS captive-portal detection) |
 
-`POST /api/provision` reads `ssid` / `ssid_manual` / `password` / `vault_url` and nothing else, so a
+`POST /api/provision` reads `ssid` / `ssid_manual` / `password` / `study_url` and nothing else, so a
 phone still running the stock-ticker app's build — which POSTs `tickers` / `finnhub_key` / `fmp_key`
 / `econ_url` — has those fields discarded and still completes onboarding. The body allowance stays
 generous for the same reason. See [../../docs/app-control.md](../../docs/app-control.md).
@@ -65,7 +65,7 @@ captive sheet automatically.
 
 ## NVS keys (namespace `prov`)
 
-`ssid` (str) · `pass` (str) · `vurl` (str, the vault snapshot URL) · `force_ap` (u8, one-shot).
+`ssid` (str) · `pass` (str) · `vurl` (str, the study URL) · `force_ap` (u8, one-shot).
 
 `prov_store_save` also erases `tickers` / `fh_key` / `fmp_key` / `econ_url` — keys the stock-ticker
 firmware wrote, one of which held a live API secret. A device upgraded from that build drops them on

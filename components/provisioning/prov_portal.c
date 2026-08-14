@@ -161,16 +161,16 @@ static void emit_options(httpd_req_t *req)
     httpd_resp_sendstr_chunk(req, "<option value=\"__manual__\">Other network…</option>");
 }
 
-// Fill the {{VAULT_URL}} slot with the saved vault URL (escaped), so
+// Fill the {{STUDY_URL}} slot with the saved study URL (escaped), so
 // reconfiguring pre-populates the field. Empty for a fresh setup (the board
 // then runs on its built-in demo snapshot).
-static void emit_saved_vault_url(httpd_req_t *req)
+static void emit_saved_study_url(httpd_req_t *req)
 {
-    if (!s_have_current || s_current.vault_url[0] == '\0') {
+    if (!s_have_current || s_current.study_url[0] == '\0') {
         return;
     }
     char esc[PROV_URL_MAX_LEN * 6 + 1];
-    html_escape(s_current.vault_url, esc, sizeof(esc));
+    html_escape(s_current.study_url, esc, sizeof(esc));
     httpd_resp_sendstr_chunk(req, esc);
 }
 
@@ -181,12 +181,12 @@ static esp_err_t index_get(httpd_req_t *req)
     httpd_resp_set_type(req, "text/html");
 
     // Stream the template, substituting the server-rendered network list and the
-    // saved vault URL at their markers. No client-side fetch is required to populate the form.
+    // saved study URL at their markers. No client-side fetch is required to populate the form.
     const char *p = portal_html_start;
     p = emit_until(req, p, "{{OPTIONS}}");
     emit_options(req);
-    p = emit_until(req, p, "{{VAULT_URL}}");
-    emit_saved_vault_url(req);
+    p = emit_until(req, p, "{{STUDY_URL}}");
+    emit_saved_study_url(req);
     if (p != NULL) {
         httpd_resp_sendstr_chunk(req, p);
     }
@@ -203,7 +203,7 @@ static esp_err_t send_result_page(httpd_req_t *req, const char *title, const cha
     httpd_resp_sendstr_chunk(req,
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<title>Obsidian Board</title><style>"
+        "<title>Kanjis Board</title><style>"
         "body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;"
         "background:#0b0e14;color:#e8edf4;font-family:system-ui,-apple-system,sans-serif}"
         ".box{max-width:380px;text-align:center}.box h1{font-size:18px;margin:0 0 10px}"
@@ -246,11 +246,11 @@ static esp_err_t save_post(httpd_req_t *req)
     char ssid[64] = {0};
     char ssid_manual[64] = {0};
     char password[96] = {0};
-    char vault_url[192] = {0};
+    char study_url[192] = {0};
     prov_form_get_field(body, "ssid", ssid, sizeof(ssid));
     prov_form_get_field(body, "ssid_manual", ssid_manual, sizeof(ssid_manual));
     prov_form_get_field(body, "password", password, sizeof(password));
-    prov_form_get_field(body, "vault_url", vault_url, sizeof(vault_url));
+    prov_form_get_field(body, "study_url", study_url, sizeof(study_url));
 
     // "Other network…" selected → the real SSID is in the manual field, not the sentinel.
     if (strcmp(ssid, "__manual__") == 0) {
@@ -271,8 +271,8 @@ static esp_err_t save_post(httpd_req_t *req)
         return send_result_page(req, "Password is too long",
                                 "The password exceeds the 64-character limit.", false);
     }
-    if (!prov_validate_vault_url(vault_url)) {
-        return send_result_page(req, "Vault URL is not usable",
+    if (!prov_validate_study_url(study_url)) {
+        return send_result_page(req, "Study URL is not usable",
                                 "Enter a full http:// or https:// URL of at most 128 "
                                 "characters, or leave it blank to run the demo screen.",
                                 false);
@@ -282,9 +282,9 @@ static esp_err_t save_post(httpd_req_t *req)
     memset(&cfg, 0, sizeof(cfg));
     strlcpy(cfg.ssid, ssid, sizeof(cfg.ssid));
     strlcpy(cfg.password, password, sizeof(cfg.password));
-    strlcpy(cfg.vault_url, vault_url, sizeof(cfg.vault_url));
+    strlcpy(cfg.study_url, study_url, sizeof(cfg.study_url));
 
-    ESP_LOGI(TAG, "config submitted: ssid='%s', vault_url='%s'", cfg.ssid, cfg.vault_url);
+    ESP_LOGI(TAG, "config submitted: ssid='%s', study_url='%s'", cfg.ssid, cfg.study_url);
 
     char esc[PROV_SSID_MAX_LEN * 6 + 1];
     html_escape(cfg.ssid, esc, sizeof(esc));
@@ -368,7 +368,7 @@ static esp_err_t api_status_get(httpd_req_t *req)
     return send_json(req, NULL, body);
 }
 
-// POST /api/provision (application/x-www-form-urlencoded: ssid, ssid_manual, password, vault_url)
+// POST /api/provision (application/x-www-form-urlencoded: ssid, ssid_manual, password, study_url)
 // — validate, then kick off an asynchronous connect test via the on_provision callback. Replies
 // 202 immediately; the app polls GET /api/status for connected/failed.
 //
@@ -390,11 +390,11 @@ static esp_err_t api_provision_post(httpd_req_t *req)
     char ssid[64] = {0};
     char ssid_manual[64] = {0};
     char password[96] = {0};
-    char vault_url[192] = {0};
+    char study_url[192] = {0};
     prov_form_get_field(body, "ssid", ssid, sizeof(ssid));
     prov_form_get_field(body, "ssid_manual", ssid_manual, sizeof(ssid_manual));
     prov_form_get_field(body, "password", password, sizeof(password));
-    prov_form_get_field(body, "vault_url", vault_url, sizeof(vault_url));
+    prov_form_get_field(body, "study_url", study_url, sizeof(study_url));
     // "Other network…" selected → the real SSID is in the manual field, not the sentinel.
     if (strcmp(ssid, "__manual__") == 0) {
         strlcpy(ssid, ssid_manual, sizeof(ssid));
@@ -407,8 +407,8 @@ static esp_err_t api_provision_post(httpd_req_t *req)
         case PROV_CRED_PASS_TOO_LONG: err = "pass_too_long"; break;
         case PROV_CRED_OK:                                   break;
     }
-    if (err == NULL && !prov_validate_vault_url(vault_url)) {
-        err = "vault_url_invalid";
+    if (err == NULL && !prov_validate_study_url(study_url)) {
+        err = "study_url_invalid";
     }
     if (err != NULL) {
         char resp[64];
@@ -420,7 +420,7 @@ static esp_err_t api_provision_post(httpd_req_t *req)
     memset(&cfg, 0, sizeof(cfg));
     strlcpy(cfg.ssid, ssid, sizeof(cfg.ssid));
     strlcpy(cfg.password, password, sizeof(cfg.password));
-    strlcpy(cfg.vault_url, vault_url, sizeof(cfg.vault_url));
+    strlcpy(cfg.study_url, study_url, sizeof(cfg.study_url));
 
     ESP_LOGI(TAG, "POST /api/provision: ssid='%s' — starting connect test", cfg.ssid);
     // NOTE: status is moved to CONNECTING inside on_app_provision, only after its duplicate guard

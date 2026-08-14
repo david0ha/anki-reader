@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { createServer, request as httpRequest, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import path from 'node:path'
-import { PAGE_COUNT, createEsp32Client } from './esp32'
+import { SCREEN_COUNT, createEsp32Client } from './esp32'
 
 // A fake `fetch` that replays a queue of responses (or throws a queued Error to simulate the
 // SoftAP dropping). Records every call so we can assert URLs/methods/bodies.
@@ -42,22 +42,23 @@ function fakeClock() {
 }
 
 const BASE = 'http://192.168.4.1'
-
-const VALID_TAROT = {
-  date: '2026-08-13',
-  timezone: 'Asia/Seoul',
-  card_id: 'major-02',
-  orientation: 'upright',
-  copy_version: 1,
-  headline: ['고요히 살피면', '속뜻이 보인다'],
-  flow: ['두 기둥 사이 장막이', '감춰진 단서를 품고 있다'],
-  caution: ['모호한 느낌을', '사실로 단정하지 않는다'],
-  action: ['답하기 전에', '침묵 속에서 한 번 읽는다'],
-}
+const MOCK = path.resolve(__dirname, '../../scripts/mock-esp32.js')
+const FIXTURE = path.resolve(
+  __dirname,
+  '../../../components/vault_core/test/host/fixtures/kanji.json',
+)
 
 function client(replies: Reply[], extra: Record<string, unknown> = {}) {
   const f = fakeFetch(replies)
   return { ...f, client: createEsp32Client({ baseUrl: BASE, fetchImpl: f.fetchImpl, ...extra }) }
+}
+
+function runMock(mode: string, input?: unknown) {
+  return spawnSync(process.execPath, [MOCK, mode], {
+    input: input === undefined ? '' : JSON.stringify(input),
+    encoding: 'utf8',
+    timeout: 2000,
+  })
 }
 
 // =====================================================================================
@@ -67,14 +68,16 @@ function client(replies: Reply[], extra: Record<string, unknown> = {}) {
 describe('esp32 client — getInfo', () => {
   it('parses device identity and trims the base URL', async () => {
     const { fetchImpl, calls } = fakeFetch([
-      { body: { deviceId: '9F3A', model: 'Obsidian Board', apSsid: 'Obsidian Board-AB12' } },
+      { body: { deviceId: '9F3A', model: 'Kanjis Board', apSsid: 'Kanjis Board-AB12' } },
     ])
     const c = createEsp32Client({ baseUrl: 'http://192.168.4.1/', fetchImpl })
     const info = await c.getInfo()
     expect(info).toEqual({
       deviceId: '9F3A',
-      model: 'Obsidian Board',
-      apSsid: 'Obsidian Board-AB12',
+      model: 'Kanjis Board',
+      // The setup AP keeps the name of the board this firmware replaced — same hardware, same
+      // network identity, so the SSID the user joins did not change with the software.
+      apSsid: 'Kanjis Board-AB12',
       fw: '',
       ip: '',
     })
@@ -83,11 +86,11 @@ describe('esp32 client — getInfo', () => {
 
   it('parses the STA-mode info (fw + ip present, apSsid empty)', async () => {
     const { client: c } = client([
-      { body: { deviceId: '9F3A', model: 'Obsidian Board', fw: '0.1.0', ip: '192.168.0.42' } },
+      { body: { deviceId: '9F3A', model: 'Kanjis Board', fw: '0.1.0', ip: '192.168.0.42' } },
     ])
     expect(await c.getInfo()).toEqual({
       deviceId: '9F3A',
-      model: 'Obsidian Board',
+      model: 'Kanjis Board',
       apSsid: '',
       fw: '0.1.0',
       ip: '192.168.0.42',
@@ -141,9 +144,9 @@ describe('esp32 client — scanNetworks', () => {
 })
 
 describe('esp32 client — provision', () => {
-  it('POSTs url-encoded ssid+password+vault_url and resolves on 202', async () => {
+  it('POSTs url-encoded ssid+password+study_url and resolves on 202', async () => {
     const { client: c, calls } = client([{ status: 202, body: { ok: true, state: 'connecting' } }])
-    await c.provision('My Wi-Fi', 'p@ss&w/rd', 'http://mac.local:8123/vault.json')
+    await c.provision('My Wi-Fi', 'p@ss&w/rd', 'http://mac.local:8123/kanji.json')
     expect(calls[0].url).toBe(`${BASE}/api/provision`)
     expect(calls[0].init?.method).toBe('POST')
     expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe(
@@ -151,16 +154,16 @@ describe('esp32 client — provision', () => {
     )
     expect(calls[0].init?.body).toBe(
       'ssid=My%20Wi-Fi&password=p%40ss%26w%2Frd' +
-        '&vault_url=http%3A%2F%2Fmac.local%3A8123%2Fvault.json',
+        '&study_url=http%3A%2F%2Fmac.local%3A8123%2Fkanji.json',
     )
   })
 
-  it('still sends an empty vault_url when none was given', async () => {
+  it('still sends an empty study_url when none was given', async () => {
     // Provisioning REWRITES the whole stored config on the board, so omitting the field would
     // clear the URL regardless. Sending '' states that intent instead of relying on it.
     const { client: c, calls } = client([{ status: 202, body: { ok: true } }])
     await c.provision('Home', 'pw')
-    expect(calls[0].init?.body).toBe('ssid=Home&password=pw&vault_url=')
+    expect(calls[0].init?.body).toBe('ssid=Home&password=pw&study_url=')
   })
 
   it('throws an Esp32Error carrying the firmware error code on 400', async () => {
@@ -171,12 +174,12 @@ describe('esp32 client — provision', () => {
     })
   })
 
-  it('surfaces vault_url_invalid from the provisioning endpoint', async () => {
+  it('surfaces study_url_invalid from the provisioning endpoint', async () => {
     const { client: c } = client([
-      { ok: false, status: 400, body: { ok: false, error: 'vault_url_invalid' } },
+      { ok: false, status: 400, body: { ok: false, error: 'study_url_invalid' } },
     ])
     await expect(c.provision('Home', 'pw', 'ftp://nope')).rejects.toMatchObject({
-      code: 'vault_url_invalid',
+      code: 'study_url_invalid',
     })
   })
 
@@ -280,29 +283,38 @@ describe('esp32 client — getState', () => {
   // The documented payload from docs/app-control.md, verbatim.
   const FULL = {
     deviceId: '1A2B',
-    model: 'Obsidian Board',
+    model: 'Kanjis Board',
     fw: '0.1.0',
     ip: '192.168.0.42',
-    page: 0,
-    pageTitle: 'Artwork',
-    vault: {
+    screen: 1,
+    screenTitle: '정답',
+    revealed: true,
+    grade: 3,
+    card: {
       valid: true,
       demo: false,
-      name: 'second-brain',
-      generatedAt: '21:04',
-      notes: 1428,
-      links: 3910,
-      orphans: 37,
-      tags: 212,
-      addedToday: 6,
-      added7d: 41,
-      agents: 5,
-      agentsRunning: 2,
-      recent: 8,
-      inbox: 11,
+      front: '会う',
+      reading: 'あう',
+      meaning: '만나다',
+      fsrsState: 'review',
+      due: '9일 뒤',
+      reps: 5,
+      lapses: 1,
+      stabilityDays: 9,
+      difficultyPct: 47,
+    },
+    session: {
+      deck: 'JLPT N5 Vocabulary',
+      streak: 12,
+      reviewedToday: 34,
+      leftNew: 7,
+      leftReview: 18,
+      track: 35,
+      trackTotal: 60,
+      complete: false,
     },
     source: {
-      url: 'http://mac.local:8123/vault.json',
+      url: 'http://mac.local:8123/kanji.json',
       lastResult: 'ok',
       pollSeconds: 300,
       ageSeconds: 42,
@@ -317,21 +329,27 @@ describe('esp32 client — getState', () => {
     const s = await c.getState()
     expect(calls[0].url).toBe(`${BASE}/api/state`)
     expect(s.deviceId).toBe('1A2B')
-    expect(s.page).toBe(0)
-    expect(s.pageTitle).toBe('Artwork')
-    expect(s.vault.notes).toBe(1428)
-    expect(s.vault.agentsRunning).toBe(2)
+    expect(s.screen).toBe(1)
+    expect(s.screenTitle).toBe('정답')
+    expect(s.revealed).toBe(true)
+    expect(s.grade).toBe(3)
+    expect(s.card.front).toBe('会う')
+    expect(s.card.fsrsState).toBe('review')
+    expect(s.card.stabilityDays).toBe(9)
+    expect(s.session.deck).toBe('JLPT N5 Vocabulary')
+    expect(s.session.leftReview).toBe(18)
     expect(s.source.lastResult).toBe('ok')
     expect(s.source.ageSeconds).toBe(42)
     expect(s.battery).toEqual({ present: true, percent: 84, millivolts: 4012 })
     expect(s.panel).toEqual({ partialChain: 3, fullRefreshMs: 4120, partialRefreshMs: 780 })
   })
 
-  it('renders an empty object as zeros, not a crash', async () => {
+  it('renders an empty object as an empty session, not a crash', async () => {
     const { client: c } = client([{ body: {} }])
     const s = await c.getState()
-    expect(s.vault.notes).toBe(0)
-    expect(s.vault.valid).toBe(false)
+    expect(s.screen).toBe(0)
+    expect(s.card.valid).toBe(false)
+    expect(s.session.reviewedToday).toBe(0)
     expect(s.battery.present).toBe(false)
     expect(s.panel.fullRefreshMs).toBe(0)
   })
@@ -349,6 +367,22 @@ describe('esp32 client — getState', () => {
     expect((await c.getState()).source.ageSeconds).toBe(0)
   })
 
+  it('defaults MISSING stability/difficulty to -1 and preserves an explicit 0', async () => {
+    // The firmware's own "not scheduled yet". A card whose stability is unknown and one whose
+    // interval rounds to zero days are different states; only the second may print a number.
+    const { client: c } = client([{ body: { card: { valid: true } } }])
+    const unscheduled = (await c.getState()).card
+    expect(unscheduled.stabilityDays).toBe(-1)
+    expect(unscheduled.difficultyPct).toBe(-1)
+
+    const { client: d } = client([
+      { body: { card: { valid: true, stabilityDays: 0, difficultyPct: 0 } } },
+    ])
+    const sameDay = (await d.getState()).card
+    expect(sameDay.stabilityDays).toBe(0)
+    expect(sameDay.difficultyPct).toBe(0)
+  })
+
   it('maps an unrecognised lastResult to "unknown" rather than passing it through', async () => {
     // A future firmware may add a code. The UI switches on this value, so an unknown one has to
     // land in a case the UI already handles.
@@ -363,23 +397,32 @@ describe('esp32 client — getState', () => {
     }
   })
 
-  it('coerces garbage numbers to 0 instead of NaN', async () => {
-    const { client: c } = client([
-      { body: { page: 'two', vault: { notes: 'many', links: null }, battery: { percent: {} } } },
-    ])
-    const s = await c.getState()
-    expect(s.page).toBe(0)
-    expect(s.vault.notes).toBe(0)
-    expect(s.vault.links).toBe(0)
-    expect(s.battery.percent).toBe(0)
+  it('maps an unrecognised fsrsState to "unknown", and keeps the four wire words', async () => {
+    for (const s of ['new', 'learning', 'review', 'relearning']) {
+      const { client: c } = client([{ body: { card: { fsrsState: s } } }])
+      expect((await c.getState()).card.fsrsState).toBe(s)
+    }
+    const { client: c } = client([{ body: { card: { fsrsState: '복습' } } }])
+    // The board sends the wire word, not its own Korean label. Anything else is a firmware the
+    // app was not built against, and must land in a case the UI already renders.
+    expect((await c.getState()).card.fsrsState).toBe('unknown')
   })
 
-  it('normalizes legacy page indices to the single Artwork page', async () => {
-    const { client: c } = client([{ body: { page: 3, pageTitle: '최근 노트' } }])
+  it('coerces garbage numbers to 0 instead of NaN', async () => {
+    const { client: c } = client([
+      {
+        body: {
+          screen: 'two',
+          session: { reviewedToday: 'many', leftNew: null },
+          battery: { percent: {} },
+        },
+      },
+    ])
     const s = await c.getState()
-    expect(PAGE_COUNT).toBe(1)
-    expect(s.page).toBe(0)
-    expect(s.pageTitle).toBe('Artwork')
+    expect(s.screen).toBe(0)
+    expect(s.session.reviewedToday).toBe(0)
+    expect(s.session.leftNew).toBe(0)
+    expect(s.battery.percent).toBe(0)
   })
 
   it('rejects with http_error on a non-ok response', async () => {
@@ -388,493 +431,41 @@ describe('esp32 client — getState', () => {
   })
 })
 
-describe('companion mock — schema-3 render fingerprints', () => {
-  it('normalizes exactly the daily-tarot fields rendered by firmware', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const result = spawnSync(process.execPath, [script, '--tarot-fingerprint'], {
-      input: JSON.stringify(VALID_TAROT),
-      encoding: 'utf8',
-      timeout: 1000,
-    })
-
-    expect(result.status).toBe(0)
-    expect(JSON.parse(result.stdout)).toEqual(VALID_TAROT)
-  })
-
-  it('rejects tarot that firmware rejects, including reversed cards and a third copy row', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    for (const tarot of [
-      { ...VALID_TAROT, orientation: 'reversed' },
-      { ...VALID_TAROT, flow: ['one', 'two', 'three'] },
-      { ...VALID_TAROT, date: '2026-02-30' },
-      { ...VALID_TAROT, card_id: 'major-22' },
-      { ...VALID_TAROT, action: ['two\nrows'] },
-      { ...VALID_TAROT, action: ['two\tcolumns'] },
-    ]) {
-      const result = spawnSync(process.execPath, [script, '--tarot-fingerprint'], {
-        input: JSON.stringify(tarot),
-        encoding: 'utf8',
-        timeout: 1000,
-      })
-      expect(result.status).toBe(1)
-    }
-  })
-
-  it('does not refresh pixels for a copy-version-only metadata change', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const run = (tarot: unknown) => spawnSync(
-      process.execPath, [script, '--tarot-visible-fingerprint'], {
-        input: JSON.stringify(tarot), encoding: 'utf8', timeout: 1000,
-      },
-    )
-    const first = run(VALID_TAROT)
-    const versionOnly = run({ ...VALID_TAROT, copy_version: 2 })
-    expect(first.status).toBe(0)
-    expect(versionOnly.status).toBe(0)
-    expect(versionOnly.stdout).toBe(first.stdout)
-  })
-
-  it('normalizes every visible field with the firmware capacities and graph rules', () => {
-    const artwork = {
-      headline: ['h1', 'h2', 'headline overflow'],
-      definition: {
-        headword: 'word',
-        meta: 'noun',
-        lines: ['d1', 'd2', 'definition overflow'],
-      },
-      note: {
-        title: 'focus',
-        path: '00/focus.md',
-        backlink_total: -5,
-        backlinks: ['b1', '', 'b2', 'b3', 'backlink overflow'],
-      },
-      graph: {
-        nodes: [
-          { id: 2147483648, title: 'out-of-range id', slot: 0 },
-          { id: 10, title: 'focus', slot: 5 },
-          { id: 20, title: 'top', slot: 1 },
-          { id: 30, title: 'duplicate slot', slot: 1 },
-          { id: 40, title: 'invalid slot', slot: 9 },
-          { id: 50, title: 'lower left', slot: 4 },
-          { id: 60, title: 'lower right', slot: 5 },
-          { id: 70, title: 'node overflow', slot: 1 },
-        ],
-        edges: [
-          [10, 20], [20, 10], [10, 10], [10, 999],
-          [10, 30], [10, 40], [10, 50], [10, 60],
-          [20, 30], [30, 50], [40, 60], [20, 50],
-        ],
-      },
-    }
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const result = spawnSync(process.execPath, [script, '--fingerprint'], {
-      input: JSON.stringify(artwork),
-      encoding: 'utf8',
-      timeout: 1000,
-    })
-
-    expect(result.status).toBe(0)
-    expect(JSON.parse(result.stdout)).toEqual({
-      headline: ['h1', 'h2'],
-      definition: { headword: 'word', meta: 'noun', lines: ['d1', 'd2'] },
-      note: {
-        title: 'focus',
-        path: '00/focus.md',
-        backlinkTotal: 3,
-        backlinks: ['b1', 'b2', 'b3'],
-      },
-      nodes: [
-        { title: 'focus', slot: 5 },
-        { title: 'top', slot: 1 },
-        { title: 'duplicate slot', slot: 0 },
-        { title: 'invalid slot', slot: 2 },
-        { title: 'lower left', slot: 4 },
-        { title: 'lower right', slot: 3 },
-      ],
-      edges: [[0, 1], [0, 2], [0, 3], [0, 4], [0, 5], [1, 2], [1, 4], [2, 4]],
-    })
-  })
-
-  it('preserves a declared focus and canonicalizes edges independently of wire order', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const run = (artwork: unknown) => {
-      const result = spawnSync(process.execPath, [script, '--fingerprint'], {
-        input: JSON.stringify(artwork),
-        encoding: 'utf8',
-        timeout: 1000,
-      })
-      expect(result.status).toBe(0)
-      return JSON.parse(result.stdout)
-    }
-    const nodes = [
-      { id: 10, title: 'left', slot: 2 },
-      { id: 20, title: 'focus', slot: 0 },
-      { id: 30, title: 'right', slot: 3 },
-      { id: 40, title: 'lower', slot: 4 },
-    ]
-    const base = {
-      headline: ['thought'],
-      note: { title: 'focus' },
-      graph: {
-        nodes,
-        edges: [[40, 30], [20, 10], [30, 10], [10, 20], [20, 40], [30, 20]],
-      },
-    }
-    const reordered = {
-      ...base,
-      graph: { nodes, edges: [...base.graph.edges].reverse().map(([a, b]) => [b, a]) },
-    }
-
-    expect(run(base)).toEqual(run(reordered))
-    expect(run(base).nodes).toEqual([
-      { title: 'left', slot: 2 },
-      { title: 'focus', slot: 0 },
-      { title: 'right', slot: 3 },
-      { title: 'lower', slot: 4 },
-    ])
-    expect(run(base).edges).toEqual([[0, 1], [0, 2], [1, 2], [1, 3], [2, 3]])
-  })
-
-  it('uses the firmware UTF-8 byte caps and excludes remapped wire ids', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const run = (artwork: unknown) => {
-      const result = spawnSync(process.execPath, [script, '--fingerprint'], {
-        input: JSON.stringify(artwork),
-        encoding: 'utf8',
-        timeout: 1000,
-      })
-      expect(result.status).toBe(0)
-      return JSON.parse(result.stdout)
-    }
-    const base = {
-      headline: ['x'.repeat(140)],
-      definition: {
-        headword: '가'.repeat(30),
-        meta: 'm'.repeat(40),
-        lines: ['d'.repeat(140)],
-      },
-      note: {
-        title: 't'.repeat(80),
-        path: 'p'.repeat(140),
-        backlink_total: 1,
-        backlinks: ['b'.repeat(80)],
-      },
-      graph: {
-        nodes: [{ id: 10, title: 'n'.repeat(80), slot: 0 }, { id: 20, title: 'related', slot: 1 }],
-        edges: [[10, 20]],
-      },
-    }
-    const remapped = {
-      ...base,
-      graph: {
-        nodes: [{ id: 101, title: 'n'.repeat(80), slot: 0 }, { id: 202, title: 'related', slot: 1 }],
-        edges: [[101, 202]],
-      },
-    }
-
-    const normalized = run(base)
-    expect(normalized).toEqual(run(remapped))
-    expect(normalized.headline[0]).toHaveLength(127)
-    expect(normalized.definition.headword).toBe('가'.repeat(21))
-    expect(normalized.definition.meta).toHaveLength(31)
-    expect(normalized.definition.lines[0]).toHaveLength(127)
-    expect(normalized.note.title).toHaveLength(63)
-    expect(normalized.note.path).toHaveLength(127)
-    expect(normalized.note.backlinks[0]).toHaveLength(63)
-    expect(normalized.nodes[0].title).toHaveLength(63)
-  })
-
-  it('mirrors C string truncation at an escaped NUL code point', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const result = spawnSync(process.execPath, [script, '--fingerprint'], {
-      input: JSON.stringify({
-        headline: ['before\0after'],
-        definition: { headword: 'word\0hidden', lines: [] },
-        note: { title: 'focus\0hidden', backlinks: ['back\0hidden'] },
-        graph: {
-          nodes: [
-            { id: 1, title: '\0discarded', slot: 1 },
-            { id: 2, title: 'node\0hidden', slot: 0 },
-          ],
-          edges: [[1, 2]],
-        },
-      }),
-      encoding: 'utf8',
-      timeout: 1000,
-    })
-
-    expect(result.status).toBe(0)
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      headline: ['before'],
-      definition: { headword: 'word' },
-      note: { title: 'focus', backlinks: ['back'] },
-      nodes: [{ title: 'node', slot: 0 }],
-      edges: [],
-    })
-  })
-
-  it('clamps backlink totals to the firmware non-negative integer range', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const result = spawnSync(process.execPath, [script, '--fingerprint'], {
-      input: JSON.stringify({
-        headline: ['thought'],
-        definition: { headword: 'connection', lines: [] },
-        note: { title: 'focus', backlink_total: 1e100, backlinks: [] },
-      }),
-      encoding: 'utf8',
-      timeout: 1000,
-    })
-
-    expect(result.status).toBe(0)
-    expect(JSON.parse(result.stdout).note.backlinkTotal).toBe(2147483000)
-  })
-
-  it('rejects a schema-2 snapshot before it can replace the last artwork', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const result = spawnSync(process.execPath, [script, '--summarise'], {
-      input: JSON.stringify({
-        schema: 2,
-        artwork: { headline: ['legacy'], note: { title: 'legacy focus' } },
-      }),
-      encoding: 'utf8',
-      timeout: 1000,
-    })
-
-    expect(result.status).toBe(1)
-  })
-
-  it('accepts drawable schema-3 artwork for the companion summary', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const result = spawnSync(process.execPath, [script, '--summarise'], {
-      input: JSON.stringify({
-        schema: 3,
-        vault: 'second-brain',
-        artwork: { headline: ['current'], note: { title: 'focus' } },
-      }),
-      encoding: 'utf8',
-      timeout: 1000,
-    })
-
-    expect(result.status).toBe(0)
-    expect(JSON.parse(result.stdout)).toMatchObject({ valid: true, name: 'second-brain' })
-  })
-
-  it('uses the canonical schema-3 fingerprint for its built-in demo artwork', () => {
-    const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-    const fixture = JSON.parse(
-      readFileSync(
-        path.resolve(__dirname, '../../../components/vault_core/test/host/fixtures/vault.json'),
-        'utf8',
-      ),
-    )
-    const canonical = spawnSync(process.execPath, [script, '--fingerprint'], {
-      input: JSON.stringify(fixture.artwork),
-      encoding: 'utf8',
-      timeout: 1000,
-    })
-    const builtIn = spawnSync(process.execPath, [script, '--demo-fingerprint'], {
-      encoding: 'utf8',
-      timeout: 1000,
-    })
-
-    expect(canonical.status).toBe(0)
-    expect(builtIn.status).toBe(0)
-    expect(builtIn.stdout).toBe(canonical.stdout)
-  })
-
-  it('records a full refresh when a scheduled poll changes the visible tarot', async () => {
-    let sourceRequests = 0
-    const source = createServer((_req, res) => {
-      sourceRequests++
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({
-        schema: 3,
-        vault: 'second-brain',
-        daily_tarot: { ...VALID_TAROT, headline: [`오늘의 흐름 ${sourceRequests}`] },
-        artwork: {
-          headline: ['legacy artwork stays fixed'],
-          definition: { headword: 'connection', meta: 'noun', lines: ['one thought meets another'] },
-          note: { title: 'focus', path: 'focus.md', backlink_total: 0, backlinks: [] },
-          graph: { nodes: [{ id: 0, title: 'focus', slot: 0 }], edges: [] },
-        },
-      }))
-    })
-    const reservation = createServer()
-    let mock: ReturnType<typeof spawn> | undefined
-    try {
-      const sourcePort = await listenOnRandomPort(source)
-      const mockPort = await listenOnRandomPort(reservation)
-      await closeServer(reservation)
-      const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-      mock = spawn(process.execPath, [script], {
-        env: { ...process.env, PORT: String(mockPort), POLL_SECONDS: '0.05' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      let output = ''
-      mock.stdout?.on('data', (chunk) => { output += String(chunk) })
-      expect(await eventually(() => output.includes('mock Obsidian Board listening'), 1000)).toBe(true)
-
-      const baseUrl = `http://127.0.0.1:${mockPort}`
-      const setResponse = await requestJson(`${baseUrl}/api/vault`, 'POST', {
-        url: `http://127.0.0.1:${sourcePort}/vault.json`,
-      })
-      expect({ ...setResponse, output }).toMatchObject({ status: 200 })
-      const initial = (await requestJson(`${baseUrl}/api/state`)).body
-      const firstRefreshMs = initial.panel.fullRefreshMs
-
-      expect(await eventually(async () => {
-        const current = (await requestJson(`${baseUrl}/api/state`)).body
-        return sourceRequests > 1 && current.panel.fullRefreshMs !== firstRefreshMs
-      }, 1500)).toBe(true)
-    } finally {
-      mock?.kill()
-      await closeServer(source)
-      if (reservation.listening) await closeServer(reservation)
-    }
-  }, 5000)
-
-  it('discards an old source response that finishes after the vault URL changes', async () => {
-    let oldRequests = 0
-    const snapshot = (name: string) => ({
-      schema: 3,
-      vault: name,
-      daily_tarot: { ...VALID_TAROT, headline: [name] },
-      artwork: {
-        headline: [name],
-        note: { title: name },
-        graph: { nodes: [{ id: 0, title: name, slot: 0 }], edges: [] },
-      },
-    })
-    const oldSource = createServer((_req, res) => {
-      oldRequests++
-      setTimeout(() => {
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify(snapshot('old source')))
-      }, 150)
-    })
-    const newSource = createServer((_req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify(snapshot('new source')))
-    })
-    const reservation = createServer()
-    let mock: ReturnType<typeof spawn> | undefined
-    try {
-      const oldPort = await listenOnRandomPort(oldSource)
-      const newPort = await listenOnRandomPort(newSource)
-      const mockPort = await listenOnRandomPort(reservation)
-      await closeServer(reservation)
-      const script = path.resolve(__dirname, '../../scripts/mock-esp32.js')
-      mock = spawn(process.execPath, [script], {
-        env: { ...process.env, PORT: String(mockPort), POLL_SECONDS: '300' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      let output = ''
-      mock.stdout?.on('data', (chunk) => { output += String(chunk) })
-      expect(await eventually(() => output.includes('mock Obsidian Board listening'), 1000)).toBe(true)
-
-      const baseUrl = `http://127.0.0.1:${mockPort}`
-      const oldPost = requestJson(`${baseUrl}/api/vault`, 'POST', {
-        url: `http://127.0.0.1:${oldPort}/vault.json`,
-      })
-      expect(await eventually(() => oldRequests > 0, 1000)).toBe(true)
-      await requestJson(`${baseUrl}/api/vault`, 'POST', {
-        url: `http://127.0.0.1:${newPort}/vault.json`,
-      })
-      await oldPost
-
-      const state = (await requestJson(`${baseUrl}/api/state`)).body
-      expect(state.vault.name).toBe('new source')
-      expect(state.source.url).toBe(`http://127.0.0.1:${newPort}/vault.json`)
-    } finally {
-      mock?.kill()
-      await closeServer(oldSource)
-      await closeServer(newSource)
-      if (reservation.listening) await closeServer(reservation)
-    }
-  }, 5000)
-})
-
-function listenOnRandomPort(server: Server): Promise<number> {
-  return new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port))
-  })
-}
-
-function closeServer(server: Server): Promise<void> {
-  if (!server.listening) return Promise.resolve()
-  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-}
-
-async function eventually(check: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await check()) return true
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-  return false
-}
-
-function requestJson(
-  rawUrl: string,
-  method = 'GET',
-  value?: unknown,
-): Promise<{ status: number; body: any }> {
-  return new Promise((resolve, reject) => {
-    const url = new URL(rawUrl)
-    const body = value === undefined ? '' : JSON.stringify(value)
-    const req = httpRequest({
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname,
-      method,
-      headers: body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {},
-    }, (res) => {
-      let data = ''
-      res.setEncoding('utf8')
-      res.on('data', (chunk) => { data += chunk })
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(data) }))
-    })
-    req.on('error', reject)
-    req.end(body)
-  })
-}
-
-describe('esp32 client — setPage', () => {
-  it('POSTs the single compatibility page as JSON', async () => {
+describe('esp32 client — setScreen', () => {
+  it('POSTs the screen index as JSON', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setPage(0)
-    expect(calls[0].url).toBe(`${BASE}/api/page`)
+    await c.setScreen(4)
+    expect(calls[0].url).toBe(`${BASE}/api/screen`)
     expect(calls[0].init?.method).toBe('POST')
     expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe('application/json')
-    expect(calls[0].init?.body).toBe('{"page":0}')
+    expect(calls[0].init?.body).toBe('{"screen":4}')
   })
 
-  it('throws page_range on a 400 body', async () => {
-    const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'page_range' } }])
-    await expect(c.setPage(9)).rejects.toMatchObject({ code: 'page_range', status: 400 })
+  it('throws screen_range on a 400 body', async () => {
+    const { client: c } = client([{ ok: false, status: 400, body: { ok: false, error: 'screen_range' } }])
+    await expect(c.setScreen(SCREEN_COUNT)).rejects.toMatchObject({ code: 'screen_range', status: 400 })
   })
 })
 
-describe('esp32 client — setVaultUrl', () => {
+describe('esp32 client — setStudyUrl', () => {
   it('POSTs the url as JSON', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setVaultUrl('http://mac.local:8123/vault.json')
-    expect(calls[0].url).toBe(`${BASE}/api/vault`)
-    expect(calls[0].init?.body).toBe('{"url":"http://mac.local:8123/vault.json"}')
+    await c.setStudyUrl('http://mac.local:8123/kanji.json')
+    expect(calls[0].url).toBe(`${BASE}/api/study`)
+    expect(calls[0].init?.body).toBe('{"url":"http://mac.local:8123/kanji.json"}')
   })
 
-  it('sends an empty string through — that is the "use demo data" request', async () => {
+  it('sends an empty string through — that is the "use the demo card" request', async () => {
     const { client: c, calls } = client([{ body: { ok: true } }])
-    await c.setVaultUrl('')
+    await c.setStudyUrl('')
     expect(calls[0].init?.body).toBe('{"url":""}')
   })
 
-  it('throws vault_url_invalid on a 400 body', async () => {
+  it('throws study_url_invalid on a 400 body', async () => {
     const { client: c } = client([
-      { ok: false, status: 400, body: { ok: false, error: 'vault_url_invalid' } },
+      { ok: false, status: 400, body: { ok: false, error: 'study_url_invalid' } },
     ])
-    await expect(c.setVaultUrl('nope')).rejects.toMatchObject({ code: 'vault_url_invalid' })
+    await expect(c.setStudyUrl('nope')).rejects.toMatchObject({ code: 'study_url_invalid' })
   })
 })
 
@@ -906,3 +497,371 @@ describe('esp32 client — refresh and displayTest', () => {
     await expect(c.refresh()).rejects.toMatchObject({ code: 'network_error' })
   })
 })
+
+// =====================================================================================
+// The companion mock as a stand-in for the firmware's parser
+// =====================================================================================
+
+describe('companion mock — the study-card contract', () => {
+  it('normalizes every visible field with the firmware capacities and list caps', () => {
+    const result = runMock('--fingerprint', {
+      session: {
+        deck: 'D'.repeat(60),
+        level: 'N5',
+        streak: -3,
+        reviewed_today: 1e9,
+        left_new: 7.9,
+        left_review: 18,
+        retry: 2,
+        track: 90,
+        track_total: 60,
+        complete: false,
+      },
+      card: {
+        id: 'f00c539e-23f9-4294-bee1-c642189b105f',
+        front: '会',
+        reading: 'あ'.repeat(30),
+        senses: ['만나다', '   ', '대면하다', '우연히 만나다', 'overflow'],
+        examples: [
+          { text: '出会う', reading: 'であう', gloss: '우연히 만나다' },
+          { text: '  ', reading: 'x', gloss: 'y' },
+          { text: '出会い', reading: 'であい', gloss: '만남' },
+          { text: '会합', reading: '', gloss: '' },
+          { text: 'overflow', reading: '', gloss: '' },
+        ],
+        comments: [{ author: '유키', body: '조사는 に', likes: -1 }],
+        comment_total: 0,
+        fsrs: { state: 'new', reps: 0, lapses: 0 },
+        preview: { again: '10분 뒤', good: '9일 뒤' },
+      },
+    })
+
+    expect(result.status).toBe(0)
+    const normalized = JSON.parse(result.stdout)
+    // 'D' is one byte, so the 40-byte deck buffer holds 39 of them.
+    expect(normalized.session.deck).toHaveLength(39)
+    expect(normalized.session.streak).toBe(0) // a negative counter clamps to zero
+    expect(normalized.session.reviewed_today).toBe(9999) // COUNT_MAX: past this the digits are noise
+    expect(normalized.session.left_new).toBe(7) // truncated, not rounded
+    expect(normalized.session.track).toBe(60) // "TRK 90/60" is a producer bug printed at 14 px
+    // かな is three bytes each, so a 64-byte reading buffer holds 21 of them.
+    expect(normalized.card.reading).toHaveLength(21)
+    expect(normalized.card.senses).toEqual(['만나다', '대면하다', '우연히 만나다'])
+    expect(normalized.card.examples.map((e: { text: string }) => e.text)).toEqual([
+      '出会う',
+      '出会い',
+      '会합',
+    ])
+    expect(normalized.card.comments[0].likes).toBe(0)
+    // A total below the number of comments actually shown is arithmetic nobody should read past.
+    expect(normalized.card.comment_total).toBe(1)
+    // Absent FSRS numbers are "not scheduled yet", which is -1 and not 0.
+    expect(normalized.card.fsrs.stability_days).toBe(-1)
+    expect(normalized.card.fsrs.difficulty_pct).toBe(-1)
+    expect(normalized.card.preview).toEqual(['10분 뒤', '', '9일 뒤', ''])
+  })
+
+  it('excludes the card id from the fingerprint — it is routing, not pixels', () => {
+    // The same card re-served under a new study_card_id must not cost a full-panel flash.
+    const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8'))
+    const original = runMock('--fingerprint', fixture)
+    const reissued = runMock('--fingerprint', {
+      ...fixture,
+      card: { ...fixture.card, id: '00000000-0000-0000-0000-000000000000' },
+    })
+    expect(original.status).toBe(0)
+    expect(reissued.stdout).toBe(original.stdout)
+  })
+
+  it('rejects exactly what the firmware rejects', () => {
+    for (const payload of [
+      // Neither a session nor a card: an error envelope or a captive-portal page, not a payload.
+      { v: 1 },
+      { v: 1, card: { front: '   ' } },
+      // The root must be an object.
+      [1, 2, 3],
+      'a string',
+    ]) {
+      expect(runMock('--fingerprint', payload).status).toBe(1)
+    }
+  })
+
+  it('keeps a session with no card — that is the completion screen, not a failure', () => {
+    const result = runMock('--summarise', {
+      session: { deck: 'JLPT N5 Vocabulary', streak: 12, reviewed_today: 34, complete: true },
+    })
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      card: { valid: false, front: '', stabilityDays: -1 },
+      session: { deck: 'JLPT N5 Vocabulary', streak: 12, reviewedToday: 34, complete: true },
+    })
+  })
+
+  it('summarises a card the way device_api_json.c does', () => {
+    const result = runMock('--summarise', JSON.parse(readFileSync(FIXTURE, 'utf8')))
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({
+      card: {
+        valid: true,
+        demo: false,
+        front: '会う',
+        reading: 'あう',
+        // The panel shows three senses; the phone gets the one that names the card.
+        meaning: '만나다',
+        fsrsState: 'review',
+        due: '9일 뒤',
+        reps: 5,
+        lapses: 1,
+        stabilityDays: 9,
+        difficultyPct: 47,
+      },
+      session: {
+        deck: 'JLPT N5 Vocabulary',
+        streak: 12,
+        reviewedToday: 34,
+        leftNew: 7,
+        leftReview: 18,
+        track: 35,
+        trackTotal: 60,
+        complete: false,
+      },
+    })
+  })
+
+  it('serves the same demo card as kanji_mock.c and tools/mock_kanji_server.py', () => {
+    // The fixture is what test_kanji_mock.c compares the C demo card against, so agreeing with it
+    // by fingerprint is what keeps three copies of one card from drifting apart.
+    const canonical = runMock('--fingerprint', JSON.parse(readFileSync(FIXTURE, 'utf8')))
+    const builtIn = runMock('--demo-fingerprint')
+    expect(canonical.status).toBe(0)
+    expect(builtIn.status).toBe(0)
+    expect(builtIn.stdout).toBe(canonical.stdout)
+  })
+})
+
+describe('companion mock — as a running board', () => {
+  it('records a full refresh when a scheduled poll changes the card', async () => {
+    let sourceRequests = 0
+    const source = createServer((_req, res) => {
+      sourceRequests++
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(cardPayload(`会${sourceRequests}`)))
+    })
+    const reservation = createServer()
+    let mock: ReturnType<typeof spawn> | undefined
+    try {
+      const sourcePort = await listenOnRandomPort(source)
+      const mockPort = await listenOnRandomPort(reservation)
+      await closeServer(reservation)
+      mock = spawn(process.execPath, [MOCK], {
+        env: { ...process.env, PORT: String(mockPort), POLL_SECONDS: '0.05' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let output = ''
+      mock.stdout?.on('data', (chunk) => {
+        output += String(chunk)
+      })
+      expect(await eventually(() => output.includes('mock Kanjis Board listening'), 1000)).toBe(true)
+
+      const baseUrl = `http://127.0.0.1:${mockPort}`
+      const setResponse = await requestJson(`${baseUrl}/api/study`, 'POST', {
+        url: `http://127.0.0.1:${sourcePort}/kanji.json`,
+      })
+      expect({ ...setResponse, output }).toMatchObject({ status: 200 })
+      const initial = (await requestJson(`${baseUrl}/api/state`)).body
+      expect(initial.card.valid).toBe(true)
+      expect(initial.card.demo).toBe(false)
+      const firstRefreshMs = initial.panel.fullRefreshMs
+
+      expect(
+        await eventually(async () => {
+          const current = (await requestJson(`${baseUrl}/api/state`)).body
+          return sourceRequests > 1 && current.panel.fullRefreshMs !== firstRefreshMs
+        }, 1500),
+      ).toBe(true)
+    } finally {
+      mock?.kill()
+      await closeServer(source)
+      if (reservation.listening) await closeServer(reservation)
+    }
+  }, 5000)
+
+  it('drives the same nav state a button press does', async () => {
+    const source = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(cardPayload('会う')))
+    })
+    const reservation = createServer()
+    let mock: ReturnType<typeof spawn> | undefined
+    try {
+      const sourcePort = await listenOnRandomPort(source)
+      const mockPort = await listenOnRandomPort(reservation)
+      await closeServer(reservation)
+      mock = spawn(process.execPath, [MOCK], {
+        env: { ...process.env, PORT: String(mockPort), POLL_SECONDS: '300' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let output = ''
+      mock.stdout?.on('data', (chunk) => {
+        output += String(chunk)
+      })
+      expect(await eventually(() => output.includes('mock Kanjis Board listening'), 1000)).toBe(true)
+
+      const baseUrl = `http://127.0.0.1:${mockPort}`
+      await requestJson(`${baseUrl}/api/study`, 'POST', {
+        url: `http://127.0.0.1:${sourcePort}/kanji.json`,
+      })
+
+      // 정답 reveals the answer; 문제 hides it again. The screen is derived from that state, so
+      // the two can never disagree about which of the five is up.
+      await requestJson(`${baseUrl}/api/screen`, 'POST', { screen: 1 })
+      let state = (await requestJson(`${baseUrl}/api/state`)).body
+      expect(state).toMatchObject({ screen: 1, screenTitle: '정답', revealed: true, grade: 3 })
+
+      await requestJson(`${baseUrl}/api/screen`, 'POST', { screen: 4 })
+      state = (await requestJson(`${baseUrl}/api/state`)).body
+      expect(state).toMatchObject({ screen: 4, screenTitle: 'FSRS' })
+
+      await requestJson(`${baseUrl}/api/screen`, 'POST', { screen: 0 })
+      state = (await requestJson(`${baseUrl}/api/state`)).body
+      expect(state).toMatchObject({ screen: 0, screenTitle: '문제', revealed: false })
+
+      const rejected = await requestJson(`${baseUrl}/api/screen`, 'POST', { screen: SCREEN_COUNT })
+      expect(rejected).toMatchObject({ status: 400, body: { error: 'screen_range' } })
+    } finally {
+      mock?.kill()
+      await closeServer(source)
+      if (reservation.listening) await closeServer(reservation)
+    }
+  }, 5000)
+
+  it('discards an old source response that finishes after the study URL changes', async () => {
+    let oldRequests = 0
+    const oldSource = createServer((_req, res) => {
+      oldRequests++
+      setTimeout(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(cardPayload('古い')))
+      }, 150)
+    })
+    const newSource = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(cardPayload('新しい')))
+    })
+    const reservation = createServer()
+    let mock: ReturnType<typeof spawn> | undefined
+    try {
+      const oldPort = await listenOnRandomPort(oldSource)
+      const newPort = await listenOnRandomPort(newSource)
+      const mockPort = await listenOnRandomPort(reservation)
+      await closeServer(reservation)
+      mock = spawn(process.execPath, [MOCK], {
+        env: { ...process.env, PORT: String(mockPort), POLL_SECONDS: '300' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let output = ''
+      mock.stdout?.on('data', (chunk) => {
+        output += String(chunk)
+      })
+      expect(await eventually(() => output.includes('mock Kanjis Board listening'), 1000)).toBe(true)
+
+      const baseUrl = `http://127.0.0.1:${mockPort}`
+      const oldPost = requestJson(`${baseUrl}/api/study`, 'POST', {
+        url: `http://127.0.0.1:${oldPort}/kanji.json`,
+      })
+      expect(await eventually(() => oldRequests > 0, 1000)).toBe(true)
+      await requestJson(`${baseUrl}/api/study`, 'POST', {
+        url: `http://127.0.0.1:${newPort}/kanji.json`,
+      })
+      await oldPost
+
+      const state = (await requestJson(`${baseUrl}/api/state`)).body
+      expect(state.card.front).toBe('新しい')
+      expect(state.source.url).toBe(`http://127.0.0.1:${newPort}/kanji.json`)
+    } finally {
+      mock?.kill()
+      await closeServer(oldSource)
+      await closeServer(newSource)
+      if (reservation.listening) await closeServer(reservation)
+    }
+  }, 5000)
+})
+
+function cardPayload(front: string) {
+  return {
+    v: 1,
+    session: {
+      deck: 'JLPT N5 Vocabulary',
+      level: 'N5',
+      streak: 12,
+      reviewed_today: 34,
+      left_new: 7,
+      left_review: 18,
+      track: 35,
+      track_total: 60,
+      complete: false,
+    },
+    card: {
+      id: 'f00c539e-23f9-4294-bee1-c642189b105f',
+      front,
+      reading: 'あう',
+      level: 'N5',
+      senses: ['만나다'],
+      fsrs: { state: 'review', state_label: '복습', due: '9일 뒤', reps: 5, lapses: 1, stability_days: 9, difficulty_pct: 47 },
+      preview: { again: '10분 뒤', hard: '4일 뒤', good: '9일 뒤', easy: '21일 뒤' },
+    },
+  }
+}
+
+function listenOnRandomPort(server: Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port))
+  })
+}
+
+function closeServer(server: Server): Promise<void> {
+  if (!server.listening) return Promise.resolve()
+  return new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+}
+
+async function eventually(check: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await check()) return true
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  return false
+}
+
+function requestJson(
+  rawUrl: string,
+  method = 'GET',
+  value?: unknown,
+): Promise<{ status: number; body: any }> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(rawUrl)
+    const body = value === undefined ? '' : JSON.stringify(value)
+    const req = httpRequest(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method,
+        headers: body
+          ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+          : {},
+      },
+      (res) => {
+        let data = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => {
+          data += chunk
+        })
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(data) }))
+      },
+    )
+    req.on('error', reject)
+    req.end(body)
+  })
+}
