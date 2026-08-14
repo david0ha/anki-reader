@@ -55,7 +55,8 @@ bool user_app_set_screen(int screen);
 bool user_app_refresh_now(void);
 
 /* Point the device at a different study URL. Validated, persisted to NVS and
- * applied live — no reboot. Empty switches to the built-in demo card.
+ * applied live — no reboot. Empty restores the catalog, with the built-in
+ * demo card only when no valid catalog snapshot exists.
  * Returns false if the URL is not usable (see prov_validate_study_url). */
 bool user_app_set_study_url(const char *url);
 

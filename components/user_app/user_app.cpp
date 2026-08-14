@@ -56,6 +56,7 @@
 #include "source_guard.h"
 #include "study_source.h"
 #include "startup_delivery.h"
+#include "task_lifecycle.h"
 #include "lvgl_bsp.h"          /* Lvgl_lock / Lvgl_unlock / Lvgl_RenderNow */
 #include "epd_panel.h"         /* epd_refresh_* / epd_selftest            */
 #include "kanji_mock.h"
@@ -128,28 +129,26 @@ static QueueSetHandle_t  s_queue_set;
 static SemaphoreHandle_t s_mtx;
 static SemaphoreHandle_t s_catalog_mtx;
 static SemaphoreHandle_t s_poll_wake;
+static SemaphoreHandle_t s_ui_ready;
+static user_app_task_resources_t s_task_resources;
+static bool s_initialized;
 
 static inline void state_lock(void)   { xSemaphoreTake(s_mtx, portMAX_DELAY); }
 static inline void state_unlock(void) { xSemaphoreGive(s_mtx); }
 
 /* --- state (guarded by s_mtx unless noted) -------------------------------- */
 
-static kanji_t  s_data;                 /* what is on (or going to) the glass */
-static uint32_t s_hash;
-static uint16_t s_catalog_ordinal;
-/* Invalidates any synchronous HTTP fetch that started before the source changed. */
-static source_guard_t s_source_guard;
-
-/* The interaction state. Owned by UiTask, but read by the companion API, so it
- * lives under the same lock as everything else it reports beside. */
-static kanji_nav_t s_nav;
-
-/* One captured request remains occupied until its local write or HTTP request
- * completes. Its source, grade, local ordinal, and remote id are one atomic
- * snapshot, so a later source transition cannot reroute the answer. */
-static study_grade_request_t s_pending_grade;
-static bool s_pending_grade_valid;
-static uint32_t s_pending_grade_generation;
+/* The production arbitration module owns the card, navigation, source guard,
+ * and captured grade as one host-tested state machine. */
+static study_runtime_t s_study;
+#define s_data                       s_study.data
+#define s_hash                       s_study.hash
+#define s_catalog_ordinal            s_study.catalog_ordinal
+#define s_source_guard               s_study.source_guard
+#define s_nav                        s_study.nav
+#define s_pending_grade              s_study.pending_grade
+#define s_pending_grade_valid        s_study.pending_grade_valid
+#define s_pending_grade_generation   s_study.pending_grade_generation
 
 static kanji_fetch_result_t s_last_result = KANJI_FETCH_NO_URL;
 static int64_t  s_last_ok_us;           /* 0 = never fetched successfully     */
@@ -265,33 +264,76 @@ static void read_battery(void)
     state_unlock();
 }
 
+static bool catalog_available_adapter(void *context)
+{
+    (void)context;
+    return catalog_store_available();
+}
+
+static const kanji_t *catalog_current_adapter(void *context)
+{
+    (void)context;
+    return catalog_store_current();
+}
+
+static uint16_t catalog_ordinal_adapter(void *context)
+{
+    (void)context;
+    return catalog_store_ordinal();
+}
+
+static bool catalog_grade_adapter(void *context, kanji_grade_t grade)
+{
+    (void)context;
+    return catalog_store_grade(grade);
+}
+
+static study_catalog_ops_t catalog_ops(void)
+{
+    return (study_catalog_ops_t){
+        .context = NULL,
+        .available = catalog_available_adapter,
+        .current = catalog_current_adapter,
+        .ordinal = catalog_ordinal_adapter,
+        .grade = catalog_grade_adapter,
+    };
+}
+
+static void study_state_lock(void *context)
+{
+    (void)context;
+    state_lock();
+}
+
+static void study_state_unlock(void *context)
+{
+    (void)context;
+    state_unlock();
+}
+
+static study_state_lock_t study_lock_ops(void)
+{
+    return (study_state_lock_t){
+        .context = NULL,
+        .lock = study_state_lock,
+        .unlock = study_state_unlock,
+    };
+}
+
 /* Restore the store's published snapshot, or use the built-in card only when
  * no valid catalog exists. The store lock serializes its pointer swap with a
- * local grade; the state lock makes the copied card/hash/nav one publication. */
+ * local grade; study_runtime_restore makes card/hash/nav one publication. */
 static bool restore_catalog_or_demo(void)
 {
-    bool restored = false;
     xSemaphoreTake(s_catalog_mtx, portMAX_DELAY);
-    const kanji_t *catalog = catalog_store_available()
-                                 ? catalog_store_current()
-                                 : NULL;
-    const uint16_t ordinal = catalog != NULL ? catalog_store_ordinal() : 0;
+    const study_restore_result_t result =
+        study_runtime_restore(&s_study, catalog_ops(), study_lock_ops());
     state_lock();
-    if (catalog != NULL && catalog->valid) {
-        s_data = *catalog;
-        s_catalog_ordinal = ordinal;
-        restored = true;
-    } else {
-        kanji_mock(&s_data);
-        s_catalog_ordinal = 0;
-    }
-    s_hash = kanji_hash(&s_data);
-    kanji_nav_reset(&s_nav);
     s_last_ok_us = 0;
     s_last_result = KANJI_FETCH_NO_URL;
     state_unlock();
     xSemaphoreGive(s_catalog_mtx);
-    return restored;
+    return result == STUDY_RESTORE_CATALOG;
 }
 
 /* --- actions -------------------------------------------------------------- */
@@ -490,12 +532,9 @@ static void handle_press(button_id_t id)
          * rating would be recorded against a card the learner has not seen.
          * Dropping it costs one press; keeping it corrupts a review history
          * nothing on the board would ever show. */
-        const study_grade_route_t route = study_grade_capture(
-            &s_pending_grade, s_data.source, nav.grade,
-            s_catalog_ordinal, s_data.card.id);
+        const study_grade_route_t route =
+            study_runtime_capture_grade(&s_study, nav.grade);
         if (route != STUDY_GRADE_NONE) {
-            s_pending_grade_valid = true;
-            s_pending_grade_generation = source_guard_capture(&s_source_guard);
             queued_grade = true;
             queued_source = s_pending_grade.source;
         }
@@ -571,6 +610,12 @@ static void UiTask(void *arg)
     push_data_to_ui();
     present_full();
 
+    /* TaskInit does not expose the command API until this sole consumer has
+     * completed its first frame and is about to enter the queue loop. */
+    if (s_ui_ready != NULL) {
+        xSemaphoreGive(s_ui_ready);
+    }
+
     for (;;) {
         QueueSetMemberHandle_t member =
             xQueueSelectFromSet(s_queue_set, pdMS_TO_TICKS(TICK_SECONDS * 1000));
@@ -622,71 +667,44 @@ static kanji_t s_fetched;
  * and leaving the previous card's answer revealed would show it. */
 static bool commit(uint32_t generation, bool advanced)
 {
-    const uint32_t h = kanji_hash(&s_fetched);
-
     state_lock();
-    /* Recheck while holding the same lock as the commit. A URL action may run
-     * in the few instructions between hashing and this point. */
-    const bool current_source = source_guard_accepts(&s_source_guard, generation);
-    const bool transitioned = current_source && s_data.source != s_fetched.source;
-    bool changed = current_source && (h != s_hash || advanced || transitioned);
-    if (advanced) {
-        s_pending_grade_valid = false;
-    }
-    if (current_source) {
-        s_data = s_fetched;
-        s_hash = h;
+    const study_remote_result_t result = study_runtime_commit_remote(
+        &s_study, &s_fetched, generation, advanced);
+    if (result != STUDY_REMOTE_STALE) {
         s_last_ok_us = esp_timer_get_time();
         s_last_result = KANJI_FETCH_OK;
-        if (advanced || transitioned) kanji_nav_reset(&s_nav);
     }
     state_unlock();
 
-    if (!current_source) {
+    if (result == STUDY_REMOTE_STALE) {
         ESP_LOGI(TAG, "study source changed during fetch; stale response discarded");
         return false;
     }
-    return changed;
+    return result == STUDY_REMOTE_PUBLISHED;
 }
 
 static void process_local_grade(const study_grade_request_t *request)
 {
-    bool saved = false;
-    bool published = false;
     uint32_t generation = 0;
     uint16_t next_ordinal = request->catalog_ordinal;
 
     xSemaphoreTake(s_catalog_mtx, portMAX_DELAY);
-    if (catalog_store_available() &&
-        catalog_store_ordinal() == request->catalog_ordinal) {
-        saved = catalog_store_grade(request->grade);
-        if (saved) {
-            next_ordinal = catalog_store_ordinal();
-        }
-    }
-
-    const kanji_t *next = saved ? catalog_store_current() : NULL;
-    state_lock();
-    if (saved) {
-        s_catalog_ordinal = next_ordinal;
-    }
-    if (next != NULL && next->valid && s_data.source == KANJI_SOURCE_CATALOG) {
-        s_data = *next;
-        s_hash = kanji_hash(&s_data);
-        kanji_nav_reset(&s_nav);
+    const study_local_result_t result = study_runtime_process_local_grade(
+        &s_study, request, catalog_ops(), study_lock_ops());
+    if (result == STUDY_LOCAL_PUBLISHED) {
+        state_lock();
         generation = source_guard_capture(&s_source_guard);
-        published = true;
+        next_ordinal = s_catalog_ordinal;
+        state_unlock();
     }
-    s_pending_grade_valid = false;
-    state_unlock();
     xSemaphoreGive(s_catalog_mtx);
 
-    if (!saved) {
+    if (result == STUDY_LOCAL_FAILED) {
         ESP_LOGE(TAG, "local %s failed at catalog ordinal %u; answer preserved",
                  kanji_grade_name(request->grade), request->catalog_ordinal);
         return;
     }
-    if (published) {
+    if (result == STUDY_LOCAL_PUBLISHED) {
         ESP_LOGI(TAG, "local %s persisted; catalog advanced to %u",
                  kanji_grade_name(request->grade), next_ordinal);
         notify_ui(APP_CMD_CARD_ADVANCED, generation);
@@ -733,7 +751,14 @@ static void KanjiTask(void *arg)
             process_local_grade(&request);
         } else {
             const bool grading = route == STUDY_GRADE_REMOTE;
-            if (grading && (generation != current_generation || url[0] == '\0')) {
+            bool remote_grade_ready = true;
+            if (grading) {
+                state_lock();
+                remote_grade_ready = study_runtime_remote_grade_ready(
+                    &s_study, generation, url);
+                state_unlock();
+            }
+            if (grading && !remote_grade_ready) {
                 state_lock();
                 s_pending_grade_valid = false;
                 state_unlock();
@@ -786,51 +811,177 @@ static void KanjiTask(void *arg)
     }
 }
 
-void UserApp_TaskInit(const prov_config_t *cfg, const int *btn_gpios, int btn_count)
+static bool task_create_resource(void *context, user_app_resource_kind_t kind,
+                                 user_app_handle_t *out)
 {
+    (void)context;
+    if (out == NULL) {
+        return false;
+    }
+    *out = NULL;
+    switch (kind) {
+    case USER_APP_RESOURCE_STATE_MUTEX:
+    case USER_APP_RESOURCE_CATALOG_MUTEX:
+        *out = xSemaphoreCreateMutex();
+        break;
+    case USER_APP_RESOURCE_POLL_WAKE:
+    case USER_APP_RESOURCE_UI_READY:
+        *out = xSemaphoreCreateBinary();
+        break;
+    case USER_APP_RESOURCE_BUTTON_QUEUE:
+        *out = xQueueCreate(16, sizeof(button_event_t));
+        break;
+    case USER_APP_RESOURCE_COMMAND_QUEUE:
+        *out = xQueueCreate(8, sizeof(app_cmd_t));
+        break;
+    case USER_APP_RESOURCE_QUEUE_SET:
+        *out = xQueueCreateSet(16 + 8);
+        break;
+    }
+    return *out != NULL;
+}
+
+static bool task_add_member(void *context, user_app_handle_t member,
+                            user_app_handle_t set)
+{
+    (void)context;
+    return xQueueAddToSet((QueueSetMemberHandle_t)member,
+                          (QueueSetHandle_t)set) == pdPASS;
+}
+
+static void task_remove_member(void *context, user_app_handle_t member,
+                               user_app_handle_t set)
+{
+    (void)context;
+    (void)xQueueRemoveFromSet((QueueSetMemberHandle_t)member,
+                              (QueueSetHandle_t)set);
+}
+
+static bool task_prepare(void *context,
+                         const user_app_task_resources_t *resources)
+{
+    (void)context;
+    s_mtx = (SemaphoreHandle_t)resources->state_mutex;
+    s_catalog_mtx = (SemaphoreHandle_t)resources->catalog_mutex;
+    s_poll_wake = (SemaphoreHandle_t)resources->poll_wake;
+    s_ui_ready = (SemaphoreHandle_t)resources->ui_ready;
+    s_btn_queue = (QueueHandle_t)resources->btn_queue;
+    s_cmd_queue = (QueueHandle_t)resources->cmd_queue;
+    s_queue_set = (QueueSetHandle_t)resources->queue_set;
+
+    study_runtime_init(&s_study);
+    s_overlay_visible = false;
+
+    /* The catalog is the boot source and is initialized before either task can
+     * run or provisioning can begin. The built-in snapshot is used only when
+     * the catalog partition/state cannot produce a valid current card. */
+    (void)catalog_store_init();
+    const bool catalog_ready = restore_catalog_or_demo();
+    if (catalog_ready) {
+        ESP_LOGI(TAG, "offline catalog ready at ordinal %u",
+                 s_catalog_ordinal);
+    } else {
+        ESP_LOGW(TAG, "offline catalog unavailable; using demo fallback");
+    }
+
+    /* Create the global TLS-connect gate before KanjiTask can call http_get(). */
+    http_port_init();
+    return true;
+}
+
+static bool task_create(void *context, user_app_task_kind_t kind,
+                        user_app_handle_t *out)
+{
+    (void)context;
+    TaskHandle_t task = NULL;
+    BaseType_t result;
+    if (kind == USER_APP_TASK_UI) {
+        result = xTaskCreatePinnedToCore(UiTask, "ui", 8 * 1024, NULL, 4,
+                                         &task, 1);
+    } else {
+        result = xTaskCreatePinnedToCore(KanjiTask, "kanji", 16 * 1024, NULL,
+                                         2, &task, 1);
+    }
+    *out = (user_app_handle_t)task;
+    return result == pdPASS && task != NULL;
+}
+
+static bool task_wait_ui_ready(void *context, user_app_handle_t ready)
+{
+    (void)context;
+    return xSemaphoreTake((SemaphoreHandle_t)ready,
+                          pdMS_TO_TICKS(30000)) == pdTRUE;
+}
+
+static void task_delete(void *context, user_app_handle_t task)
+{
+    (void)context;
+    vTaskDelete((TaskHandle_t)task);
+}
+
+static void task_delete_resource(void *context,
+                                 user_app_resource_kind_t kind,
+                                 user_app_handle_t resource)
+{
+    (void)context;
+    (void)kind;
+    vQueueDelete((QueueHandle_t)resource);
+}
+
+static void task_publish(void *context,
+                         const user_app_task_resources_t *resources)
+{
+    (void)context;
+    (void)resources;
+    s_ui_ready = NULL;
+    s_initialized = true;
+}
+
+static void task_cleanup_complete(void *context)
+{
+    (void)context;
+    s_initialized = false;
+    s_mtx = NULL;
+    s_catalog_mtx = NULL;
+    s_poll_wake = NULL;
+    s_ui_ready = NULL;
+    s_btn_queue = NULL;
+    s_cmd_queue = NULL;
+    s_queue_set = NULL;
+}
+
+user_app_init_result_t UserApp_TaskInit(const prov_config_t *cfg,
+                                        const int *btn_gpios,
+                                        int btn_count)
+{
+    if (s_initialized) {
+        return USER_APP_INIT_ALREADY_STARTED;
+    }
     if (cfg != NULL) {
         s_cfg = *cfg;
     } else {
         memset(&s_cfg, 0, sizeof(s_cfg));
     }
 
-    s_mtx         = xSemaphoreCreateMutex();
-    s_catalog_mtx = xSemaphoreCreateMutex();
-    s_poll_wake   = xSemaphoreCreateBinary();
-    s_btn_queue = xQueueCreate(16, sizeof(button_event_t));
-    s_cmd_queue = xQueueCreate(8, sizeof(app_cmd_t));
-    /* A queue set lets UiTask block on buttons OR app commands in one wait.
-     * Both queues must be empty when added, so build the set before
-     * buttons_init starts posting. */
-    s_queue_set = xQueueCreateSet(16 + 8);
-    xQueueAddToSet(s_btn_queue, s_queue_set);
-    xQueueAddToSet(s_cmd_queue, s_queue_set);
-
-    s_source_guard.generation = 0;
-    s_overlay_visible = false;
-    s_pending_grade_valid = false;
-    memset(&s_pending_grade, 0, sizeof(s_pending_grade));
-
-    /* The catalog is the boot source and is initialized before either task can
-     * run or provisioning can begin. The built-in snapshot is used only when
-     * the catalog partition/state cannot produce a valid current card. */
-    const bool catalog_ready = catalog_store_init() &&
-                               catalog_store_available() &&
-                               catalog_store_current() != NULL;
-    if (catalog_ready) {
-        s_data = *catalog_store_current();
-        s_catalog_ordinal = catalog_store_ordinal();
-        ESP_LOGI(TAG, "offline catalog ready at ordinal %u",
-                 s_catalog_ordinal);
-    } else {
-        kanji_mock(&s_data);
-        s_catalog_ordinal = 0;
-        ESP_LOGW(TAG, "offline catalog unavailable; using demo fallback");
+    const user_app_task_ops_t ops = {
+        .context = NULL,
+        .create_resource = task_create_resource,
+        .add_member = task_add_member,
+        .remove_member = task_remove_member,
+        .prepare = task_prepare,
+        .create_task = task_create,
+        .wait_ui_ready = task_wait_ui_ready,
+        .delete_task = task_delete,
+        .delete_resource = task_delete_resource,
+        .publish = task_publish,
+        .cleanup_complete = task_cleanup_complete,
+    };
+    const user_app_init_result_t result =
+        user_app_task_lifecycle_start(&ops, &s_task_resources);
+    if (result != USER_APP_INIT_OK) {
+        ESP_LOGE(TAG, "task initialization failed at stage %d", (int)result);
+        return result;
     }
-    s_hash = kanji_hash(&s_data);
-    s_last_result = KANJI_FETCH_NO_URL;
-    s_last_ok_us = 0;
-    kanji_nav_reset(&s_nav);
 
     /* Anything the caller did not supply is disabled rather than left as
      * whatever was on the stack — a stray GPIO number here would attach an
@@ -840,32 +991,19 @@ void UserApp_TaskInit(const prov_config_t *cfg, const int *btn_gpios, int btn_co
         gpios[i] = (btn_gpios && i < btn_count) ? btn_gpios[i] : -1;
     }
     buttons_init(s_btn_queue, gpios);
-
-    /* Create the global TLS-connect gate before any task can call http_get(). */
-    http_port_init();
-
-    /* UiTask does no networking, so it needs only a modest stack — the LVGL
-     * render itself runs on the LVGL task. Higher priority so a button press is
-     * handled the instant it arrives. */
-    xTaskCreatePinnedToCore(UiTask, "ui", 8 * 1024, NULL, 4, NULL, 1);
-
-    /* KanjiTask: the JSON is small, but a TLS handshake and cert-bundle
-     * validation would run on THIS task's stack (esp_http_client is
-     * synchronous) if the user points it at an https:// URL. 16KB is the size
-     * that proved stable for the TLS tasks in the firmware this forked from. */
-    xTaskCreatePinnedToCore(KanjiTask, "kanji", 16 * 1024, NULL, 2, NULL, 1);
+    return USER_APP_INIT_OK;
 }
 
 /* ===========================================================================
  * Companion-app control bridge (declared in user_app_api.h). These run on the
  * HTTP server task: the read copies state under s_mtx; the writes post a
  * command for UiTask to apply via the same paths as a button press. All are
- * safe no-ops until UserApp_TaskInit has created the queues.
+ * safe no-ops until UserApp_TaskInit has completed successfully.
  * =========================================================================== */
 
 static bool post_cmd(app_cmd_kind_t kind, int ival, const char *text)
 {
-    if (!s_cmd_queue) {
+    if (!s_initialized || !s_cmd_queue) {
         return false;
     }
     app_cmd_t c;
@@ -891,7 +1029,7 @@ static bool send_critical_command(void *context, const void *item,
 
 bool UserApp_SetNetworkConfig(const prov_config_t *cfg)
 {
-    if (cfg == NULL || !s_cmd_queue) {
+    if (cfg == NULL || !s_initialized || !s_cmd_queue) {
         return false;
     }
     app_cmd_t c;
@@ -904,7 +1042,7 @@ bool UserApp_SetNetworkConfig(const prov_config_t *cfg)
 
 bool UserApp_SetOverlay(const char *title, const char *body)
 {
-    if (!s_cmd_queue) {
+    if (!s_initialized || !s_cmd_queue) {
         return false;
     }
     app_cmd_t c;
@@ -929,7 +1067,7 @@ void user_app_snapshot(device_state_t *out)
     out->partial_chain      = epd_partial_chain();
     out->full_refresh_ms    = epd_last_full_ms();
     out->partial_refresh_ms = epd_last_partial_ms();
-    if (!s_mtx) {
+    if (!s_initialized || !s_mtx) {
         return;                     /* TaskInit has not run yet */
     }
 

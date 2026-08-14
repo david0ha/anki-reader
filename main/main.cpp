@@ -127,8 +127,15 @@ extern "C" void app_main(void)
 		BTN_KEY0_PIN, BTN_KEY1_PIN, BTN_KEY2_PIN, BTN_BOOT_PIN,
 	};
 	prov_config_t cfg = {};
-	UserApp_TaskInit(&cfg, btn_gpios,
-	                 (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
+	const user_app_init_result_t app_init =
+		UserApp_TaskInit(&cfg, btn_gpios,
+		                 (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
+	if (app_init != USER_APP_INIT_OK) {
+		ESP_LOGE(TAG, "study runtime unavailable (init stage %d); "
+		              "network provisioning and device API disabled",
+		         (int)app_init);
+		return;
+	}
 
 	bool connected = provisioning_run(&opts, &cfg);
 
