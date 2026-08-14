@@ -54,6 +54,7 @@
 #include "user_app.h"
 #include "user_app_api.h"
 #include "source_guard.h"
+#include "study_source.h"
 #include "lvgl_bsp.h"          /* Lvgl_lock / Lvgl_unlock / Lvgl_RenderNow */
 #include "epd_panel.h"         /* epd_refresh_* / epd_selftest            */
 #include "kanji_mock.h"
@@ -67,9 +68,11 @@
 #include "board_io.h"
 #include "prov_store.h"
 #include "prov_config.h"
+#include "catalog_store.h"
 
 static const char *TAG = "app";
 static lv_obj_t   *s_screen;
+static bool        s_overlay_visible;
 
 /* The provisioned config, copied so it outlives app_main's stack. */
 static prov_config_t s_cfg;
@@ -102,6 +105,8 @@ typedef enum {
     APP_CMD_REFRESH_NOW,     /* poll immediately                              */
     APP_CMD_SET_URL,         /* text = the new study URL                      */
     APP_CMD_DISPLAY_TEST,    /* run epd_selftest()                            */
+    APP_CMD_SET_NETWORK_CONFIG,
+    APP_CMD_SET_OVERLAY,
     APP_CMD_DATA,            /* KanjiTask published a card that changed       */
     APP_CMD_CARD_ADVANCED,   /* KanjiTask graded, and the NEXT card is up     */
 } app_cmd_kind_t;
@@ -111,12 +116,16 @@ typedef struct {
     int  ival;
     uint32_t source_generation;
     char text[PROV_URL_MAX_LEN + 1];
+    char overlay_title[64];
+    char overlay_body[192];
+    prov_config_t network_config;
 } app_cmd_t;
 
 static QueueHandle_t     s_btn_queue;
 static QueueHandle_t     s_cmd_queue;
 static QueueSetHandle_t  s_queue_set;
 static SemaphoreHandle_t s_mtx;
+static SemaphoreHandle_t s_catalog_mtx;
 static SemaphoreHandle_t s_poll_wake;
 
 static inline void state_lock(void)   { xSemaphoreTake(s_mtx, portMAX_DELAY); }
@@ -126,6 +135,7 @@ static inline void state_unlock(void) { xSemaphoreGive(s_mtx); }
 
 static kanji_t  s_data;                 /* what is on (or going to) the glass */
 static uint32_t s_hash;
+static uint16_t s_catalog_ordinal;
 /* Invalidates any synchronous HTTP fetch that started before the source changed. */
 static source_guard_t s_source_guard;
 
@@ -133,11 +143,12 @@ static source_guard_t s_source_guard;
  * lives under the same lock as everything else it reports beside. */
 static kanji_nav_t s_nav;
 
-/* The rating KEY1 committed, waiting for KanjiTask to send it.
- * KANJI_GRADE_AGAIN..EASY when one is pending, 0 when none is. A single slot
- * rather than a queue: a learner cannot grade two cards before the first
- * answer comes back, because the next card is what the answer returns. */
-static kanji_grade_t s_pending_grade;
+/* One captured request remains occupied until its local write or HTTP request
+ * completes. Its source, grade, local ordinal, and remote id are one atomic
+ * snapshot, so a later source transition cannot reroute the answer. */
+static study_grade_request_t s_pending_grade;
+static bool s_pending_grade_valid;
+static uint32_t s_pending_grade_generation;
 
 static kanji_fetch_result_t s_last_result = KANJI_FETCH_NO_URL;
 static int64_t  s_last_ok_us;           /* 0 = never fetched successfully     */
@@ -222,9 +233,12 @@ static void push_status_to_ui(void)
 {
     ui_status_t st;
     state_lock();
-    st.online = (s_last_result == KANJI_FETCH_OK) ||
-                (s_cfg.study_url[0] == '\0');   /* the demo card is never offline */
-    if (s_last_ok_us != 0) {
+    st.online = s_data.source == KANJI_SOURCE_DEMO ||
+                (s_data.source == KANJI_SOURCE_REMOTE &&
+                 s_last_result == KANJI_FETCH_OK);
+    if (s_data.source != KANJI_SOURCE_REMOTE) {
+        st.stale = false;
+    } else if (s_last_ok_us != 0) {
         const int age = (int)((esp_timer_get_time() - s_last_ok_us) / 1000000);
         st.stale = age > POLL_SECONDS * STALE_AFTER_POLLS;
     } else {
@@ -248,6 +262,35 @@ static void read_battery(void)
     s_batt_mv      = (int)(v * 1000.0f + 0.5f);
     s_batt_pct     = board_io_battery_percent();
     state_unlock();
+}
+
+/* Restore the store's published snapshot, or use the built-in card only when
+ * no valid catalog exists. The store lock serializes its pointer swap with a
+ * local grade; the state lock makes the copied card/hash/nav one publication. */
+static bool restore_catalog_or_demo(void)
+{
+    bool restored = false;
+    xSemaphoreTake(s_catalog_mtx, portMAX_DELAY);
+    const kanji_t *catalog = catalog_store_available()
+                                 ? catalog_store_current()
+                                 : NULL;
+    const uint16_t ordinal = catalog != NULL ? catalog_store_ordinal() : 0;
+    state_lock();
+    if (catalog != NULL && catalog->valid) {
+        s_data = *catalog;
+        s_catalog_ordinal = ordinal;
+        restored = true;
+    } else {
+        kanji_mock(&s_data);
+        s_catalog_ordinal = 0;
+    }
+    s_hash = kanji_hash(&s_data);
+    kanji_nav_reset(&s_nav);
+    s_last_ok_us = 0;
+    s_last_result = KANJI_FETCH_NO_URL;
+    state_unlock();
+    xSemaphoreGive(s_catalog_mtx);
+    return restored;
 }
 
 /* --- actions -------------------------------------------------------------- */
@@ -283,32 +326,24 @@ static void action_set_screen(int screen)
 static void action_set_url(const char *url)
 {
     state_lock();
+    const bool changed = strcmp(s_cfg.study_url, url) != 0;
     strlcpy(s_cfg.study_url, url, sizeof(s_cfg.study_url));
-    source_guard_advance(&s_source_guard);
-    /* A rating committed against the old source must not be sent to the new
-     * one. The source guard already discards a REPLY that arrives after a
-     * change; this is the same rule for a request that has not left yet. */
-    s_pending_grade = (kanji_grade_t)0;
-    /* Clearing the URL means "go back to the demo card", and it has to happen
-     * here rather than by waiting for a poll — with no URL there is no poll, so
-     * the board would otherwise sit on the last real card indefinitely and then
-     * keep reporting it stale, which is the opposite of what was asked. */
-    bool to_demo = (url[0] == '\0');
-    if (to_demo) {
-        kanji_mock(&s_data);
-        s_hash = kanji_hash(&s_data);
-        kanji_nav_reset(&s_nav);
-        s_last_ok_us = 0;
-        s_last_result = KANJI_FETCH_NO_URL;
+    if (changed) {
+        source_guard_advance(&s_source_guard);
     }
     state_unlock();
 
     if (!prov_store_save(&s_cfg)) {
         ESP_LOGW(TAG, "study URL change: NVS save failed (will not survive reboot)");
     }
-    ESP_LOGI(TAG, "study URL set to '%s'%s", url, to_demo ? " (demo card)" : "");
+    const bool to_catalog = url[0] == '\0';
+    ESP_LOGI(TAG, "study URL set to '%s'%s", url,
+             to_catalog ? " (offline catalog)" : "");
 
-    if (to_demo) {
+    if (to_catalog) {
+        const bool restored = restore_catalog_or_demo();
+        ESP_LOGI(TAG, "%s restored after URL clear",
+                 restored ? "offline catalog" : "demo fallback");
         push_status_to_ui();
         push_data_to_ui();
         present_full();
@@ -316,6 +351,41 @@ static void action_set_url(const char *url)
     if (s_poll_wake) {
         xSemaphoreGive(s_poll_wake);
     }
+}
+
+static void action_set_network_config(const prov_config_t *cfg)
+{
+    state_lock();
+    const bool source_changed = strcmp(s_cfg.study_url, cfg->study_url) != 0;
+    s_cfg = *cfg;
+    if (source_changed) {
+        source_guard_advance(&s_source_guard);
+    }
+    state_unlock();
+
+    if (source_changed && cfg->study_url[0] == '\0') {
+        (void)restore_catalog_or_demo();
+        push_status_to_ui();
+        push_data_to_ui();
+        present_full();
+    }
+    if (s_poll_wake) {
+        xSemaphoreGive(s_poll_wake);
+    }
+}
+
+static void action_set_overlay(const char *title, const char *body)
+{
+    const bool visible = title[0] != '\0';
+    if (!visible && !s_overlay_visible) {
+        return;
+    }
+    if (Lvgl_lock(-1)) {
+        ui_kanji_set_overlay(visible ? title : NULL, body);
+        Lvgl_unlock();
+    }
+    s_overlay_visible = visible;
+    present_full();
 }
 
 static void action_display_test(void)
@@ -355,6 +425,12 @@ static void handle_cmd(const app_cmd_t *c)
     case APP_CMD_SET_SCREEN:   action_set_screen(c->ival); break;
     case APP_CMD_SET_URL:      action_set_url(c->text); break;
     case APP_CMD_DISPLAY_TEST: action_display_test(); break;
+    case APP_CMD_SET_NETWORK_CONFIG:
+        action_set_network_config(&c->network_config);
+        break;
+    case APP_CMD_SET_OVERLAY:
+        action_set_overlay(c->overlay_title, c->overlay_body);
+        break;
     case APP_CMD_REFRESH_NOW:
         if (s_poll_wake) xSemaphoreGive(s_poll_wake);
         break;
@@ -401,10 +477,11 @@ static void handle_press(button_id_t id)
     kanji_nav_result_t r;
     kanji_nav_t nav;
     bool queued_grade = false;
+    kanji_source_t queued_source = KANJI_SOURCE_NONE;
     state_lock();
     r = kanji_nav_press(&s_nav, (kanji_button_t)id, &s_data);
     nav = s_nav;
-    if (r.action == KANJI_ACT_SUBMIT && s_pending_grade == (kanji_grade_t)0) {
+    if (r.action == KANJI_ACT_SUBMIT && !s_pending_grade_valid) {
         /* One slot, and the SECOND press while it is full is dropped rather
          * than replacing it. Both presses land on the same card — the nav does
          * not move until the graded reply arrives — but by the time KanjiTask
@@ -412,8 +489,15 @@ static void handle_press(button_id_t id)
          * rating would be recorded against a card the learner has not seen.
          * Dropping it costs one press; keeping it corrupts a review history
          * nothing on the board would ever show. */
-        s_pending_grade = nav.grade;
-        queued_grade = true;
+        const study_grade_route_t route = study_grade_capture(
+            &s_pending_grade, s_data.source, nav.grade,
+            s_catalog_ordinal, s_data.card.id);
+        if (route != STUDY_GRADE_NONE) {
+            s_pending_grade_valid = true;
+            s_pending_grade_generation = source_guard_capture(&s_source_guard);
+            queued_grade = true;
+            queued_source = s_pending_grade.source;
+        }
     }
     state_unlock();
 
@@ -440,10 +524,13 @@ static void handle_press(button_id_t id)
          * what the grade request returns, so drawing anything now would be
          * drawing a guess. */
         if (queued_grade) {
-            ESP_LOGI(TAG, "grading %s", kanji_grade_name(nav.grade));
+            ESP_LOGI(TAG, "grading %s from captured %s source",
+                     kanji_grade_name(nav.grade),
+                     queued_source == KANJI_SOURCE_CATALOG
+                         ? "catalog" : "remote");
             if (s_poll_wake) xSemaphoreGive(s_poll_wake);
         } else {
-            ESP_LOGW(TAG, "a grade is already in flight; %s dropped",
+            ESP_LOGW(TAG, "%s cannot be queued: request occupied or source ungradable",
                      kanji_grade_name(nav.grade));
         }
         break;
@@ -468,10 +555,8 @@ static void UiTask(void *arg)
     ESP_LOGI(TAG, "controls: KEY0/KEY1 per the footer, KEY2 = refresh "
                   "(hold 5s = Wi-Fi setup), BOOT = sheets");
 
-    /* The demo card goes up immediately rather than after the first poll: a
-     * board that shows a finished screen one second after boot and then quietly
-     * replaces it with real data reads as fast, where a board that shows
-     * "불러오는 중" for eight seconds reads as broken. */
+    /* TaskInit publishes the restored catalog card before this task starts.
+     * The mock remains a last-resort fallback if the catalog was unavailable. */
     state_lock();
     if (!s_data.valid) {
         kanji_mock(&s_data);
@@ -542,13 +627,17 @@ static bool commit(uint32_t generation, bool advanced)
     /* Recheck while holding the same lock as the commit. A URL action may run
      * in the few instructions between hashing and this point. */
     const bool current_source = source_guard_accepts(&s_source_guard, generation);
-    bool changed = current_source && (h != s_hash || advanced);
+    const bool transitioned = current_source && s_data.source != s_fetched.source;
+    bool changed = current_source && (h != s_hash || advanced || transitioned);
+    if (advanced) {
+        s_pending_grade_valid = false;
+    }
     if (current_source) {
         s_data = s_fetched;
         s_hash = h;
         s_last_ok_us = esp_timer_get_time();
         s_last_result = KANJI_FETCH_OK;
-        if (advanced) kanji_nav_reset(&s_nav);
+        if (advanced || transitioned) kanji_nav_reset(&s_nav);
     }
     state_unlock();
 
@@ -557,6 +646,52 @@ static bool commit(uint32_t generation, bool advanced)
         return false;
     }
     return changed;
+}
+
+static void process_local_grade(const study_grade_request_t *request)
+{
+    bool saved = false;
+    bool published = false;
+    uint32_t generation = 0;
+    uint16_t next_ordinal = request->catalog_ordinal;
+
+    xSemaphoreTake(s_catalog_mtx, portMAX_DELAY);
+    if (catalog_store_available() &&
+        catalog_store_ordinal() == request->catalog_ordinal) {
+        saved = catalog_store_grade(request->grade);
+        if (saved) {
+            next_ordinal = catalog_store_ordinal();
+        }
+    }
+
+    const kanji_t *next = saved ? catalog_store_current() : NULL;
+    state_lock();
+    if (saved) {
+        s_catalog_ordinal = next_ordinal;
+    }
+    if (next != NULL && next->valid && s_data.source == KANJI_SOURCE_CATALOG) {
+        s_data = *next;
+        s_hash = kanji_hash(&s_data);
+        kanji_nav_reset(&s_nav);
+        generation = source_guard_capture(&s_source_guard);
+        published = true;
+    }
+    s_pending_grade_valid = false;
+    state_unlock();
+    xSemaphoreGive(s_catalog_mtx);
+
+    if (!saved) {
+        ESP_LOGE(TAG, "local %s failed at catalog ordinal %u; answer preserved",
+                 kanji_grade_name(request->grade), request->catalog_ordinal);
+        return;
+    }
+    if (published) {
+        ESP_LOGI(TAG, "local %s persisted; catalog advanced to %u",
+                 kanji_grade_name(request->grade), next_ordinal);
+        notify_ui(APP_CMD_CARD_ADVANCED, generation);
+    } else {
+        ESP_LOGI(TAG, "local grade persisted after source takeover; panel unchanged");
+    }
 }
 
 /*
@@ -573,60 +708,73 @@ static void KanjiTask(void *arg)
 
     for (;;) {
         char url[PROV_URL_MAX_LEN + 1];
-        char card_id[KANJI_ID_MAX];
         uint32_t generation;
-        kanji_grade_t grade;
+        uint32_t current_generation;
+        study_grade_request_t request;
+        bool have_request;
         state_lock();
         strlcpy(url, s_cfg.study_url, sizeof(url));
-        generation = source_guard_capture(&s_source_guard);
-        /* Taken, not peeked: a grade that fails is not retried on the next
-         * poll. The proxy would by then be serving a different card, and
-         * grading the wrong card is worse than dropping a rating the learner
-         * can give again by pressing KEY1. */
-        grade = s_pending_grade;
-        s_pending_grade = (kanji_grade_t)0;
-        /* Copied under the SAME lock as the grade, so the pair can only ever
-         * describe one card. Read outside it, a poll landing in between would
-         * pair this rating with the next card's id — which is the exact mistake
-         * sending the id is meant to catch. */
-        strlcpy(card_id, s_data.card.id, sizeof(card_id));
+        current_generation = source_guard_capture(&s_source_guard);
+        have_request = s_pending_grade_valid;
+        if (have_request) {
+            request = s_pending_grade;
+            generation = s_pending_grade_generation;
+        } else {
+            memset(&request, 0, sizeof(request));
+            generation = current_generation;
+        }
         state_unlock();
 
-        if (url[0]) {
-            const bool grading = (grade >= KANJI_GRADE_AGAIN &&
-                                  grade <= KANJI_GRADE_EASY);
-            kanji_fetch_result_t r =
-                grading ? kanji_service_grade(url, grade, card_id, &s_fetched)
-                        : kanji_service_fetch(url, &s_fetched);
-
-            if (r == KANJI_FETCH_OK) {
-                if (commit(generation, grading)) {
-                    ESP_LOGI(TAG, "card %s — refreshing",
-                             grading ? "graded" : "changed");
-                    notify_ui(grading ? APP_CMD_CARD_ADVANCED : APP_CMD_DATA,
-                              generation);
-                } else {
-                    /* The single most common outcome, and the one that must not
-                     * cost a panel refresh. */
-                    ESP_LOGD(TAG, "study: unchanged, panel untouched");
-                }
-            } else {
+        const study_grade_route_t route = have_request
+                                              ? study_grade_route(&request)
+                                              : STUDY_GRADE_NONE;
+        if (route == STUDY_GRADE_LOCAL) {
+            process_local_grade(&request);
+        } else {
+            const bool grading = route == STUDY_GRADE_REMOTE;
+            if (grading && (generation != current_generation || url[0] == '\0')) {
                 state_lock();
-                bool current_source =
-                    source_guard_accepts(&s_source_guard, generation);
-                if (current_source) s_last_result = r;
+                s_pending_grade_valid = false;
                 state_unlock();
-                if (!current_source) {
-                    ESP_LOGI(TAG, "study source changed during fetch; "
-                                  "stale response discarded");
+                ESP_LOGW(TAG, "captured remote grade invalidated by source change; dropped");
+            } else if (url[0]) {
+                kanji_fetch_result_t r =
+                    grading ? kanji_service_grade(url, request.grade,
+                                                  request.remote_card_id, &s_fetched)
+                            : kanji_service_fetch(url, &s_fetched);
+
+                if (r == KANJI_FETCH_OK) {
+                    if (commit(generation, grading)) {
+                        ESP_LOGI(TAG, "card %s — refreshing",
+                                 grading ? "graded" : "changed");
+                        notify_ui(grading ? APP_CMD_CARD_ADVANCED : APP_CMD_DATA,
+                                  generation);
+                    } else {
+                        /* The single most common outcome, and the one that must not
+                         * cost a panel refresh. */
+                        ESP_LOGD(TAG, "study: unchanged, panel untouched");
+                    }
                 } else {
-                    ESP_LOGW(TAG, "study %s failed: %s",
-                             grading ? "grade" : "fetch",
-                             kanji_fetch_result_name(r));
-                    /* The badge in the header is the only thing that changed,
-                     * and it is worth one refresh: a learner pressing KEY1 into
-                     * a dead proxy otherwise gets no feedback at all. */
-                    notify_ui(APP_CMD_DATA, generation);
+                    state_lock();
+                    if (grading) {
+                        s_pending_grade_valid = false;
+                    }
+                    bool current_source =
+                        source_guard_accepts(&s_source_guard, generation);
+                    if (current_source) s_last_result = r;
+                    state_unlock();
+                    if (!current_source) {
+                        ESP_LOGI(TAG, "study source changed during fetch; "
+                                      "stale response discarded");
+                    } else {
+                        ESP_LOGW(TAG, "study %s failed: %s",
+                                 grading ? "grade" : "fetch",
+                                 kanji_fetch_result_name(r));
+                        /* The badge in the header is the only thing that changed,
+                         * and it is worth one refresh: a learner pressing KEY1 into
+                         * a dead proxy otherwise gets no feedback at all. */
+                        notify_ui(APP_CMD_DATA, generation);
+                    }
                 }
             }
         }
@@ -639,10 +787,15 @@ static void KanjiTask(void *arg)
 
 void UserApp_TaskInit(const prov_config_t *cfg, const int *btn_gpios, int btn_count)
 {
-    s_cfg = *cfg;
+    if (cfg != NULL) {
+        s_cfg = *cfg;
+    } else {
+        memset(&s_cfg, 0, sizeof(s_cfg));
+    }
 
-    s_mtx       = xSemaphoreCreateMutex();
-    s_poll_wake = xSemaphoreCreateBinary();
+    s_mtx         = xSemaphoreCreateMutex();
+    s_catalog_mtx = xSemaphoreCreateMutex();
+    s_poll_wake   = xSemaphoreCreateBinary();
     s_btn_queue = xQueueCreate(16, sizeof(button_event_t));
     s_cmd_queue = xQueueCreate(8, sizeof(app_cmd_t));
     /* A queue set lets UiTask block on buttons OR app commands in one wait.
@@ -652,6 +805,30 @@ void UserApp_TaskInit(const prov_config_t *cfg, const int *btn_gpios, int btn_co
     xQueueAddToSet(s_btn_queue, s_queue_set);
     xQueueAddToSet(s_cmd_queue, s_queue_set);
 
+    s_source_guard.generation = 0;
+    s_overlay_visible = false;
+    s_pending_grade_valid = false;
+    memset(&s_pending_grade, 0, sizeof(s_pending_grade));
+
+    /* The catalog is the boot source and is initialized before either task can
+     * run or provisioning can begin. The built-in snapshot is used only when
+     * the catalog partition/state cannot produce a valid current card. */
+    const bool catalog_ready = catalog_store_init() &&
+                               catalog_store_available() &&
+                               catalog_store_current() != NULL;
+    if (catalog_ready) {
+        s_data = *catalog_store_current();
+        s_catalog_ordinal = catalog_store_ordinal();
+        ESP_LOGI(TAG, "offline catalog ready at ordinal %u",
+                 s_catalog_ordinal);
+    } else {
+        kanji_mock(&s_data);
+        s_catalog_ordinal = 0;
+        ESP_LOGW(TAG, "offline catalog unavailable; using demo fallback");
+    }
+    s_hash = kanji_hash(&s_data);
+    s_last_result = KANJI_FETCH_NO_URL;
+    s_last_ok_us = 0;
     kanji_nav_reset(&s_nav);
 
     /* Anything the caller did not supply is disabled rather than left as
@@ -696,6 +873,35 @@ static bool post_cmd(app_cmd_kind_t kind, int ival, const char *text)
     c.ival = ival;
     if (text) {
         strlcpy(c.text, text, sizeof(c.text));
+    }
+    return xQueueSend(s_cmd_queue, &c, 0) == pdTRUE;
+}
+
+bool UserApp_SetNetworkConfig(const prov_config_t *cfg)
+{
+    if (cfg == NULL || !s_cmd_queue) {
+        return false;
+    }
+    app_cmd_t c;
+    memset(&c, 0, sizeof(c));
+    c.kind = APP_CMD_SET_NETWORK_CONFIG;
+    c.network_config = *cfg;
+    return xQueueSend(s_cmd_queue, &c, 0) == pdTRUE;
+}
+
+bool UserApp_SetOverlay(const char *title, const char *body)
+{
+    if (!s_cmd_queue) {
+        return false;
+    }
+    app_cmd_t c;
+    memset(&c, 0, sizeof(c));
+    c.kind = APP_CMD_SET_OVERLAY;
+    if (title != NULL) {
+        strlcpy(c.overlay_title, title, sizeof(c.overlay_title));
+    }
+    if (body != NULL) {
+        strlcpy(c.overlay_body, body, sizeof(c.overlay_body));
     }
     return xQueueSend(s_cmd_queue, &c, 0) == pdTRUE;
 }

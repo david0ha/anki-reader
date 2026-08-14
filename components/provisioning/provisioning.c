@@ -12,6 +12,7 @@
 #include "prov_store.h"
 #include "prov_wifi.h"
 #include "prov_portal.h"
+#include "prov_boot_policy.h"
 
 static const char *TAG = "provisioning";
 
@@ -131,6 +132,10 @@ bool provisioning_run(const prov_options_t *opts, prov_config_t *out)
 {
     s_opts = opts;
 
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+
     ensure_nvs();
 
     prov_config_t cfg;
@@ -141,19 +146,36 @@ bool provisioning_run(const prov_options_t *opts, prov_config_t *out)
 
     prov_wifi_init();
 
+    bool joined = false;
     if (have_config && !forced) {
         ESP_LOGI(TAG, "stored network '%s' — attempting to connect", cfg.ssid);
         emit(PROV_EVENT_STA_CONNECTING, cfg.ssid);
-        if (prov_wifi_connect(cfg.ssid, cfg.password, opts->sta_connect_timeout_ms)) {
+        joined = prov_wifi_connect(cfg.ssid, cfg.password,
+                                   opts->sta_connect_timeout_ms);
+        if (joined) {
             emit(PROV_EVENT_STA_CONNECTED, cfg.ssid);
-            *out = cfg;
-            return true;
+        } else {
+            ESP_LOGW(TAG, "could not join '%s' — continuing offline", cfg.ssid);
         }
-        ESP_LOGW(TAG, "could not join '%s' — falling back to setup portal", cfg.ssid);
-    } else if (forced) {
+    }
+
+    const prov_boot_decision_t decision =
+        prov_boot_decide(forced, have_config, joined);
+    if (decision == PROV_BOOT_ONLINE) {
+        if (out != NULL) {
+            *out = cfg;
+        }
+        return true;
+    }
+    if (decision == PROV_BOOT_OFFLINE) {
+        if (!have_config) {
+            ESP_LOGI(TAG, "no stored network — continuing offline");
+        }
+        return false;
+    }
+
+    if (decision == PROV_BOOT_PORTAL) {
         ESP_LOGI(TAG, "user forced setup mode (KEY2 long-press) — starting portal");
-    } else {
-        ESP_LOGI(TAG, "no stored network — starting setup portal");
     }
 
     char suffix[5];

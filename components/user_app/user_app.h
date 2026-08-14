@@ -18,6 +18,11 @@ void UserApp_UiInit(void);    /* build the vault UI  */
  * being one. */
 void UserApp_TaskInit(const prov_config_t *cfg, const int *btn_gpios, int btn_count);
 
+/* Apply post-boot network configuration and provisioning overlays through
+ * UiTask's queue. Neither call touches LVGL or the panel from its caller. */
+bool UserApp_SetNetworkConfig(const prov_config_t *cfg);
+bool UserApp_SetOverlay(const char *title, const char *body);
+
 #ifdef __cplusplus
 }
 #endif

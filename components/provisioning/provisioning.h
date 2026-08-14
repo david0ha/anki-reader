@@ -3,10 +3,9 @@
 // Flow on boot:
 //   1. Load saved config from NVS.
 //   2. If a network is saved, try to join it (bounded by sta_connect_timeout_ms).
-//   3. On success: return true with the active config (caller runs its app).
-//   4. On failure, or if nothing is saved: bring up a SoftAP + captive portal where the
-//      user enters Wi-Fi credentials and a weather location. The submission is saved to
-//      NVS and the device reboots, so on the next boot step 2 connects automatically.
+//   3. On success: return true with the active config.
+//   4. With no config or a failed join: return false so the caller keeps running offline.
+//   5. Only a consumed force-portal flag enters the blocking SoftAP portal.
 //
 // This header is intentionally free of ESP-IDF types so callers stay decoupled.
 #pragma once
@@ -40,8 +39,8 @@ typedef struct {
 void provisioning_default_options(prov_options_t *opts);
 
 // Run the flow described above. Returns true when connected to Wi-Fi, with *out holding the
-// active SSID and saved location. In the captive-portal path the call blocks until the user
-// submits a config, after which the device reboots (so it does not return in that path).
+// active config. Returns false for either offline path. In the forced captive-portal path the
+// call blocks until the user submits a config, after which the device reboots.
 bool provisioning_run(const prov_options_t *opts, prov_config_t *out);
 
 #ifdef __cplusplus

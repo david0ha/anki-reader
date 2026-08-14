@@ -47,17 +47,7 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 	lv_disp_flush_ready(drv);
 }
 
-// --- Provisioning status, shown on the study UI's overlay ------------------
-
-static void SetStatus(const char *title, const char *body)
-{
-	if (Lvgl_lock(-1)) {
-		ui_kanji_set_overlay(title, body);
-		Lvgl_unlock();
-	}
-	Lvgl_RenderNow();
-	epd_refresh_full();
-}
+// --- Provisioning status, queued to the sole LVGL/panel owner (UiTask) -----
 
 static void OnProvisioningEvent(prov_event_t event, const char *info, void *user)
 {
@@ -66,19 +56,19 @@ static void OnProvisioningEvent(prov_event_t event, const char *info, void *user
 	switch (event) {
 	case PROV_EVENT_STA_CONNECTING:
 		snprintf(body, sizeof(body), S_WIFI_CONNECTING, info ? info : "");
-		SetStatus(S_WIFI_TITLE, body);
+		UserApp_SetOverlay(S_WIFI_TITLE, body);
 		break;
 	case PROV_EVENT_STA_CONNECTED:
 		snprintf(body, sizeof(body), S_WIFI_CONNECTED, info ? info : "");
-		SetStatus(S_WIFI_TITLE, body);
+		UserApp_SetOverlay(S_WIFI_TITLE, body);
 		break;
 	case PROV_EVENT_PORTAL_STARTED:
 		snprintf(body, sizeof(body), S_WIFI_PORTAL, info ? info : "");
-		SetStatus(S_WIFI_TITLE, body);
+		UserApp_SetOverlay(S_WIFI_TITLE, body);
 		break;
 	case PROV_EVENT_CONFIG_SAVED:
 		snprintf(body, sizeof(body), S_WIFI_SAVED, info ? info : "", S_RESTARTING);
-		SetStatus(S_WIFI_TITLE, body);
+		UserApp_SetOverlay(S_WIFI_TITLE, body);
 		break;
 	}
 }
@@ -122,27 +112,32 @@ extern "C" void app_main(void)
 	provisioning_default_options(&opts);   // AP prefix, 15s timeout
 	opts.event_cb = OnProvisioningEvent;
 
-	prov_config_t cfg;
-	bool connected = provisioning_run(&opts, &cfg);  // blocks (and reboots) until configured
+	// Start the responsive catalog UI before even looking for saved Wi-Fi. A
+	// station attempt may take the full timeout; studying does not wait for it.
+	const int btn_gpios[] = {
+		BTN_KEY0_PIN, BTN_KEY1_PIN, BTN_KEY2_PIN, BTN_BOOT_PIN,
+	};
+	prov_config_t cfg = {};
+	UserApp_TaskInit(&cfg, btn_gpios,
+	                 (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
+
+	bool connected = provisioning_run(&opts, &cfg);
 
 	if (connected) {
 		ESP_LOGI(TAG, "online — study URL '%s'",
-		         cfg.study_url[0] ? cfg.study_url : "(none: demo card)");
+		         cfg.study_url[0] ? cfg.study_url : "(none: offline catalog)");
+		UserApp_SetNetworkConfig(&cfg);
 		net_time_sync(10000);
-		if (Lvgl_lock(-1)) {
-			ui_kanji_set_overlay(NULL, NULL);   // dismiss the setup overlay
-			Lvgl_unlock();
-		}
-		// The pinout lives here and nowhere else; user_app takes the buttons
-		// as data for the same reason epd_init takes the panel's pins.
-		const int btn_gpios[] = {
-			BTN_KEY0_PIN, BTN_KEY1_PIN, BTN_KEY2_PIN, BTN_BOOT_PIN,
-		};
-		UserApp_TaskInit(&cfg, btn_gpios, (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
+		UserApp_SetOverlay(NULL, NULL);   // dismiss the connection overlay
 
 		// Companion-app control server on the home LAN (HTTP + mDNS
 		// "obsidianboard.local"), reading and driving the app through the
 		// user_app_api bridge.
 		device_api_start();
+	} else {
+		// A failed saved join emitted a connecting overlay. Returning offline
+		// must reveal the catalog again; no-config boots never showed one.
+		UserApp_SetOverlay(NULL, NULL);
+		ESP_LOGI(TAG, "offline — local catalog study remains active");
 	}
 }
