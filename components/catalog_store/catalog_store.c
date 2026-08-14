@@ -123,6 +123,11 @@ bool catalog_store_init(void)
     return catalog_store_core_init(&s_store, &ops);
 }
 
+void catalog_store_release(void)
+{
+    catalog_store_core_release(&s_store);
+}
+
 bool catalog_store_available(void)
 {
     return catalog_store_core_available(&s_store);

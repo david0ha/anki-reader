@@ -137,6 +137,27 @@ static void test_a_full_payload_lands_field_for_field(void)
     CHECK_STR(kanji_preview_span(&k, KANJI_GRADE_EASY), "21일 뒤");
 }
 
+static void test_explicit_workspace_is_required_separate_and_atomic(void)
+{
+    kanji_t out;
+    kanji_t workspace;
+    memset(&out, 0x5A, sizeof out);
+    CHECK(kanji_parse_with_workspace(GOOD, strlen(GOOD), &out, &workspace));
+    CHECK(out.valid);
+    CHECK_STR(out.card.front, "会う");
+
+    memset(&out, 0xA5, sizeof out);
+    kanji_t sentinel = out;
+    CHECK(!kanji_parse_with_workspace(GOOD, strlen(GOOD), &out, NULL));
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+
+    CHECK(!kanji_parse_with_workspace(GOOD, strlen(GOOD), &out, &out));
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+
+    CHECK(!kanji_parse_with_workspace("{\"card\":", 8, &out, &workspace));
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+}
+
 static void test_a_card_only_full_fidelity_envelope_preserves_every_field(void)
 {
     static const char *CARD_ONLY =
@@ -461,6 +482,7 @@ static void test_the_committed_fixture_parses(void)
 int main(void)
 {
     test_a_full_payload_lands_field_for_field();
+    test_explicit_workspace_is_required_separate_and_atomic();
     test_a_card_only_full_fidelity_envelope_preserves_every_field();
     test_a_full_measured_card_reaches_the_model_without_truncation();
     test_a_rejected_payload_does_not_touch_the_caller();

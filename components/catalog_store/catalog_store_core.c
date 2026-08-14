@@ -21,6 +21,7 @@ struct catalog_store_runtime {
     kanji_rating_summary_t *summaries;
     kanji_t *current;
     kanji_t *pending;
+    kanji_t *decode_workspace;
     kanji_catalog_t catalog;
     kanji_state_t state;
     uint16_t ordinal;
@@ -59,6 +60,7 @@ static void runtime_release(catalog_store_runtime_t *runtime)
     runtime->ops.dealloc(runtime->ops.context, runtime->summaries);
     runtime->ops.dealloc(runtime->ops.context, runtime->raw);
     runtime->ops.dealloc(runtime->ops.context, runtime->compressed);
+    runtime->ops.dealloc(runtime->ops.context, runtime->decode_workspace);
     runtime->ops.dealloc(runtime->ops.context, runtime->pending);
     runtime->ops.dealloc(runtime->ops.context, runtime->current);
     runtime->ops.dealloc(runtime->ops.context, runtime);
@@ -73,9 +75,12 @@ static catalog_store_runtime_t *runtime_alloc(const catalog_store_ops_t *ops)
 
     runtime->current = ops->alloc(ops->context, sizeof *runtime->current);
     runtime->pending = ops->alloc(ops->context, sizeof *runtime->pending);
+    runtime->decode_workspace =
+        ops->alloc(ops->context, sizeof *runtime->decode_workspace);
     runtime->compressed = ops->alloc(ops->context, ops->compressed_capacity);
     runtime->raw = ops->alloc(ops->context, KANJI_CATALOG_MAX_RAW_BLOCK);
     if (runtime->current == NULL || runtime->pending == NULL ||
+        runtime->decode_workspace == NULL ||
         runtime->compressed == NULL || runtime->raw == NULL) {
         runtime_release(runtime);
         return NULL;
@@ -142,7 +147,7 @@ bool catalog_store_core_init(catalog_store_core_t *core,
 
     opened->ordinal = kanji_state_current_ordinal(&opened->state);
     if (!kanji_catalog_read_card(&opened->catalog, opened->ordinal,
-                                 opened->current)) {
+                                 opened->current, opened->decode_workspace)) {
         runtime_release(opened);
         return false;
     }
@@ -187,7 +192,8 @@ bool catalog_store_core_grade(catalog_store_core_t *core, kanji_grade_t grade)
         (uint16_t)(((uint32_t)runtime->ordinal + 1u) % count);
 
     if (!kanji_catalog_read_card(&runtime->catalog, next_ordinal,
-                                 runtime->pending)) {
+                                 runtime->pending,
+                                 runtime->decode_workspace)) {
         return false;
     }
     if (!kanji_state_append_grade(&runtime->state, runtime->ordinal,

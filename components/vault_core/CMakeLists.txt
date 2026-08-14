@@ -44,3 +44,9 @@ idf_component_register(
 # this the generated faces in fonts/ are the only files in the project that
 # fail to compile.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
+
+# Card models are intentionally full-fidelity and therefore much larger than a
+# firmware task may keep by value.  Make every production translation unit
+# prove that future parser/UI changes do not put one back on an 8 KiB stack.
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Wframe-larger-than=2048 -Werror=frame-larger-than=2048 -fstack-usage)

@@ -243,11 +243,11 @@ static void test_init_failure_matrix(void)
     catalog_store_core_t store = {0};
     catalog_store_ops_t probe_ops = ops_for(&probe);
     CHECK(catalog_store_core_init(&store, &probe_ops));
-    CHECK(probe.alloc_attempts == 6);
+    CHECK(probe.alloc_attempts == 7);
     catalog_store_core_release(&store);
     env_destroy(&probe);
 
-    for (size_t fail_at = 1; fail_at <= 6; fail_at++) {
+    for (size_t fail_at = 1; fail_at <= 7; fail_at++) {
         fake_env_t env;
         CHECK(env_init(&env));
         env.fail_alloc_attempt = fail_at;
@@ -310,6 +310,7 @@ static void test_grade_order_and_reinitialization(void)
     CHECK(published != NULL && flash_before != NULL);
     memcpy(published, initial, sizeof *published);
     memcpy(flash_before, env.state_bytes, KANJI_STATE_PARTITION_SIZE);
+    const size_t allocations_before_grades = env.alloc_attempts;
 
     env.fail_catalog_read = true;
     CHECK(!catalog_store_core_grade(&store, KANJI_GRADE_GOOD));
@@ -332,6 +333,7 @@ static void test_grade_order_and_reinitialization(void)
     CHECK(advanced != NULL && advanced != initial);
     CHECK(catalog_store_core_ordinal(&store) == 1);
     CHECK(memcmp(env.state_bytes, flash_before, KANJI_STATE_PARTITION_SIZE) != 0);
+    CHECK(env.alloc_attempts == allocations_before_grades);
     memcpy(published, advanced, sizeof *published);
 
     const size_t live_before_failed_reinit = env.live_allocations;
@@ -392,6 +394,11 @@ static void test_grade_order_and_reinitialization(void)
     CHECK(catalog_store_core_current(&store) == NULL);
     CHECK(catalog_store_core_ordinal(&store) == 0);
     catalog_store_core_release(&store);
+
+    CHECK(catalog_store_core_init(&store, &ops));
+    CHECK(catalog_store_core_available(&store));
+    catalog_store_core_release(&store);
+    CHECK(!catalog_store_core_available(&store));
     free(flash_before);
     free(published);
     env_destroy(&env);

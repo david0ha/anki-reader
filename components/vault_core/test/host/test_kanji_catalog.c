@@ -202,15 +202,16 @@ static void test_cards_and_boundary(const image_t *fixture, const image_t *bound
     uint8_t raw[98304];
     kanji_catalog_t catalog;
     kanji_t card;
+    kanji_t workspace;
     CHECK(open_catalog((image_t *)fixture, (uint32_t)fixture->length, &catalog,
                        compressed, sizeof compressed, raw, sizeof raw));
-    CHECK(kanji_catalog_read_card(&catalog, 0, &card));
+    CHECK(kanji_catalog_read_card(&catalog, 0, &card, &workspace));
     CHECK_STREQ(card.card.id, "punish");
     CHECK_STREQ(card.card.front, "懲らしめる");
     CHECK_STREQ(card.session.deck, "JLPT N2 Kanji");
     CHECK_STREQ(card.session.level, "N2");
     CHECK_EQ(card.source, KANJI_SOURCE_CATALOG);
-    CHECK(kanji_catalog_read_card(&catalog, 4, &card));
+    CHECK(kanji_catalog_read_card(&catalog, 4, &card, &workspace));
     CHECK_STREQ(card.card.id, "wealth");
     CHECK_STREQ(card.card.front, "財");
     CHECK_STREQ(card.card.gloss, "재물 재");
@@ -228,7 +229,8 @@ static void test_cards_and_boundary(const image_t *fixture, const image_t *bound
         {64, "boundary-012"}, {65, "boundary-065"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-        CHECK(kanji_catalog_read_card(&catalog, cases[i].ordinal, &card));
+        CHECK(kanji_catalog_read_card(&catalog, cases[i].ordinal, &card,
+                                      &workspace));
         CHECK_STREQ(card.card.id, cases[i].id);
         CHECK_EQ(card.source, KANJI_SOURCE_CATALOG);
     }
@@ -243,11 +245,32 @@ static void expect_failed_read(image_t *image, uint32_t ordinal,
     CHECK(open_catalog(image, (uint32_t)image->length, &catalog,
                        compressed, sizeof compressed, raw, sizeof raw));
     kanji_t out;
+    kanji_t workspace;
     kanji_t sentinel;
     memset(&out, 0xA5, sizeof out);
     sentinel = out;
-    CHECK(!kanji_catalog_read_card(&catalog, ordinal, &out));
+    CHECK(!kanji_catalog_read_card(&catalog, ordinal, &out, &workspace));
     CHECK_EQ(kanji_catalog_status(&catalog), expected);
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+}
+
+static void test_read_rejects_missing_or_aliased_workspace(const image_t *fixture)
+{
+    uint8_t compressed[65536];
+    uint8_t raw[98304];
+    kanji_catalog_t catalog;
+    CHECK(open_catalog((image_t *)fixture, (uint32_t)fixture->length, &catalog,
+                       compressed, sizeof compressed, raw, sizeof raw));
+
+    kanji_t out;
+    memset(&out, 0xA5, sizeof out);
+    kanji_t sentinel = out;
+    CHECK(!kanji_catalog_read_card(&catalog, 0, &out, NULL));
+    CHECK_EQ(kanji_catalog_status(&catalog), KANJI_CATALOG_BAD_ARGUMENT);
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+
+    CHECK(!kanji_catalog_read_card(&catalog, 0, &out, &out));
+    CHECK_EQ(kanji_catalog_status(&catalog), KANJI_CATALOG_BAD_ARGUMENT);
     CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
 }
 
@@ -445,6 +468,7 @@ int main(void)
     if (fixture.bytes && boundary.bytes) {
         test_open_and_metadata(&fixture);
         test_cards_and_boundary(&fixture, &boundary);
+        test_read_rejects_missing_or_aliased_workspace(&fixture);
         test_open_corruptions(&fixture);
         test_repaired_structural_corruptions(&fixture, &boundary);
         test_read_corruptions(&fixture);

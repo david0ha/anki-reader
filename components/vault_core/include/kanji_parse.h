@@ -29,6 +29,13 @@ extern "C" {
  * SUCCESS: it is how the proxy says "today is done". */
 bool kanji_parse(const char *json, size_t len, kanji_t *out);
 
+/* Stack-bounded variant for persistent runtimes. `workspace` must point to a
+ * separate kanji_t owned by the caller; NULL and `workspace == out` are
+ * rejected. The workspace is scratch and may change on failure, while *out
+ * retains the same all-or-nothing contract as kanji_parse(). */
+bool kanji_parse_with_workspace(const char *json, size_t len, kanji_t *out,
+                                kanji_t *workspace);
+
 #ifdef __cplusplus
 }
 #endif

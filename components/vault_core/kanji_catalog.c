@@ -480,9 +480,9 @@ static bool load_block(kanji_catalog_t *cat, uint32_t block_id)
 }
 
 bool kanji_catalog_read_card(kanji_catalog_t *cat, uint32_t ordinal,
-                             kanji_t *out)
+                             kanji_t *out, kanji_t *workspace)
 {
-    if (!cat || !cat->_open || !out) {
+    if (!cat || !cat->_open || !out || !workspace || workspace == out) {
         if (cat) cat->_status = KANJI_CATALOG_BAD_ARGUMENT;
         return false;
     }
@@ -520,18 +520,17 @@ bool kanji_catalog_read_card(kanji_catalog_t *cat, uint32_t ordinal,
         return false;
     }
 
-    kanji_t temporary;
-    if (!kanji_parse((const char *)cat->_raw_workspace + record_off,
-                     record_len, &temporary)) {
+    kanji_catalog_deck_info_t deck;
+    if (!kanji_catalog_deck(cat, deck_index, &deck)) return false;
+    if (!kanji_parse_with_workspace(
+            (const char *)cat->_raw_workspace + record_off, record_len,
+            out, workspace)) {
         cat->_status = KANJI_CATALOG_PARSE;
         return false;
     }
-    kanji_catalog_deck_info_t deck;
-    if (!kanji_catalog_deck(cat, deck_index, &deck)) return false;
-    kanji_str_copy(temporary.session.deck, sizeof temporary.session.deck, deck.name);
-    kanji_str_copy(temporary.session.level, sizeof temporary.session.level, deck.level);
-    temporary.source = KANJI_SOURCE_CATALOG;
-    *out = temporary;
+    kanji_str_copy(out->session.deck, sizeof out->session.deck, deck.name);
+    kanji_str_copy(out->session.level, sizeof out->session.level, deck.level);
+    out->source = KANJI_SOURCE_CATALOG;
     cat->_status = KANJI_CATALOG_OK;
     return true;
 }

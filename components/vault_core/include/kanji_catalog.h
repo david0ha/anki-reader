@@ -98,8 +98,11 @@ const uint8_t *kanji_catalog_id(const kanji_catalog_t *cat);
 
 bool kanji_catalog_deck(kanji_catalog_t *cat, uint32_t deck_index,
                         kanji_catalog_deck_info_t *out);
+/* `workspace` is caller-owned decode scratch and must be distinct from *out.
+ * Rejecting NULL/aliasing keeps the publication copy failure-atomic without a
+ * full kanji_t on the task stack. */
 bool kanji_catalog_read_card(kanji_catalog_t *cat, uint32_t ordinal,
-                             kanji_t *out);
+                             kanji_t *out, kanji_t *workspace);
 
 #ifdef __cplusplus
 }

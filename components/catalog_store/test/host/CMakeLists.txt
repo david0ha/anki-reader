@@ -41,5 +41,14 @@ target_compile_definitions(test_catalog_store_core PRIVATE
 target_compile_options(test_catalog_store_core PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(test_catalog_store_core PRIVATE catalog_store_core ZLIB::ZLIB m)
 
+add_executable(test_catalog_store_adapter
+    test_catalog_store_adapter.c
+    ${STORE}/catalog_store.c)
+target_include_directories(test_catalog_store_adapter PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${STORE} ${CORE}/include)
+target_compile_options(test_catalog_store_adapter PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(test_catalog_store_adapter PRIVATE ZLIB::ZLIB m)
+
 enable_testing()
 add_test(NAME catalog_store_core COMMAND test_catalog_store_core)
+add_test(NAME catalog_store_adapter COMMAND test_catalog_store_adapter)
