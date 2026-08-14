@@ -489,10 +489,15 @@ def _project_card_content(card, back, hint):
     front = front or kanji
     raw_parts = raw_card_parts(hint)
     composition, _ = safe_composition(front, kanji or front, raw_parts)
-    senses = meaning.get("senses") if isinstance(meaning.get("senses"), list) else []
-    senses = [sense for sense in senses if isinstance(sense, str) and sense]
-    if not senses and isinstance(meaning.get("gloss"), str) and meaning["gloss"]:
-        senses = [meaning["gloss"]]
+    raw_gloss = meaning.get("gloss")
+    gloss = raw_gloss.strip() if isinstance(raw_gloss, str) else ""
+    raw_senses = meaning.get("senses") if isinstance(meaning.get("senses"), list) else []
+    senses = [sense.strip() for sense in raw_senses
+              if isinstance(sense, str) and sense.strip()]
+    if not senses and gloss:
+        senses = [gloss]
+    if not gloss and senses:
+        gloss = senses[0]
     on_reading = primary_reading(on, [])
     kun_reading = primary_reading(kun, [])
     principle = hint.get("principle") if isinstance(hint.get("principle"), str) else ""
@@ -507,7 +512,7 @@ def _project_card_content(card, back, hint):
         "on_reading": on_reading,
         "kun_reading": kun_reading,
         "level": level,
-        "gloss": meaning.get("gloss") if isinstance(meaning.get("gloss"), str) else "",
+        "gloss": gloss,
         "senses": senses,
         "description": description,
         "hook_title": principle,

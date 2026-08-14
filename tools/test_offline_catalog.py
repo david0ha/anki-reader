@@ -182,6 +182,42 @@ def _load_live_formula_oracle(connection, user_id):
     return expected
 
 
+def _independent_gloss_from_raw(back_column):
+    """Derive the short gloss from raw JSON without the production projector."""
+    back = _oracle_json_object(back_column)
+    meaning = back.get("meaning")
+    if not isinstance(meaning, dict):
+        return ""
+    gloss = meaning.get("gloss")
+    if isinstance(gloss, str) and gloss.strip():
+        return gloss.strip()
+    senses = meaning.get("senses")
+    if not isinstance(senses, list):
+        return ""
+    return next((sense.strip() for sense in senses
+                 if isinstance(sense, str) and sense.strip()), "")
+
+
+def _load_live_gloss_oracle(connection, user_id):
+    """Load the expected short gloss for every reachable raw card row."""
+    rows = connection.execute("""
+        SELECT ct.id, ct.back
+          FROM study_decks AS sd
+          JOIN deck_templates AS dt ON dt.id = sd.template_deck_id
+          JOIN card_templates AS ct ON ct.template_deck_id = dt.id
+         WHERE sd.user_id = ? AND sd.archived_at IS NULL
+         ORDER BY dt.sort_order ASC, dt.id ASC, ct.sort_order ASC, ct.id ASC
+    """, (user_id,)).fetchall()
+    expected = {}
+    for card_id, back_column in rows:
+        if not isinstance(card_id, str) or not card_id:
+            raise ValueError("raw gloss row has no stable card id")
+        if card_id in expected:
+            raise ValueError(f"duplicate raw gloss row: {card_id}")
+        expected[card_id] = _independent_gloss_from_raw(back_column)
+    return expected
+
+
 def _validate_independent_formulas(decoded_cards, expected_by_id):
     """Reject any decoded formula that differs from the raw-row oracle."""
     if len(decoded_cards) != len(expected_by_id):
@@ -208,6 +244,34 @@ def _validate_independent_formulas(decoded_cards, expected_by_id):
     if missing:
         raise ValueError(f"formula oracle rows were not decoded: {len(missing)}")
     return len(decoded_cards), nonempty, len(decoded_cards) - nonempty
+
+
+def _validate_independent_glosses(decoded_cards, expected_by_id):
+    """Reject any decoded gloss that differs from raw gloss-or-sense data."""
+    if len(decoded_cards) != len(expected_by_id):
+        raise ValueError(
+            f"gloss cardinality mismatch: decoded={len(decoded_cards)} "
+            f"raw={len(expected_by_id)}")
+    seen = set()
+    nonempty = 0
+    for ordinal, card in enumerate(decoded_cards):
+        card_id = card.get("id") if isinstance(card, dict) else None
+        if not isinstance(card_id, str) or card_id not in expected_by_id:
+            raise ValueError(f"gloss card {ordinal} has no raw-row oracle")
+        if card_id in seen:
+            raise ValueError(f"duplicate decoded gloss card: {card_id}")
+        seen.add(card_id)
+        expected = expected_by_id[card_id]
+        actual = card.get("gloss")
+        if actual != expected:
+            raise ValueError(
+                f"gloss mismatch at ordinal {ordinal} card {card_id}: "
+                f"got {actual!r}, expected {expected!r}")
+        nonempty += bool(actual)
+    missing = set(expected_by_id).difference(seen)
+    if missing:
+        raise ValueError(f"gloss oracle rows were not decoded: {len(missing)}")
+    return len(decoded_cards), nonempty
 
 
 def _parse_flash_payloads(arguments_path, build_directory):
@@ -817,6 +881,7 @@ def run_live_database_sweep(database):
         user_id = select_user(connection)
         decks, source_cards = load_source(connection, user_id)
         formula_oracle = _load_live_formula_oracle(connection, user_id)
+        gloss_oracle = _load_live_gloss_oracle(connection, user_id)
     finally:
         connection.close()
 
@@ -848,16 +913,25 @@ def run_live_database_sweep(database):
         _validate_independent_formulas(decoded_cards, formula_oracle))
     T.eq((formula_checks, formula_nonempty, formula_empty), (9956, 9196, 760),
          "raw DB oracle checks every live formula and its exact occupancy")
+    gloss_checks, gloss_nonempty = _validate_independent_glosses(
+        decoded_cards, gloss_oracle)
+    T.eq((gloss_checks, gloss_nonempty), (9956, 9956),
+         "every live decoded card has its raw explicit-or-first-sense gloss")
 
     mutated = copy.deepcopy(ordered)
     for card in mutated:
         card["composition"] = "BROKEN"
+        card["gloss"] = ""
     mutated_manifest = verify_catalog(encode_catalog(decks, mutated, 0x770000))
     mutated_cards = [envelope["card"] for envelope in mutated_manifest.cards]
     T.raises_matching(
         ValueError, "formula mismatch",
         lambda: _validate_independent_formulas(mutated_cards, formula_oracle),
         "raw DB oracle rejects a production-output mutation to every formula")
+    T.raises_matching(
+        ValueError, "gloss mismatch",
+        lambda: _validate_independent_glosses(mutated_cards, gloss_oracle),
+        "raw DB oracle rejects a production-output mutation to every gloss")
 
     deck_counts = ",".join(
         f"{deck['type']}:{deck['level']}={deck['card_count']}"
@@ -867,7 +941,8 @@ def run_live_database_sweep(database):
     print(f"LIVE: decks={manifest.deck_count} cards={manifest.card_count} "
           f"blocks={manifest.block_count} bytes={manifest.used_size} "
           f"formula_checks={formula_checks} formula_nonempty={formula_nonempty} "
-          f"formula_empty={formula_empty} deck_counts={deck_counts} maxima={maxima}")
+          f"formula_empty={formula_empty} gloss_checks={gloss_checks} "
+          f"gloss_nonempty={gloss_nonempty} deck_counts={deck_counts} maxima={maxima}")
 
 
 def test_live_database_sweep():

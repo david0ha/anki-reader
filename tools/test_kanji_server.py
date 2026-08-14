@@ -401,6 +401,41 @@ def test_project_card_content_retains_the_full_catalog_record():
        "a missing principle remains empty")
 
 
+def test_project_card_content_falls_back_to_the_first_valid_sense():
+    source = {
+        "id": "missing-gloss", "front": "会", "tags": ["N5"],
+        "back": json.dumps({
+            "kanji": "会",
+            "meaning": {
+                "gloss": None,
+                "senses": [None, "", "   ", "  만나다  ", "대면하다"],
+            },
+        }, ensure_ascii=False),
+        "hint": json.dumps({}, ensure_ascii=False),
+    }
+
+    content = project_card_content(source)
+
+    eq(content["gloss"], "만나다",
+       "a missing short gloss uses the first nonempty normalized sense")
+
+    whitespace_gloss = dict(source, back=json.dumps({
+        "kanji": "会",
+        "meaning": {"gloss": " \t ", "senses": ["  만나다  ", "대면하다"]},
+    }, ensure_ascii=False))
+    eq(project_card_content(whitespace_gloss)["gloss"], "만나다",
+       "a whitespace-only gloss is empty and falls back to a normalized sense")
+    eq(project_card_content(whitespace_gloss)["senses"], ["만나다", "대면하다"],
+       "the projected sense list drops empty rows and surrounding whitespace")
+
+    explicit_gloss = dict(source, back=json.dumps({
+        "kanji": "会",
+        "meaning": {"gloss": "  모일 회\n", "senses": ["만나다"]},
+    }, ensure_ascii=False))
+    eq(project_card_content(explicit_gloss)["gloss"], "모일 회",
+       "a nonempty explicit gloss wins after surrounding whitespace is removed")
+
+
 def test_flatten_card_is_the_whole_projection():
     card = flatten_card(STUDY_CARD, now=NOW)
     eq(card["id"], STUDY_CARD["id"], "the id rides along for routing")
@@ -1138,6 +1173,7 @@ def main():
     test_card_parts_tolerate_a_missing_reading()
     test_safe_composition_filters_only_structural_self_references()
     test_project_card_content_retains_the_full_catalog_record()
+    test_project_card_content_falls_back_to_the_first_valid_sense()
     test_flatten_card_is_the_whole_projection()
     test_fsrs_unscheduled_is_minus_one_not_zero()
     test_preview_is_four_rendered_spans()
