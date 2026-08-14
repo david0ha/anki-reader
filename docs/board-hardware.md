@@ -115,8 +115,12 @@ idf.py catalog-flash
 same deterministic generator and registers the resulting image only for the
 `catalog` partition. `idf.py app-flash` updates firmware without updating the
 catalog. There is deliberately no generated or registered `study_state`
-image, so ordinary firmware/catalog flashing does not reset local ratings;
-`idf.py erase-flash` still erases the entire device.
+image, so ordinary firmware/catalog flashing physically leaves those bytes
+untouched. App-only flashing also preserves the catalog and therefore its
+usable progress. After a catalog update, records replay only when the stored
+catalog ID matches the active catalog; an ID change starts fresh progress
+without erasing the old state bytes. `idf.py erase-flash` still erases the
+entire device.
 
 Rating persistence uses two 256 KiB append-journal banks. A normal grade
 programs one verified 20-byte record without an erase. A torn tail is ignored

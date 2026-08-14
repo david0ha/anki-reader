@@ -72,9 +72,12 @@ per-deck SHA-256 order and balanced round-robin traversal. Generate without flas
 
 A normal `idf.py flash` (and `tools/flash.sh`) writes the application and generated `catalog`
 partition. `idf.py catalog-flash` updates only the catalog. `idf.py app-flash` updates only the
-application and preserves both the existing catalog and the mutable `study_state` partition.
-There is no generated state image, so local progress survives normal firmware/catalog updates;
-`idf.py erase-flash` is the operation that erases it.
+application, leaving both the existing catalog and its usable local progress unchanged. Normal and
+catalog-only flashing also leave the physical `study_state` bytes untouched because there is no
+generated state image. Replay is catalog-specific, however: state is used only when its catalog ID
+matches the active catalog. Changing the database content, selected user, seed, or projected card
+content can produce a new catalog ID and intentionally starts fresh progress even though the old
+state bytes remain in flash. `idf.py erase-flash` physically erases them.
 
 Offline ratings persist the current position, grade, repetitions, and lapses. They do not upload
 or calculate trusted FSRS due dates: the board has no battery-backed wall clock, so local v1

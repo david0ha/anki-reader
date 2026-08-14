@@ -105,9 +105,12 @@ idf.py -DKANJI_CATALOG_DB=/absolute/path/to/kanjis-backend.sqlite3 \
 Omit the user-id definition to select automatically. `idf.py catalog_image` writes only the local
 build artifact `build/kanji-catalog.bin`; it does not touch hardware. A normal `idf.py flash`
 generates and writes the application plus `catalog`. `idf.py catalog-flash` writes only `catalog`,
-while `idf.py app-flash` writes only the application and preserves both the existing catalog and
-`study_state`. No command generates a state image. `idf.py erase-flash` is intentionally different:
-it erases the entire device, including local ratings.
+while `idf.py app-flash` writes only the application and therefore preserves the existing catalog
+and its usable local progress. No command generates a state image, so normal and catalog-only
+flashing physically preserve the `study_state` bytes. Those records replay only when the state
+catalog ID matches the active catalog; changing the database content, selected user, seed, or
+projected card content can produce a new ID and intentionally starts fresh progress. `idf.py
+erase-flash` is intentionally different: it erases the entire device, including local ratings.
 
 Generated catalog images contain source card content, are untracked local artifacts, and must not
 be committed or redistributed without a separate rights review.
@@ -191,7 +194,7 @@ idf.py build                     # build
 idf.py catalog_image             # generate/verify the offline catalog artifact
 idf.py catalog-flash             # update only the catalog partition
 idf.py -p <PORT> flash monitor   # flash + monitor
-idf.py app-flash                 # firmware only; preserve catalog + study_state
+idf.py app-flash                 # firmware only; preserve catalog + usable progress
 idf.py fullclean                 # clean the build cache
 idf.py size                      # memory usage
 idf.py add-dependency "<comp>"   # add a component

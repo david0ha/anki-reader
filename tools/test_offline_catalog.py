@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import os
+import shlex
 import sqlite3
 import struct
 import subprocess
@@ -115,6 +116,166 @@ def load_partitions(path):
             })
             cursor = offset_value + size_value
     return partitions
+
+
+def _oracle_json_object(column):
+    """Decode one raw DB JSON column without using the production projector."""
+    if not isinstance(column, str):
+        return {}
+    try:
+        value = json.loads(column)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _independent_formula_from_raw(front, back_column, hint_column):
+    """Derive the documented safe equation directly from a raw database row.
+
+    This is deliberately test-local.  It does not call raw_card_parts(),
+    safe_composition(), project_card_content(), or consume their projected
+    output, so a production formula mutation cannot redefine the expectation.
+    """
+    back = _oracle_json_object(back_column)
+    hint = _oracle_json_object(hint_column)
+    target = back.get("kanji") if isinstance(back.get("kanji"), str) else ""
+    if not target:
+        target = front if isinstance(front, str) else ""
+    if not target:
+        return ""
+
+    shapes = hint.get("shapes")
+    glyphs = []
+    if isinstance(shapes, list):
+        for shape in shapes:
+            if not isinstance(shape, dict):
+                continue
+            glyph = shape.get("kanji")
+            if isinstance(glyph, str) and glyph:
+                glyphs.append(glyph)
+    if len(target) == 1:
+        selected = [glyph for glyph in glyphs if glyph != target]
+    else:
+        selected = [glyph for glyph in glyphs if glyph in target]
+    left = " + ".join(selected)
+    return f"{left} = {target}" if left else ""
+
+
+def _load_live_formula_oracle(connection, user_id):
+    """Load raw reachable card rows and derive formula expectations locally."""
+    rows = connection.execute("""
+        SELECT ct.id, ct.front, ct.back, ct.hint
+          FROM study_decks AS sd
+          JOIN deck_templates AS dt ON dt.id = sd.template_deck_id
+          JOIN card_templates AS ct ON ct.template_deck_id = dt.id
+         WHERE sd.user_id = ? AND sd.archived_at IS NULL
+         ORDER BY dt.sort_order ASC, dt.id ASC, ct.sort_order ASC, ct.id ASC
+    """, (user_id,)).fetchall()
+    expected = {}
+    for card_id, front, back_column, hint_column in rows:
+        if not isinstance(card_id, str) or not card_id:
+            raise ValueError("raw formula row has no stable card id")
+        if card_id in expected:
+            raise ValueError(f"duplicate raw formula row: {card_id}")
+        expected[card_id] = _independent_formula_from_raw(
+            front, back_column, hint_column)
+    return expected
+
+
+def _validate_independent_formulas(decoded_cards, expected_by_id):
+    """Reject any decoded formula that differs from the raw-row oracle."""
+    if len(decoded_cards) != len(expected_by_id):
+        raise ValueError(
+            f"formula cardinality mismatch: decoded={len(decoded_cards)} "
+            f"raw={len(expected_by_id)}")
+    seen = set()
+    nonempty = 0
+    for ordinal, card in enumerate(decoded_cards):
+        card_id = card.get("id") if isinstance(card, dict) else None
+        if not isinstance(card_id, str) or card_id not in expected_by_id:
+            raise ValueError(f"formula card {ordinal} has no raw-row oracle")
+        if card_id in seen:
+            raise ValueError(f"duplicate decoded formula card: {card_id}")
+        seen.add(card_id)
+        expected = expected_by_id[card_id]
+        actual = card.get("composition")
+        if actual != expected:
+            raise ValueError(
+                f"formula mismatch at ordinal {ordinal} card {card_id}: "
+                f"got {actual!r}, expected {expected!r}")
+        nonempty += bool(expected)
+    missing = set(expected_by_id).difference(seen)
+    if missing:
+        raise ValueError(f"formula oracle rows were not decoded: {len(missing)}")
+    return len(decoded_cards), nonempty, len(decoded_cards) - nonempty
+
+
+def _parse_flash_payloads(arguments_path, build_directory):
+    """Parse and stat every offset/file row in an ESP-IDF flash-args file."""
+    payloads = []
+    offsets = set()
+    with open(arguments_path, encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            fields = shlex.split(line, comments=True)
+            if not fields or fields[0].startswith("--"):
+                continue
+            if len(fields) != 2:
+                raise ValueError(
+                    f"{arguments_path}:{line_number}: expected offset and file")
+            try:
+                offset = int(fields[0], 0)
+            except ValueError:
+                raise ValueError(
+                    f"{arguments_path}:{line_number}: invalid offset {fields[0]!r}") from None
+            if offset in offsets:
+                raise ValueError(
+                    f"{arguments_path}:{line_number}: duplicate offset 0x{offset:x}")
+            offsets.add(offset)
+            filename = os.path.normpath(fields[1])
+            payload_path = (filename if os.path.isabs(filename)
+                            else os.path.join(build_directory, filename))
+            size = os.path.getsize(payload_path)
+            end = offset + size
+            if offset < 0 or size <= 0 or end <= offset or end > 0x1000000:
+                raise ValueError(
+                    f"{filename}: invalid flash interval [0x{offset:x},0x{end:x})")
+            payloads.append({
+                "offset": offset,
+                "end": end,
+                "size": size,
+                "file": filename,
+            })
+    if not payloads:
+        raise ValueError(f"{arguments_path}: contains no flash payloads")
+    return payloads
+
+
+def _assert_flash_intervals_avoid(payloads, protected_ranges, context):
+    for payload in payloads:
+        for start, end, name in protected_ranges:
+            if payload["offset"] < end and start < payload["end"]:
+                raise ValueError(
+                    f"{context} payload {payload['file']} "
+                    f"[0x{payload['offset']:x},0x{payload['end']:x}) overlaps "
+                    f"{name} [0x{start:x},0x{end:x})")
+
+
+def _assert_flash_payloads_disjoint(payloads, context):
+    ordered = sorted(payloads, key=lambda payload: payload["offset"])
+    for left, right in zip(ordered, ordered[1:]):
+        if left["end"] > right["offset"]:
+            raise ValueError(
+                f"{context} payload {left['file']} "
+                f"[0x{left['offset']:x},0x{left['end']:x}) overlaps "
+                f"{right['file']} [0x{right['offset']:x},0x{right['end']:x})")
+
+
+def _assert_flash_payload_fits(payload, start, end, region, context):
+    if payload["offset"] < start or payload["end"] > end:
+        raise ValueError(
+            f"{context} payload {payload['file']} "
+            f"[0x{payload['offset']:x},0x{payload['end']:x}) escapes "
+            f"{region} [0x{start:x},0x{end:x})")
 
 
 def source_card(card_id, front, level="N5"):
@@ -284,6 +445,41 @@ def test_fixture_projection_and_format():
                  "fsrs", "user_id", "study_card_id", "due_at", "tags"}
     T.check(not any(forbidden.intersection(card["card"]) for card in manifest.cards),
             "media, user, session, and FSRS keys are excluded")
+
+
+def test_independent_formula_oracle_rules():
+    cases = (
+        (
+            "財",
+            json.dumps({"kanji": "財"}, ensure_ascii=False),
+            json.dumps({"shapes": [
+                {"kanji": "財"}, {"kanji": "貝"}, {"kanji": "才"},
+            ]}, ensure_ascii=False),
+            "貝 + 才 = 財",
+            "raw-row oracle removes a single-kanji self reference",
+        ),
+        (
+            "勉強",
+            json.dumps({"kanji": "勉強"}, ensure_ascii=False),
+            json.dumps({"shapes": [
+                {"kanji": "勉"}, {"kanji": "強"}, {"kanji": "免"},
+                {"kanji": "力"}, {"kanji": "弓"},
+            ]}, ensure_ascii=False),
+            "勉 + 強 = 勉強",
+            "raw-row oracle excludes compound sub-radicals",
+        ),
+        (
+            "懲らしめる",
+            json.dumps({"kanji": "懲"}, ensure_ascii=False),
+            json.dumps({"shapes": [
+                {"kanji": "懲"}, {"kanji": "徴"}, {"kanji": "心"},
+            ]}, ensure_ascii=False),
+            "徴 + 心 = 懲",
+            "raw-row oracle uses the constituent kanji for okurigana",
+        ),
+    )
+    for front, back, hint, expected, message in cases:
+        T.eq(_independent_formula_from_raw(front, back, hint), expected, message)
 
 
 def rebuilt_noncanonical_image(image):
@@ -559,6 +755,7 @@ def run_live_database_sweep(database):
         connection.execute("BEGIN")
         user_id = select_user(connection)
         decks, source_cards = load_source(connection, user_id)
+        formula_oracle = _load_live_formula_oracle(connection, user_id)
     finally:
         connection.close()
 
@@ -585,8 +782,21 @@ def run_live_database_sweep(database):
         if not expected["level"]:
             expected["level"] = decks[source_card["deck_index"]]["level"]
         T.eq(decoded, expected, f"live JSON envelope {ordinal} round-trips exactly")
-        T.eq(decoded["composition"], source_card["composition"],
-             f"live formula {ordinal} round-trips exactly")
+
+    formula_checks, formula_nonempty, formula_empty = (
+        _validate_independent_formulas(decoded_cards, formula_oracle))
+    T.eq((formula_checks, formula_nonempty, formula_empty), (9956, 9196, 760),
+         "raw DB oracle checks every live formula and its exact occupancy")
+
+    mutated = copy.deepcopy(ordered)
+    for card in mutated:
+        card["composition"] = "BROKEN"
+    mutated_manifest = verify_catalog(encode_catalog(decks, mutated, 0x770000))
+    mutated_cards = [envelope["card"] for envelope in mutated_manifest.cards]
+    T.raises_matching(
+        ValueError, "formula mismatch",
+        lambda: _validate_independent_formulas(mutated_cards, formula_oracle),
+        "raw DB oracle rejects a production-output mutation to every formula")
 
     deck_counts = ",".join(
         f"{deck['type']}:{deck['level']}={deck['card_count']}"
@@ -595,7 +805,8 @@ def run_live_database_sweep(database):
                         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     print(f"LIVE: decks={manifest.deck_count} cards={manifest.card_count} "
           f"blocks={manifest.block_count} bytes={manifest.used_size} "
-          f"formulas={len(decoded_cards)} deck_counts={deck_counts} maxima={maxima}")
+          f"formula_checks={formula_checks} formula_nonempty={formula_nonempty} "
+          f"formula_empty={formula_empty} deck_counts={deck_counts} maxima={maxima}")
 
 
 def test_live_database_sweep():
@@ -606,8 +817,92 @@ def test_live_database_sweep():
     run_live_database_sweep(database)
 
 
+def test_flash_interval_mutations():
+    with tempfile.TemporaryDirectory() as tmp:
+        state_payload = os.path.join(tmp, "rogue-state.bin")
+        with open(state_payload, "wb") as output:
+            output.write(bytes(0x1000))
+        state_args = os.path.join(tmp, "state-flash_args")
+        with open(state_args, "w", encoding="utf-8") as output:
+            output.write("--flash_mode dio\n0xF81000 rogue-state.bin\n")
+        state_entries = _parse_flash_payloads(state_args, tmp)
+        T.eq([(entry["offset"], entry["end"]) for entry in state_entries],
+             [(0xF81000, 0xF82000)],
+             "flash parser stats a mid-state payload as a checked interval")
+        T.raises_matching(
+            ValueError, "study_state",
+            lambda: _assert_flash_intervals_avoid(
+                state_entries, ((0xF80000, 0x1000000, "study_state"),),
+                "normal flash"),
+            "mid-partition state payload mutation is rejected")
+
+        catalog_payload = os.path.join(tmp, "rogue-catalog.bin")
+        with open(catalog_payload, "wb") as output:
+            output.write(bytes(0x2000))
+        catalog_args = os.path.join(tmp, "catalog-flash_args")
+        with open(catalog_args, "w", encoding="utf-8") as output:
+            output.write("--flash_mode dio\n0x820000 rogue-catalog.bin\n")
+        catalog_entries = _parse_flash_payloads(catalog_args, tmp)
+        T.eq([(entry["offset"], entry["end"]) for entry in catalog_entries],
+             [(0x820000, 0x822000)],
+             "flash parser stats a mid-catalog payload as a checked interval")
+        T.raises_matching(
+            ValueError, "catalog",
+            lambda: _assert_flash_intervals_avoid(
+                catalog_entries, ((0x810000, 0xF80000, "catalog"),),
+                "app-flash"),
+            "mid-partition catalog payload mutation is rejected for app-flash")
+
+
 def assert_idf_flash_metadata(build_directory):
     build_directory = os.path.abspath(build_directory)
+    normal_payloads = _parse_flash_payloads(
+        os.path.join(build_directory, "flash_args"), build_directory)
+    app_payloads = _parse_flash_payloads(
+        os.path.join(build_directory, "app-flash_args"), build_directory)
+    _assert_flash_payloads_disjoint(normal_payloads, "normal flash")
+    _assert_flash_payloads_disjoint(app_payloads, "app-flash")
+    _assert_flash_intervals_avoid(
+        normal_payloads, ((0xF80000, 0x1000000, "study_state"),),
+        "normal flash")
+    _assert_flash_intervals_avoid(
+        app_payloads,
+        ((0x810000, 0xF80000, "catalog"),
+         (0xF80000, 0x1000000, "study_state")),
+        "app-flash")
+
+    expected_normal = {
+        0x0: "bootloader/bootloader.bin",
+        0x8000: "partition_table/partition-table.bin",
+        0x10000: "obsidian_board.bin",
+        0x810000: "kanji-catalog.bin",
+    }
+    expected_app = {0x10000: "obsidian_board.bin"}
+    normal_map = {payload["offset"]: payload["file"] for payload in normal_payloads}
+    app_map = {payload["offset"]: payload["file"] for payload in app_payloads}
+    T.eq(normal_map, expected_normal,
+         "normal flash has only bootloader, partition table, app, and catalog")
+    T.eq(app_map, expected_app, "app-flash has only the application payload")
+    if normal_map != expected_normal or app_map != expected_app:
+        return
+
+    normal_by_offset = {payload["offset"]: payload for payload in normal_payloads}
+    app_by_offset = {payload["offset"]: payload for payload in app_payloads}
+    _assert_flash_payload_fits(
+        normal_by_offset[0x0], 0x0, 0x8000, "bootloader region", "normal flash")
+    _assert_flash_payload_fits(
+        normal_by_offset[0x8000], 0x8000, 0x9000, "partition-table region",
+        "normal flash")
+    _assert_flash_payload_fits(
+        normal_by_offset[0x10000], 0x10000, 0x810000, "factory app partition",
+        "normal flash")
+    _assert_flash_payload_fits(
+        normal_by_offset[0x810000], 0x810000, 0xF80000, "catalog partition",
+        "normal flash")
+    _assert_flash_payload_fits(
+        app_by_offset[0x10000], 0x10000, 0x810000, "factory app partition",
+        "app-flash")
+
     metadata_path = os.path.join(build_directory, "flasher_args.json")
     with open(metadata_path, encoding="utf-8") as source:
         metadata = json.load(source)
@@ -616,35 +911,32 @@ def assert_idf_flash_metadata(build_directory):
     if not isinstance(flash_files, dict):
         return
 
-    T.eq(flash_files.get("0x810000"), "kanji-catalog.bin",
-         "normal flash writes the catalog at its exact partition offset")
-    T.check("0xf80000" not in {offset.lower() for offset in flash_files},
-            "normal flash has no study_state payload at 0xF80000")
-    T.check(not any("study_state" in str(filename).lower()
-                    for filename in flash_files.values()),
-            "normal flash registers no study_state image by name")
+    try:
+        metadata_map = {
+            int(offset, 0): os.path.normpath(filename)
+            for offset, filename in flash_files.items()
+        }
+    except (TypeError, ValueError):
+        metadata_map = None
+    T.eq(metadata_map, expected_normal,
+         "flasher JSON matches every checked normal flash interval")
     T.eq(metadata.get("catalog"), {
         "offset": "0x810000", "file": "kanji-catalog.bin", "encrypted": "false",
     }, "catalog flash metadata is exact")
 
-    app_file = metadata.get("app", {}).get("file")
-    catalog_file = metadata.get("catalog", {}).get("file")
-    app_size = os.path.getsize(os.path.join(build_directory, app_file))
-    catalog_size = os.path.getsize(os.path.join(build_directory, catalog_file))
+    app_size = normal_by_offset[0x10000]["size"]
+    catalog_size = normal_by_offset[0x810000]["size"]
     T.check(app_size <= 0x780000,
             f"application 0x{app_size:x} leaves at least 512 KiB in its slot")
     T.check(catalog_size <= 0x770000,
             f"catalog 0x{catalog_size:x} fits its exact partition")
-
-    app_flash_path = os.path.join(build_directory, "app-flash_args")
-    with open(app_flash_path, encoding="utf-8") as source:
-        app_flash = source.read().lower()
-    T.check("0x810000" not in app_flash and "kanji-catalog.bin" not in app_flash,
-            "app-flash preserves the existing catalog")
-    T.check("0xf80000" not in app_flash and "study_state" not in app_flash,
-            "app-flash preserves study_state")
-    print(f"IDF flash metadata: app=0x{app_size:x} catalog=0x{catalog_size:x}@0x810000 "
-          "study_state=unregistered app_flash=catalog+study_state-preserved")
+    T.eq(app_by_offset[0x10000]["size"], app_size,
+         "app-flash and normal flash use the same application image")
+    print(
+        f"IDF flash metadata: app=[0x10000,0x{0x10000 + app_size:x}) "
+        f"catalog=[0x810000,0x{0x810000 + catalog_size:x}) "
+        "state=[0xf80000,0x1000000) untouched; "
+        "app-flash=[0x10000,app-end) only")
 
 
 def test_idf_flash_metadata():
@@ -659,12 +951,14 @@ def main():
     test_source_selection()
     test_balanced_order()
     test_fixture_projection_and_format()
+    test_independent_formula_oracle_rules()
     test_noncanonical_json_rejected()
     test_boundaries_and_rejection()
     test_full_model_maxima_round_trip()
     test_cli_atomic_fixture_write()
     test_partition_layout_and_image_integration()
     test_live_database_sweep()
+    test_flash_interval_mutations()
     test_idf_flash_metadata()
     if T.failures:
         print(f"{T.count} checks, {T.failures} failures", file=sys.stderr)

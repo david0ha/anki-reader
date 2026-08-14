@@ -22,8 +22,10 @@ idf.py build
 The database path is cached as `KANJI_CATALOG_DB`. `KANJI_CATALOG_USER_ID` optionally chooses a
 source user; otherwise coverage chooses one deterministically, and `KANJI_CATALOG_SEED` (default
 `0`) fixes the repeatable card order. `idf.py app-flash` is the firmware-only recovery path: it
-preserves both the catalog and local `study_state`. A normal `idf.py flash` refreshes the catalog
-but also preserves `study_state`.
+preserves the existing catalog and its usable local progress. A normal `idf.py flash` refreshes the
+catalog while physically leaving `study_state` untouched. That state replays only when its catalog
+ID matches the newly flashed catalog; a changed database, source user, seed, or card content can
+change the ID and deliberately starts fresh progress without erasing the old state bytes.
 
 If `flash.sh` says no port appeared, find out **which** of the two failures it is before touching
 anything, because they have nothing in common:

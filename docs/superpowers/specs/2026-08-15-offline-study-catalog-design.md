@@ -166,7 +166,9 @@ final fallback and the device remains operable.
 `study_state` is split into two 256 KiB banks. Each bank has a versioned header
 containing generation, catalog id, and header CRC. A bank becomes eligible only
 after its commit marker is written last. At boot the newest valid committed
-bank is selected.
+bank whose catalog id matches the active catalog is selected. Flashing a new
+catalog does not physically overwrite state, but an id change deliberately
+starts fresh progress rather than replaying ordinals against different content.
 
 Ratings append fixed-size little-endian records containing sequence number,
 card ordinal, next ordinal, grade, repetitions, lapses, flags, and CRC32. The

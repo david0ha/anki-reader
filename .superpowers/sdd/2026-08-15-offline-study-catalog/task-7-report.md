@@ -125,23 +125,27 @@ IDF_BUILD_DIR=/tmp/offline-task7-idf-green.gfgFgA \
 ```
 
 It failed with `NameError: name 'assert_idf_flash_metadata' is not defined`
-(`/tmp/task7-flash-metadata-red.log`). The GREEN helper parses generated
-`flasher_args.json` and `app-flash_args` as data, checks exact catalog
-registration, rejects any state payload, and enforces both binary ceilings.
+(`/tmp/task7-flash-metadata-red.log`). That first GREEN checked exact offset and
+filename tokens. The post-commit review correctly found that it did not reject
+a payload starting inside a protected partition; the interval-based fix and
+mutation evidence are recorded in the fix-round section below.
 
 ## Full live-database proof
 
 The `KANJIS_DB` mode opens the supplied database read-only, selects the source
 user using the production deterministic rule, generates an in-memory image,
 runs the independent decoder/verifier, and compares every decoded card object
-and every composition formula with the projected source in ordinal order. An
+with the projected source in ordinal order. Formula semantics are checked
+separately against a test-local oracle that parses raw `front`, `back.kanji`,
+and `hint.shapes` DB values without calling the production projection. An
 unset variable prints a clear skip line; an explicitly supplied missing or
 mismatched database exits nonzero.
 
 Observed GREEN against the required database:
 
 ```text
-LIVE: decks=10 cards=9956 blocks=156 bytes=3441578 formulas=9956
+LIVE: decks=10 cards=9956 blocks=156 bytes=3441578 formula_checks=9956
+formula_nonempty=9196 formula_empty=760
 deck_counts=kanji:N1=135,kanji:N2=245,kanji:N3=324,kanji:N4=181,kanji:N5=104,
 vocab:N1=3205,vocab:N2=2561,vocab:N3=1516,vocab:N4=1008,vocab:N5=677
 maxima={"composition_bytes":63,"compressed_block_bytes":23618,
@@ -151,11 +155,11 @@ maxima={"composition_bytes":63,"compressed_block_bytes":23618,
 "part_glyph_bytes":30,"part_meaning_bytes":122,"part_reading_bytes":90,
 "parts":6,"raw_block_bytes":74105,"reading_bytes":66,
 "sense_bytes":140,"senses":5}
-ok: 19996 checks
+ok: 10048 checks
 ```
 
 The last count includes the ESP flash-metadata assertions. Without an
-`IDF_BUILD_DIR` it is `19987` checks.
+`IDF_BUILD_DIR` it is `10040` checks.
 
 ## Clean host, component, and simulator verification
 
@@ -169,15 +173,15 @@ python3 tools/test_mock_kanji_server.py
 python3 tools/test_offline_catalog.py
   SKIP: live catalog decoder sweep (set KANJIS_DB)
   SKIP: ESP-IDF flash metadata check (set IDF_BUILD_DIR)
-  ok: 71 checks
+  ok: 78 checks
 KANJIS_DB=... IDF_BUILD_DIR=... python3 tools/test_offline_catalog.py
-  ok: 19996 checks
+  ok: 10048 checks
 cmake -S components/vault_core/test/host -B /tmp/offline-final-host.mKgesB
 cmake --build /tmp/offline-final-host.mKgesB -j8
 ctest --test-dir /tmp/offline-final-host.mKgesB --output-on-failure
   9/9 passed, 0 failed
 sh components/user_app/test/run.sh
-  source guard / study source / startup delivery: 0 failures
+  source guard / study source / task lifecycle / startup delivery: 0 failures
 sh components/provisioning/test/run.sh
   40 tests, 87 checks, 0 failures
 cmake -S sim -B /tmp/offline-final-sim.gHv1NL
@@ -229,10 +233,11 @@ catalog:     0x810000 + 0x770000 = 0xF80000 (readonly)
 study_state: 0xF80000 + 0x080000 = 0x1000000
 ```
 
-Generated normal-flash metadata contains `0x810000 kanji-catalog.bin` and no
-`0xF80000`/`study_state` payload. Generated `app-flash_args` contains neither
-catalog nor state, proving those partitions are preserved by app-only flashing.
-No hardware was flashed.
+The post-review checker parses and stats every payload in generated `flash_args`
+and `app-flash_args`, validates their half-open intervals, enforces the exact
+bootloader/partition/app/catalog and app-only maps, and proves that normal flash
+does not overlap `[0xF80000,0x1000000)` while app-flash overlaps neither catalog
+nor state. No hardware was flashed.
 
 ## Deferred-minor and documentation triage
 
@@ -247,18 +252,19 @@ No hardware was flashed.
 - Provisioning comments: empty URL now says offline catalog, with demo only for
   corrupt/missing catalog fallback, in both header and implementation comment.
 - Operator docs now cover catalog inputs and deterministic selection, normal
-  versus catalog-only/app-only flashing, state preservation, immediate offline
-  boot, KEY2 long-press portal entry, demo fallback, deliberate lack of trusted
-  local wall-clock FSRS scheduling, and rights review for generated artifacts.
+  versus catalog-only/app-only flashing, physical state preservation versus
+  catalog-ID-compatible replay, immediate offline boot, KEY2 long-press portal
+  entry, demo fallback, deliberate lack of trusted local wall-clock FSRS
+  scheduling, and rights review for generated artifacts.
 
 ## Review findings and concerns
 
 An independent whole-branch pre-review found no catalog bounds, zlib, journal,
-or partition defect. Its Task 7 flash-metadata acceptance gap is closed here.
-Its two Important `user_app` findings (unchecked startup resource creation and
-production arbitration coverage) are owned by the separate runtime review-fix
-lane and are not silently altered in this commit. A fresh post-commit Task 7
-review is parent-coordinated against the resulting commit.
+or partition defect. A later Task 7 review found the circular formula oracle,
+point-offset flash checks, and overbroad progress wording corrected in the fix
+round below. Runtime findings remain owned by the separate runtime lane. A
+fresh review is parent-coordinated against the fix-round commit; this report
+does not self-declare that review clean.
 
 The only remaining Task 7 environment concern is the protected
 `managed_components` symlink incompatibility with component-manager
@@ -266,3 +272,51 @@ The only remaining Task 7 environment concern is the protected
 the explicit instruction not to touch that workspace-owned symlink.
 
 No hardware-in-the-loop claim is made, and no physical flash command was run.
+
+## Post-commit Important-finding fix round
+
+The focused RED log `/tmp/task7-fixround-mutations-red.log` contains seven
+failures before implementation: the single/compound/okurigana raw-row oracle
+cases had no result, parsed flash intervals were empty, and payloads at
+`0xF81000` (inside state) and `0x820000` (inside catalog) were accepted. The
+live integration RED `/tmp/task7-fixround-live-oracle-red.log` additionally
+showed `(0,0,0)` formula coverage and allowed every projected composition to be
+changed to `BROKEN`.
+
+GREEN now derives equations directly from raw DB columns, keyed by stable card
+id, then compares all decoded formulas. It deliberately re-encodes an image
+after changing every production-projected formula to `BROKEN` and requires the
+independent validator to reject it. The required database produced 9,956
+checks: 9,196 non-empty equations and 760 empty equations. Logs:
+`/tmp/task7-fixround-live-oracle-green.log` and
+`/tmp/task7-fixround-live-idf-final.log`.
+
+The flash helper now parses every offset/file row in both argument files,
+stats the payload, checks `[start,end)` arithmetic against 16 MiB, rejects
+payload-payload overlap, enforces the exact normal/app-only maps, and checks
+partition containment. The final generated intervals were:
+
+```text
+app:         [0x010000,0x5802B0)
+catalog:     [0x810000,0xB583AA)
+study_state: [0xF80000,0x1000000) untouched
+```
+
+A new external ESP-IDF 5.4.3 build at
+`/tmp/task7-fix-idf.nksv6s/build` reran reconfigure, partition-table,
+catalog_image, full build, and size successfully. The already-recorded
+`fullclean` limitation is unchanged, so the protected managed-components
+symlink was left intact and the empty external directory provided the clean
+equivalent. The final application was `0x5702B0` bytes (ceiling `0x780000`,
+spare `0x20FD50`); the catalog remained `0x3483AA` (ceiling `0x770000`, spare
+`0x427C56`). Exact endpoints remained factory `0x810000`, catalog `0xF80000`,
+and state/flash `0x1000000`. The build compiled both `catalog_store.c` and
+`catalog_store_core.c` and linked `libcatalog_store.a`.
+
+The clean fix-round matrix also passed Python 242/150/78 fixture checks, 10,040
+live checks without IDF metadata, vault-core 9/9, user_app and provisioning
+with zero failures, and a new simulator build. Logs use
+`/tmp/task7-fixround-*`. Documentation now states the precise guarantee:
+app-flash preserves the existing catalog and usable progress; full/catalog
+flash physically preserves state bytes, but replay occurs only when the active
+catalog ID is unchanged. No hardware was flashed.
