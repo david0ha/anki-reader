@@ -6,9 +6,10 @@
 > `obsidianboard.local`, so boards flashed before the rename are still reachable.
 
 A desk-sized Japanese vocabulary trainer. A 5.83" monochrome e-Paper panel on a Seeed EE04 carrier
-and a XIAO ESP32-S3 Plus shows one card from a [kanjis.ai](https://kanjis.ai) study session —
-headword, かな reading, Korean senses, examples — and takes your FSRS rating on three buttons.
-Reveal, rate, next card. No screen to unlock, no app to open, no notification.
+and a XIAO ESP32-S3 Plus boots directly into a 9,956-card offline JLPT catalog — headword, かな
+reading, Korean senses, and shape notes — and accepts four ratings on three buttons. A configured
+[kanjis.ai](https://kanjis.ai) proxy can take over when Wi-Fi is available. Reveal, rate, next card.
+No screen to unlock, no app to open, no notification.
 
 Five screens: **문제** (the headword alone), **정답** (the answer and the four-rating dock),
 **설명** (where the character comes from), **댓글**, and **FSRS** (what the scheduler is doing to
@@ -30,13 +31,15 @@ from the code that ships, and the run fails the build if any of them is wrong. S
 . ~/esp/v5.4.3/esp-idf/export.sh    # once per shell
 
 idf.py set-target esp32s3           # once per checkout
+idf.py -DKANJI_CATALOG_DB=/absolute/path/to/kanjis-backend.sqlite3 catalog_image
 idf.py build
-./tools/flash.sh                    # finds the port, flashes, monitors
+./tools/flash.sh                    # normal flash: firmware + offline catalog, then monitor
 ```
 
-Then join the `Kanjis Board-XXXX` Wi-Fi network the board raises, give it your Wi-Fi credentials
-and — optionally — a study URL. With no URL it shows a built-in demo card badged `DEMO`, so display
-bring-up works before any of the rest of this does.
+The first boot displays the restored offline card immediately and does not force Wi-Fi setup. Hold
+KEY2 for five seconds when you want the `Kanjis Board-XXXX` setup network, then give it Wi-Fi
+credentials and, optionally, a remote study URL. A missing or corrupt catalog uses the built-in
+card badged `DEMO` as the final fallback rather than leaving a blank board.
 
 Doing this for the **first** time on a given board, follow [docs/bring-up.md](docs/bring-up.md)
 instead: the three things most likely to be wrong on a first power-on all look like a blank screen,
@@ -58,6 +61,25 @@ Give the board that URL in the setup portal, or over the network once it is onli
 
 Anything that serves that JSON works; the device cannot tell the difference. The format is
 [documented and tested](docs/kanji-contract.md).
+
+### Offline catalog and local ratings
+
+`KANJI_CATALOG_DB` selects the read-only backend SQLite file. `KANJI_CATALOG_USER_ID` optionally
+selects one source user; without it, the exporter deterministically chooses the user with the most
+active card/deck coverage. `KANJI_CATALOG_SEED` defaults to `0` and deterministically fixes the
+per-deck SHA-256 order and balanced round-robin traversal. Generate without flashing via
+`idf.py catalog_image`.
+
+A normal `idf.py flash` (and `tools/flash.sh`) writes the application and generated `catalog`
+partition. `idf.py catalog-flash` updates only the catalog. `idf.py app-flash` updates only the
+application and preserves both the existing catalog and the mutable `study_state` partition.
+There is no generated state image, so local progress survives normal firmware/catalog updates;
+`idf.py erase-flash` is the operation that erases it.
+
+Offline ratings persist the current position, grade, repetitions, and lapses. They do not upload
+or calculate trusted FSRS due dates: the board has no battery-backed wall clock, so local v1
+deliberately advances the deterministic catalog sequence instead. Generated catalog images are
+local build artifacts and must not be committed or redistributed without a separate rights review.
 
 ## Controls
 
@@ -92,6 +114,8 @@ sh components/user_app/test/run.sh
 # 3) the reference producer, and the real kanjis.ai proxy
 python3 tools/test_mock_kanji_server.py
 python3 tools/test_kanji_server.py
+python3 tools/test_offline_catalog.py
+KANJIS_DB=/absolute/path/to/kanjis-backend.sqlite3 python3 tools/test_offline_catalog.py
 
 # 4) the real UI at 648x480 -> PNG, plus layout and glyph assertions
 cd sim && ./kanji_sim.sh

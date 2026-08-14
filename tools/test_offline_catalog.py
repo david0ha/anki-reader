@@ -227,6 +227,18 @@ def test_balanced_order():
     repeated = balanced_cards(copy.deepcopy(decks), 7)
     other = balanced_cards(copy.deepcopy(decks), 8)
     T.eq(first, repeated, "same seed gives the same order")
+    # These are literal SHA-256 results for the specified byte material, not
+    # values recomputed through the production key builder.  In particular,
+    # seed 7 is the eight little-endian bytes 07 00 00 00 00 00 00 00 and the
+    # two separators are single NUL bytes:
+    #
+    #   07000000000000000061006131 -> sha256 0f605ef4... -> a1
+    #   07000000000000000061006130 -> sha256 692f210e... -> a0
+    #   07000000000000000061006132 -> sha256 71ce94c5... -> a2
+    #   07000000000000000062006230 -> sha256 c0ba41a7... -> b0
+    #   07000000000000000062006231 -> sha256 edb11a8b... -> b1
+    T.eq([c["id"] for c in first], ["a1", "b0", "a0", "b1", "a2"],
+         "literal SHA-256 key material fixes per-deck order before interleave")
     T.eq([c["deck_index"] for c in first], [0, 1, 0, 1, 0],
          "non-empty decks are consumed round-robin")
     T.eq({c["id"] for c in first}, {c["id"] for c in other},
@@ -513,6 +525,136 @@ def test_partition_layout_and_image_integration():
                     "generated catalog image fits its partition")
 
 
+def _live_maxima(cards, manifest):
+    scalar_fields = (
+        "id", "front", "reading", "on_reading", "kun_reading", "level",
+        "gloss", "description", "hook_title", "hook_body", "composition",
+    )
+    maxima = {
+        f"{field}_bytes": max(len(card[field].encode("utf-8")) for card in cards)
+        for field in scalar_fields
+    }
+    maxima.update({
+        "senses": max(len(card["senses"]) for card in cards),
+        "sense_bytes": max(len(sense.encode("utf-8"))
+                           for card in cards for sense in card["senses"]),
+        "parts": max(len(card["parts"]) for card in cards),
+        "part_glyph_bytes": max(len(part["glyph"].encode("utf-8"))
+                                for card in cards for part in card["parts"]),
+        "part_meaning_bytes": max(len(part["meaning"].encode("utf-8"))
+                                  for card in cards for part in card["parts"]),
+        "part_reading_bytes": max(len(part["reading"].encode("utf-8"))
+                                  for card in cards for part in card["parts"]),
+        "raw_block_bytes": manifest.max_raw_block,
+        "compressed_block_bytes": manifest.max_compressed_block,
+    })
+    return maxima
+
+
+def run_live_database_sweep(database):
+    path = os.path.abspath(database)
+    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        user_id = select_user(connection)
+        decks, source_cards = load_source(connection, user_id)
+    finally:
+        connection.close()
+
+    unique_ids = {card["id"] for card in source_cards}
+    T.eq(len(decks), 10, "live source has exactly ten decks")
+    T.eq(len(source_cards), 9956, "live source has exactly 9,956 cards")
+    T.eq(len(unique_ids), 9956, "live source card ids are unique")
+    if len(decks) != 10 or len(source_cards) != 9956 or len(unique_ids) != 9956:
+        return
+
+    ordered = balanced_cards(decks, 0)
+    image = encode_catalog(decks, ordered, 0x770000)
+    manifest = verify_catalog(image)
+    T.eq((manifest.deck_count, manifest.card_count, manifest.block_count),
+         (10, 9956, 156), "live decoded catalog counts are exact")
+
+    decoded_cards = [envelope["card"] for envelope in manifest.cards]
+    for ordinal, (source_card, decoded) in enumerate(zip(ordered, decoded_cards)):
+        expected = {key: source_card[key] for key in (
+            "id", "front", "reading", "on_reading", "kun_reading", "level",
+            "gloss", "senses", "description", "hook_title", "hook_body",
+            "composition", "parts",
+        )}
+        if not expected["level"]:
+            expected["level"] = decks[source_card["deck_index"]]["level"]
+        T.eq(decoded, expected, f"live JSON envelope {ordinal} round-trips exactly")
+        T.eq(decoded["composition"], source_card["composition"],
+             f"live formula {ordinal} round-trips exactly")
+
+    deck_counts = ",".join(
+        f"{deck['type']}:{deck['level']}={deck['card_count']}"
+        for deck in manifest.decks)
+    maxima = json.dumps(_live_maxima(decoded_cards, manifest),
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    print(f"LIVE: decks={manifest.deck_count} cards={manifest.card_count} "
+          f"blocks={manifest.block_count} bytes={manifest.used_size} "
+          f"formulas={len(decoded_cards)} deck_counts={deck_counts} maxima={maxima}")
+
+
+def test_live_database_sweep():
+    database = os.environ.get("KANJIS_DB")
+    if not database:
+        print("SKIP: live catalog decoder sweep (set KANJIS_DB)")
+        return
+    run_live_database_sweep(database)
+
+
+def assert_idf_flash_metadata(build_directory):
+    build_directory = os.path.abspath(build_directory)
+    metadata_path = os.path.join(build_directory, "flasher_args.json")
+    with open(metadata_path, encoding="utf-8") as source:
+        metadata = json.load(source)
+    flash_files = metadata.get("flash_files")
+    T.check(isinstance(flash_files, dict), "ESP-IDF flash metadata has a file map")
+    if not isinstance(flash_files, dict):
+        return
+
+    T.eq(flash_files.get("0x810000"), "kanji-catalog.bin",
+         "normal flash writes the catalog at its exact partition offset")
+    T.check("0xf80000" not in {offset.lower() for offset in flash_files},
+            "normal flash has no study_state payload at 0xF80000")
+    T.check(not any("study_state" in str(filename).lower()
+                    for filename in flash_files.values()),
+            "normal flash registers no study_state image by name")
+    T.eq(metadata.get("catalog"), {
+        "offset": "0x810000", "file": "kanji-catalog.bin", "encrypted": "false",
+    }, "catalog flash metadata is exact")
+
+    app_file = metadata.get("app", {}).get("file")
+    catalog_file = metadata.get("catalog", {}).get("file")
+    app_size = os.path.getsize(os.path.join(build_directory, app_file))
+    catalog_size = os.path.getsize(os.path.join(build_directory, catalog_file))
+    T.check(app_size <= 0x780000,
+            f"application 0x{app_size:x} leaves at least 512 KiB in its slot")
+    T.check(catalog_size <= 0x770000,
+            f"catalog 0x{catalog_size:x} fits its exact partition")
+
+    app_flash_path = os.path.join(build_directory, "app-flash_args")
+    with open(app_flash_path, encoding="utf-8") as source:
+        app_flash = source.read().lower()
+    T.check("0x810000" not in app_flash and "kanji-catalog.bin" not in app_flash,
+            "app-flash preserves the existing catalog")
+    T.check("0xf80000" not in app_flash and "study_state" not in app_flash,
+            "app-flash preserves study_state")
+    print(f"IDF flash metadata: app=0x{app_size:x} catalog=0x{catalog_size:x}@0x810000 "
+          "study_state=unregistered app_flash=catalog+study_state-preserved")
+
+
+def test_idf_flash_metadata():
+    build_directory = os.environ.get("IDF_BUILD_DIR")
+    if not build_directory:
+        print("SKIP: ESP-IDF flash metadata check (set IDF_BUILD_DIR)")
+        return
+    assert_idf_flash_metadata(build_directory)
+
+
 def main():
     test_source_selection()
     test_balanced_order()
@@ -522,6 +664,8 @@ def main():
     test_full_model_maxima_round_trip()
     test_cli_atomic_fixture_write()
     test_partition_layout_and_image_integration()
+    test_live_database_sweep()
+    test_idf_flash_metadata()
     if T.failures:
         print(f"{T.count} checks, {T.failures} failures", file=sys.stderr)
         return 1

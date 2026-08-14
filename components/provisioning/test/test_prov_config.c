@@ -64,11 +64,12 @@ TEST(credentials_check_the_ssid_before_the_password)
  * URL it does not recognise is worse than one that fails at connect time with a
  * message the user can read in the log. */
 
-TEST(study_url_accepts_empty_as_the_demo_screen)
+TEST(study_url_accepts_empty_as_the_offline_catalog)
 {
     /* Not an oversight: an unconfigured board is a complete product that shows
-     * the built-in snapshot. Rejecting empty would force everyone to stand up a
-     * server before the display would boot into anything. */
+     * its offline catalog. Rejecting empty would force everyone to stand up a
+     * server before the display would boot into anything; the demo is only the
+     * corrupt/missing-catalog fallback. */
     CHECK(prov_validate_study_url("") == true);
     CHECK(prov_validate_study_url(NULL) == true);
 }

@@ -31,6 +31,13 @@ CONFIG_LV_FONT_MONTSERRAT_18=y
 # CONFIG_LV_FONT_MONTSERRAT_44 is not set
 CONFIG_LV_FONT_DEFAULT_MONTSERRAT_18=y
 
+# This firmware uses its own UI and no upstream LVGL example/demo entry point.
+# LVGL 9.5 enables both source sets by default in a non-minimal configuration;
+# compiling them needlessly also makes example_style_21 require Montserrat 14,
+# which the application deliberately does not ship.
+# CONFIG_LV_BUILD_EXAMPLES is not set
+# CONFIG_LV_BUILD_DEMOS is not set
+
 # The vault snapshot normally comes from a machine on the same LAN over plain
 # HTTP, so no certificate is involved at all. An https:// URL still works and
 # validates against IDF's default bundle; the fortune board this forked from

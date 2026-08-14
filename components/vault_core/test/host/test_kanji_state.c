@@ -290,7 +290,9 @@ static void test_erased_first_boot_commits_exact_header_and_zero_state(void)
     CHECK(memcmp(nor->bytes + 16, id, 16) == 0);
     CHECK_U32(rd32(nor->bytes + 32), BANK_SIZE);
     CHECK_U32(rd16(nor->bytes + 36), RECORD_SIZE);
+    CHECK_U32(rd16(nor->bytes + 38), 0);
     CHECK_U32(rd32(nor->bytes + 40), fixture_crc32(nor->bytes, 40));
+    for (size_t i = 44; i < 60; i++) CHECK_U32(nor->bytes[i], 0xff);
     CHECK_U32(rd32(nor->bytes + 60), 0x434f4d4du);
     for (size_t i = BANK_SIZE; i < PARTITION_SIZE; i++) {
         if (nor->bytes[i] != 0xff) {
@@ -305,6 +307,34 @@ static void test_erased_first_boot_commits_exact_header_and_zero_state(void)
     CHECK(kanji_state_open(&rebooted, &io, id, 5, replay));
     CHECK_U32(kanji_state_current_ordinal(&rebooted), 0);
     for (size_t i = 0; i < 5; i++) CHECK(summary_is_zero(&replay[i]));
+    free(nor);
+}
+
+static void test_non_erased_header_reserved_tail_is_rejected(void)
+{
+    nor_fake_t *nor = malloc(sizeof *nor);
+    CHECK(nor != NULL);
+    if (nor == NULL) return;
+    nor_init(nor);
+    const uint8_t id[16] = { 0x17 };
+    const fixture_record_t record = {
+        .sequence = 1, .card = 0, .next = 1, .repetitions = 1,
+        .grade = KANJI_GRADE_GOOD,
+    };
+    fixture_bank(nor, 0, 7, id, &record, 1);
+
+    /* Bytes 44..59 are outside the header CRC but are fixed erased/reserved
+     * bytes in schema 1.  Accepting a programmed future-format byte would
+     * silently reinterpret an unsupported header as the current schema. */
+    nor->bytes[44] = 0xfe;
+    kanji_state_t state;
+    kanji_rating_summary_t summaries[2];
+    kanji_state_io_t io = nor_io(nor);
+    CHECK(kanji_state_open(&state, &io, id, 2, summaries));
+    CHECK_U32(kanji_state_current_ordinal(&state), 0);
+    CHECK(summary_is_zero(&summaries[0]));
+    CHECK(summary_is_zero(&summaries[1]));
+    CHECK_U32(state.generation, 0);
     free(nor);
 }
 
@@ -785,6 +815,7 @@ static void test_catalog_id_mismatch_starts_fresh(void)
 int main(void)
 {
     test_erased_first_boot_commits_exact_header_and_zero_state();
+    test_non_erased_header_reserved_tail_is_rejected();
     test_all_grades_and_saturation_survive_reboot();
     test_invalid_input_and_immediate_callback_failure_are_atomic();
     test_wide_and_negative_congruent_grades_are_atomic();

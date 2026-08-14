@@ -114,14 +114,20 @@ static void make_header(uint8_t header[KANJI_STATE_HEADER_SIZE],
 static bool header_prefix_valid(const uint8_t header[KANJI_STATE_HEADER_SIZE],
                                 const uint8_t catalog_id[16])
 {
-    return memcmp(header + 0, "KJSTATE1", 8) == 0 &&
-           get_u16(header + 8) == STATE_SCHEMA &&
-           get_u16(header + 10) == KANJI_STATE_HEADER_SIZE &&
-           memcmp(header + 16, catalog_id, 16) == 0 &&
-           get_u32(header + 32) == KANJI_STATE_BANK_SIZE &&
-           get_u16(header + 36) == KANJI_STATE_RECORD_SIZE &&
-           get_u16(header + 38) == 0 &&
-           get_u32(header + 40) == state_crc32(header, 40);
+    if (memcmp(header + 0, "KJSTATE1", 8) != 0 ||
+        get_u16(header + 8) != STATE_SCHEMA ||
+        get_u16(header + 10) != KANJI_STATE_HEADER_SIZE ||
+        memcmp(header + 16, catalog_id, 16) != 0 ||
+        get_u32(header + 32) != KANJI_STATE_BANK_SIZE ||
+        get_u16(header + 36) != KANJI_STATE_RECORD_SIZE ||
+        get_u16(header + 38) != 0 ||
+        get_u32(header + 40) != state_crc32(header, 40)) {
+        return false;
+    }
+    for (size_t i = 44; i < 60; i++) {
+        if (header[i] != 0xff) return false;
+    }
+    return true;
 }
 
 static bool header_valid(const uint8_t header[KANJI_STATE_HEADER_SIZE],
