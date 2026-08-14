@@ -85,6 +85,10 @@ target_compile_definitions(test_kanji_catalog PRIVATE
     CATALOG_BOUNDARY_FIXTURE="${CATALOG_BOUNDARY_FIXTURE}")
 target_link_libraries(test_kanji_catalog ZLIB::ZLIB)
 
+# The raw-NOR state journal. The test supplies the same read/write/erase seam
+# used by the ESP partition adapter, including torn writes and reboot replay.
+add_host_test(test_kanji_state test_kanji_state.c ${CORE}/kanji_state.c)
+
 # Where everything goes on the 648x480 panel. Pure integer geometry, no LVGL —
 # including the grade dock's rectangle, which is handed to the partial-refresh
 # window verbatim.
@@ -109,6 +113,7 @@ add_test(NAME kanji_model   COMMAND test_kanji_model)
 add_test(NAME kanji_nav     COMMAND test_kanji_nav)
 add_test(NAME kanji_parse   COMMAND test_kanji_parse)
 add_test(NAME kanji_catalog COMMAND test_kanji_catalog)
+add_test(NAME kanji_state   COMMAND test_kanji_state)
 add_test(NAME kanji_layout  COMMAND test_kanji_layout)
 add_test(NAME kanji_service COMMAND test_kanji_service)
 add_test(NAME kanji_mock    COMMAND test_kanji_mock)

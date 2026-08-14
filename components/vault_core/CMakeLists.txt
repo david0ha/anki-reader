@@ -12,6 +12,7 @@ idf_component_register(
         "kanji_model.c"
         "kanji_parse.c"
         "kanji_catalog.c"
+        "kanji_state.c"
         "kanji_mock.c"
         "kanji_service.c"
         "kanji_nav.c"
