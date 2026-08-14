@@ -2,6 +2,7 @@
 """Behavior tests for the deterministic offline catalog generator."""
 
 import copy
+import csv
 import hashlib
 import json
 import os
@@ -27,6 +28,7 @@ from gen_offline_catalog import (  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(ROOT, "tools", "fixtures", "offline_catalog.json")
 GENERATOR = os.path.join(ROOT, "tools", "gen_offline_catalog.py")
+PARTITIONS = os.path.join(ROOT, "partitions.csv")
 
 
 class Checks:
@@ -79,6 +81,40 @@ class Checks:
 
 
 T = Checks()
+
+
+def parse_size(value):
+    value = value.strip()
+    suffixes = {"K": 1024, "M": 1024 * 1024}
+    if value[-1:].upper() in suffixes:
+        return int(value[:-1], 0) * suffixes[value[-1:].upper()]
+    return int(value, 0)
+
+
+def load_partitions(path):
+    partitions = []
+    cursor = 0x9000  # default 0x8000 table offset plus its 4 KiB sector
+    with open(path, newline="", encoding="utf-8") as source:
+        for row in csv.reader(line for line in source if not line.lstrip().startswith("#")):
+            if not row or not any(cell.strip() for cell in row):
+                continue
+            name, kind, subtype, offset, size, *flags = [cell.strip() for cell in row]
+            size_value = parse_size(size)
+            if offset:
+                offset_value = parse_size(offset)
+            else:
+                alignment = 0x10000 if kind.lower() in ("app", "0x00") else 0x1000
+                offset_value = (cursor + alignment - 1) & ~(alignment - 1)
+            partitions.append({
+                "name": name,
+                "type": kind.lower(),
+                "subtype": subtype.lower(),
+                "offset": offset_value,
+                "size": size_value,
+                "flags": {flag.strip().lower() for flag in flags if flag.strip()},
+            })
+            cursor = offset_value + size_value
+    return partitions
 
 
 def source_card(card_id, front, level="N5"):
@@ -432,6 +468,51 @@ def test_cli_atomic_fixture_write():
                 "verify CLI prints a compact manifest")
 
 
+def test_partition_layout_and_image_integration():
+    partitions = load_partitions(PARTITIONS)
+    by_name = {partition["name"]: partition for partition in partitions}
+    T.eq(len(by_name), len(partitions), "partition names are unique")
+    T.check("catalog" in by_name, "catalog partition is present")
+    T.check("study_state" in by_name, "study_state partition is present")
+    if "catalog" not in by_name or "study_state" not in by_name:
+        return
+
+    catalog = by_name["catalog"]
+    state = by_name["study_state"]
+    T.eq((catalog["type"], catalog["subtype"]), ("0x40", "0x00"),
+         "catalog uses its assigned custom type and subtype")
+    T.eq((catalog["offset"], catalog["size"]), (0x810000, 0x770000),
+         "catalog occupies the exact read-only flash budget")
+    T.eq(catalog["flags"], {"readonly"}, "catalog is read-only")
+    T.eq((state["type"], state["subtype"]), ("0x41", "0x00"),
+         "study state uses its assigned custom type and subtype")
+    T.eq((state["offset"], state["size"]), (0xF80000, 0x080000),
+         "study state occupies the final 512 KiB")
+    T.eq(state["flags"], set(), "study state remains writable")
+
+    ordered = sorted(partitions, key=lambda partition: partition["offset"])
+    T.check(all(partition["offset"] % 0x1000 == 0 and
+                partition["size"] % 0x1000 == 0 for partition in ordered),
+            "every partition offset and size is 4 KiB aligned")
+    T.check(all(left["offset"] + left["size"] <= right["offset"]
+                for left, right in zip(ordered, ordered[1:])),
+            "partitions do not overlap")
+    T.eq(ordered[-1]["offset"] + ordered[-1]["size"], 0x1000000,
+         "the partition table ends exactly at 16 MiB")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        output = os.path.join(tmp, "catalog.bin")
+        result = subprocess.run(
+            [sys.executable, GENERATOR, "--fixture-json", FIXTURE,
+             "--output", output, "--partition-size", "0x770000",
+             "--seed", "0", "--verify"],
+            check=False, text=True, capture_output=True)
+        T.eq(result.returncode, 0, f"partition-sized fixture generation succeeds: {result.stderr}")
+        if result.returncode == 0:
+            T.check(os.path.getsize(output) <= catalog["size"],
+                    "generated catalog image fits its partition")
+
+
 def main():
     test_source_selection()
     test_balanced_order()
@@ -440,6 +521,7 @@ def main():
     test_boundaries_and_rejection()
     test_full_model_maxima_round_trip()
     test_cli_atomic_fixture_write()
+    test_partition_layout_and_image_integration()
     if T.failures:
         print(f"{T.count} checks, {T.failures} failures", file=sys.stderr)
         return 1
