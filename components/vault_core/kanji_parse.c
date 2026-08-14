@@ -336,11 +336,15 @@ static void parse_card(const cJSON *root, kanji_t *k)
     kanji_str_copy(card->id, sizeof card->id, jstr(c, "id"));
     kanji_str_copy(card->front, sizeof card->front, front);
     kanji_str_copy(card->reading, sizeof card->reading, jstr(c, "reading"));
+    kanji_str_copy(card->gloss, sizeof card->gloss, jstr(c, "gloss"));
+    kanji_str_copy(card->on_reading, sizeof card->on_reading, jstr(c, "on_reading"));
+    kanji_str_copy(card->kun_reading, sizeof card->kun_reading, jstr(c, "kun_reading"));
     kanji_str_copy(card->level, sizeof card->level, jstr(c, "level"));
     kanji_str_copy(card->description, sizeof card->description,
                    jstr(c, "description"));
     kanji_str_copy(card->hook_title, sizeof card->hook_title, jstr(c, "hook_title"));
     kanji_str_copy(card->hook_body, sizeof card->hook_body, jstr(c, "hook_body"));
+    kanji_str_copy(card->composition, sizeof card->composition, jstr(c, "composition"));
 
     parse_senses(c, card);
     parse_examples(c, card);
@@ -388,6 +392,7 @@ bool kanji_parse(const char *json, size_t len, kanji_t *out)
 
     k.valid = true;
     k.demo  = false;
+    k.source = KANJI_SOURCE_REMOTE;
     *out = k;
     return true;
 }

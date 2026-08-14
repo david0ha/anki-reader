@@ -75,7 +75,10 @@ JSON leaves the previous card on the glass, badged 오래됨.
     "id": "f00c539e-23f9-4294-bee1-c642189b105f",
     "front": "会う",
     "reading": "あう",
+    "on_reading": "",
+    "kun_reading": "あう",
     "level": "N5",
+    "gloss": "만날 회",
     "senses": ["만나다", "대면하다", "우연히 만나다"],
     "examples": [
       { "text": "出会う", "reading": "であう", "gloss": "우연히 만나다" },
@@ -84,6 +87,7 @@ JSON leaves the previous card on the glass, badged 오래됨.
     "description": "会는 사람들이 모여 서로 말하고 교류하는 모습을 바탕으로 한 글자입니다.",
     "hook_title": "기억 힌트",
     "hook_body": "위의 구성은 모임을, 아래의 모양은 말함을 나타냅니다.",
+    "composition": "人 + 云 = 会",
     "parts": [
       { "glyph": "会", "meaning": "모이다, 만나다", "reading": "あう (훈독)" }
     ],
@@ -126,22 +130,35 @@ the completion screen; it does **not** blank.
 |---|---|---|---|
 | `id` | string | 39 B | Routing only. Deliberately excluded from the refresh fingerprint. |
 | `front` | string | 39 B | The headword — the hero. 10 CJK characters is the catalog's longest. |
-| `reading` | string | 63 B | かな. `・`-joined when there is more than one. |
+| `reading` | string | 143 B | Collapsed display reading; on-yomi leads and readings are `・`-joined. |
+| `on_reading` | string | 143 B | Optional structured on-yomi display string. Empty when absent. |
+| `kun_reading` | string | 143 B | Optional structured kun-yomi display string. Empty when absent. |
 | `level` | string | 23 B | `N5`…`N1`. |
-| `senses` | string[] | 3 × 47 B | Korean glosses, most important first. |
+| `gloss` | string | 143 B | Optional short source gloss, separate from `senses`. |
+| `senses` | string[] | 5 × 143 B | Korean glosses, most important first. |
 | `examples` | object[] | 3 | `{text, reading, gloss}`, each capped like `front`/`reading`/a sense. |
-| `description` | string | 479 B | `back.shape_explanation`. |
-| `hook_title` | string | 23 B | `hint.principle`, or `"기억 힌트"`. |
-| `hook_body` | string | 479 B | `hint.reason`. |
-| `parts` | object[] | 3 | `hint.shapes[]` as `{glyph, meaning, reading}`. |
+| `description` | string | 831 B | Full `back.shape_explanation`. |
+| `hook_title` | string | 23 B | Optional source `hint.principle`; empty when absent and never inferred. |
+| `hook_body` | string | 831 B | Full `hint.reason`. |
+| `composition` | string | 95 B | Optional safe source-component equation. |
+| `parts` | object[] | 6 | Every measured `hint.shapes[]` row as `{glyph, meaning, reading}`; a missing reading is `""`. |
 | `comments` | object[] | 3 | `{author, body, likes}`. Replies flattened away. |
 | `comment_total` | int | | The server's real count; ≥ `comments.length`. |
 | `fsrs` | object | | See below. |
 | `preview` | object | | The four ratings' next-due spans, already worded. |
 
-Every string is truncated by the parser on a UTF-8 character boundary, so an over-long field costs
-its tail and nothing else. Every array takes its first N and drops the rest. **A field the board
-cannot use is never a reason to reject the payload** — only malformed JSON is.
+Every string is truncated by the parser on a UTF-8 character boundary only at these model limits,
+so the measured catalog's 819-byte explanation, 615-byte mnemonic, five senses, and six components
+arrive intact. Every array takes its first N only beyond those full-fidelity limits. **A field the
+board cannot use is never a reason to reject the payload** — only malformed JSON is.
+
+### Source kind
+
+`kanji_t.source` is local model metadata, not a wire key. A successful network or catalog envelope
+parse begins as `KANJI_SOURCE_REMOTE`; the catalog reader may reclassify a validated snapshot as
+`KANJI_SOURCE_CATALOG`, and the built-in fallback is `KANJI_SOURCE_DEMO`. `KANJI_SOURCE_NONE` means
+no usable snapshot. The source kind participates in the snapshot fingerprint so a source transition
+always refreshes the display.
 
 ### card.fsrs
 

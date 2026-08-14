@@ -41,6 +41,9 @@ static void test_mock_matches_the_wire_fixture(void)
     CHECK(mock.demo == true);
     CHECK(wire.demo == false);
     mock.demo = false;
+    CHECK_INT(mock.source, KANJI_SOURCE_DEMO);
+    CHECK_INT(wire.source, KANJI_SOURCE_REMOTE);
+    mock.source = KANJI_SOURCE_REMOTE;
 
     if (kanji_hash(&mock) != kanji_hash(&wire)) {
         g_total++; g_fail++;
@@ -116,6 +119,7 @@ static void test_the_demo_card_is_internally_legal(void)
 
     CHECK(k.valid);
     CHECK(k.demo);
+    CHECK_INT(k.source, KANJI_SOURCE_DEMO);
     CHECK(k.card.valid);
 
     CHECK(k.card.sense_count >= 0 && k.card.sense_count <= KANJI_SENSES_MAX);

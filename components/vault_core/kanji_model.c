@@ -203,6 +203,9 @@ static void h_card(uint32_t *h, const kanji_card_t *c)
      * re-served under a new study_card_id must not flash the panel. */
     h_str(h, c->front);
     h_str(h, c->reading);
+    h_str(h, c->gloss);
+    h_str(h, c->on_reading);
+    h_str(h, c->kun_reading);
     h_str(h, c->level);
 
     h_int(h, c->sense_count);
@@ -218,6 +221,7 @@ static void h_card(uint32_t *h, const kanji_card_t *c)
     h_str(h, c->description);
     h_str(h, c->hook_title);
     h_str(h, c->hook_body);
+    h_str(h, c->composition);
 
     h_int(h, c->part_count);
     for (int i = 0; i < c->part_count; i++) {
@@ -252,6 +256,7 @@ uint32_t kanji_hash(const kanji_t *k)
     uint32_t h = FNV_OFFSET;
     h_int(&h, k->valid);
     h_int(&h, k->demo);
+    h_int(&h, k->source);
 
     h_str(&h, k->session.deck);
     h_str(&h, k->session.level);

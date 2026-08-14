@@ -30,17 +30,16 @@ extern "C" {
 #endif
 
 /* --- capacities -----------------------------------------------------------
- * Display capacities, not protocol limits: the panel is 648x480 and fits three
- * senses, three examples, three shape parts and three comments before anything
- * becomes unreadable. The parser drops the overflow rather than failing, so a
- * card with nine senses still renders its first three.
+ * Model capacities preserve the complete offline catalog projection. The UI
+ * may choose how much to show, but parsing and catalog decoding never discard
+ * source prose, senses, or components merely for display convenience.
  *
  * The byte sizes assume UTF-8: a Hangul syllable and a kanji are both 3 bytes,
  * a kana is 3. KANJI_FRONT_MAX of 40 is ten CJK characters plus a NUL — the
  * longest headword in the shipped catalog is ten. */
 #define KANJI_FRONT_MAX        40   /* the headword: 10 CJK characters        */
-#define KANJI_READING_MAX      64   /* かな reading, possibly ・-joined       */
-#define KANJI_SENSE_MAX        48   /* one Korean gloss                       */
+#define KANJI_READING_MAX     144   /* かな reading, possibly ・-joined       */
+#define KANJI_SENSE_MAX       144   /* one Korean gloss                       */
 #define KANJI_LABEL_MAX        24   /* "N5", "복습", "9일 뒤", a deck name    */
 #define KANJI_DECK_MAX         40
 #define KANJI_ID_MAX           40   /* a UUID plus NUL                        */
@@ -48,13 +47,14 @@ extern "C" {
  * at a 20 px line height. Even KANJI_BODY_MAX - 1 single-byte worst-width
  * glyphs wrap to at most fifteen lines (300 px), preserving the full model
  * limit without clipping. */
-#define KANJI_BODY_MAX        480
+#define KANJI_BODY_MAX        832
+#define KANJI_FORMULA_MAX      96
 #define KANJI_AUTHOR_MAX       32
 #define KANJI_COMMENT_MAX     240
 
-#define KANJI_SENSES_MAX        3
+#define KANJI_SENSES_MAX        5
 #define KANJI_EXAMPLES_MAX      3
-#define KANJI_PARTS_MAX         3
+#define KANJI_PARTS_MAX         6
 #define KANJI_COMMENTS_MAX      3
 
 /* --- pieces --------------------------------------------------------------- */
@@ -68,6 +68,13 @@ typedef enum {
     KANJI_GRADE_GOOD  = 3,
     KANJI_GRADE_EASY  = 4,
 } kanji_grade_t;
+
+typedef enum {
+    KANJI_SOURCE_NONE = 0,
+    KANJI_SOURCE_CATALOG,
+    KANJI_SOURCE_REMOTE,
+    KANJI_SOURCE_DEMO,
+} kanji_source_t;
 
 #define KANJI_GRADE_COUNT 4
 
@@ -127,6 +134,9 @@ typedef struct {
     char id[KANJI_ID_MAX];
     char front[KANJI_FRONT_MAX];       /* 会う — the hero */
     char reading[KANJI_READING_MAX];   /* あう */
+    char gloss[KANJI_SENSE_MAX];       /* short source name */
+    char on_reading[KANJI_READING_MAX];
+    char kun_reading[KANJI_READING_MAX];
     char level[KANJI_LABEL_MAX];       /* N5 */
 
     char senses[KANJI_SENSES_MAX][KANJI_SENSE_MAX];
@@ -136,8 +146,9 @@ typedef struct {
     int             example_count;
 
     char description[KANJI_BODY_MAX];  /* back.shape_explanation */
-    char hook_title[KANJI_LABEL_MAX];  /* hint.principle, default "기억 힌트" */
+    char hook_title[KANJI_LABEL_MAX];  /* optional source hint.principle */
     char hook_body[KANJI_BODY_MAX];    /* hint.reason */
+    char composition[KANJI_FORMULA_MAX];
 
     kanji_part_t parts[KANJI_PARTS_MAX];
     int          part_count;
@@ -170,6 +181,7 @@ typedef struct {
 typedef struct {
     bool valid;                 /* false = nothing has ever been loaded */
     bool demo;                  /* true = kanji_mock, no kanji_url configured */
+    kanji_source_t source;
 
     kanji_session_t session;
     kanji_card_t    card;
