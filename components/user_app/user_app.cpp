@@ -55,6 +55,7 @@
 #include "user_app_api.h"
 #include "source_guard.h"
 #include "study_source.h"
+#include "startup_delivery.h"
 #include "lvgl_bsp.h"          /* Lvgl_lock / Lvgl_unlock / Lvgl_RenderNow */
 #include "epd_panel.h"         /* epd_refresh_* / epd_selftest            */
 #include "kanji_mock.h"
@@ -877,6 +878,17 @@ static bool post_cmd(app_cmd_kind_t kind, int ival, const char *text)
     return xQueueSend(s_cmd_queue, &c, 0) == pdTRUE;
 }
 
+static bool send_critical_command(void *context, const void *item,
+                                  uint32_t wait_policy)
+{
+    QueueHandle_t queue = (QueueHandle_t)context;
+    const TickType_t wait = wait_policy == USER_APP_CRITICAL_QUEUE_WAIT
+                                ? portMAX_DELAY
+                                : pdMS_TO_TICKS(wait_policy);
+    return queue != NULL &&
+           xQueueSend(queue, item, wait) == pdTRUE;
+}
+
 bool UserApp_SetNetworkConfig(const prov_config_t *cfg)
 {
     if (cfg == NULL || !s_cmd_queue) {
@@ -886,7 +898,8 @@ bool UserApp_SetNetworkConfig(const prov_config_t *cfg)
     memset(&c, 0, sizeof(c));
     c.kind = APP_CMD_SET_NETWORK_CONFIG;
     c.network_config = *cfg;
-    return xQueueSend(s_cmd_queue, &c, 0) == pdTRUE;
+    return startup_queue_send_critical(send_critical_command, s_cmd_queue, &c,
+                                       USER_APP_CRITICAL_QUEUE_WAIT);
 }
 
 bool UserApp_SetOverlay(const char *title, const char *body)
@@ -903,7 +916,8 @@ bool UserApp_SetOverlay(const char *title, const char *body)
     if (body != NULL) {
         strlcpy(c.overlay_body, body, sizeof(c.overlay_body));
     }
-    return xQueueSend(s_cmd_queue, &c, 0) == pdTRUE;
+    return startup_queue_send_critical(send_critical_command, s_cmd_queue, &c,
+                                       USER_APP_CRITICAL_QUEUE_WAIT);
 }
 
 void user_app_snapshot(device_state_t *out)

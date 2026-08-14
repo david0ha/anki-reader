@@ -9,3 +9,8 @@ cc -std=c11 -Wall -Wextra -Werror \
     test_study_source.c ../study_source.c \
     -o /tmp/obsidian_study_source_test
 /tmp/obsidian_study_source_test
+
+cc -std=c11 -Wall -Wextra -Werror \
+    test_startup_delivery.c ../startup_delivery.c \
+    -o /tmp/obsidian_startup_delivery_test
+/tmp/obsidian_startup_delivery_test

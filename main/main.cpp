@@ -11,6 +11,7 @@
 #include "ui_kanji.h"
 #include "ui_strings.h"
 #include "user_app.h"
+#include "startup_delivery.h"
 #include "user_config.h"
 #include "provisioning.h"
 #include "net_time.h"
@@ -56,19 +57,27 @@ static void OnProvisioningEvent(prov_event_t event, const char *info, void *user
 	switch (event) {
 	case PROV_EVENT_STA_CONNECTING:
 		snprintf(body, sizeof(body), S_WIFI_CONNECTING, info ? info : "");
-		UserApp_SetOverlay(S_WIFI_TITLE, body);
+		if (!UserApp_SetOverlay(S_WIFI_TITLE, body)) {
+			ESP_LOGE(TAG, "could not queue Wi-Fi connecting overlay");
+		}
 		break;
 	case PROV_EVENT_STA_CONNECTED:
 		snprintf(body, sizeof(body), S_WIFI_CONNECTED, info ? info : "");
-		UserApp_SetOverlay(S_WIFI_TITLE, body);
+		if (!UserApp_SetOverlay(S_WIFI_TITLE, body)) {
+			ESP_LOGE(TAG, "could not queue Wi-Fi connected overlay");
+		}
 		break;
 	case PROV_EVENT_PORTAL_STARTED:
 		snprintf(body, sizeof(body), S_WIFI_PORTAL, info ? info : "");
-		UserApp_SetOverlay(S_WIFI_TITLE, body);
+		if (!UserApp_SetOverlay(S_WIFI_TITLE, body)) {
+			ESP_LOGE(TAG, "could not queue Wi-Fi portal overlay");
+		}
 		break;
 	case PROV_EVENT_CONFIG_SAVED:
 		snprintf(body, sizeof(body), S_WIFI_SAVED, info ? info : "", S_RESTARTING);
-		UserApp_SetOverlay(S_WIFI_TITLE, body);
+		if (!UserApp_SetOverlay(S_WIFI_TITLE, body)) {
+			ESP_LOGE(TAG, "could not queue Wi-Fi saved overlay");
+		}
 		break;
 	}
 }
@@ -124,20 +133,29 @@ extern "C" void app_main(void)
 	bool connected = provisioning_run(&opts, &cfg);
 
 	if (connected) {
+		startup_delivery_t startup_delivery = {};
 		ESP_LOGI(TAG, "online — study URL '%s'",
 		         cfg.study_url[0] ? cfg.study_url : "(none: offline catalog)");
-		UserApp_SetNetworkConfig(&cfg);
+		startup_delivery_record_network(
+			&startup_delivery, UserApp_SetNetworkConfig(&cfg));
 		net_time_sync(10000);
-		UserApp_SetOverlay(NULL, NULL);   // dismiss the connection overlay
+		startup_delivery_record_overlay_dismiss(
+			&startup_delivery, UserApp_SetOverlay(NULL, NULL));
 
 		// Companion-app control server on the home LAN (HTTP + mDNS
 		// "obsidianboard.local"), reading and driving the app through the
 		// user_app_api bridge.
-		device_api_start();
+		if (startup_delivery_api_eligible(&startup_delivery)) {
+			device_api_start();
+		} else {
+			ESP_LOGE(TAG, "startup commands were not accepted; device API disabled");
+		}
 	} else {
 		// A failed saved join emitted a connecting overlay. Returning offline
 		// must reveal the catalog again; no-config boots never showed one.
-		UserApp_SetOverlay(NULL, NULL);
+		if (!UserApp_SetOverlay(NULL, NULL)) {
+			ESP_LOGE(TAG, "could not queue offline overlay dismissal");
+		}
 		ESP_LOGI(TAG, "offline — local catalog study remains active");
 	}
 }
