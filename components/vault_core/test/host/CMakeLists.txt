@@ -7,6 +7,41 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Paths relative to this file.
 set(CORE   ${CMAKE_CURRENT_SOURCE_DIR}/../..)         # components/vault_core
 set(CJSON  ${CORE}/../../third_party/cJSON)           # <root>/third_party/cJSON
+set(ROOT   ${CORE}/../..)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(ZLIB REQUIRED)
+
+# Reader fixtures are build artifacts produced by the authoritative exporter,
+# not hand-packed C blobs. The second source fixture is derived only to put real
+# records on both sides of the fixed 64-card block boundary.
+set(CATALOG_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/offline_catalog.bin)
+set(CATALOG_BOUNDARY_JSON ${CMAKE_CURRENT_BINARY_DIR}/offline_catalog_boundary.json)
+set(CATALOG_BOUNDARY_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/offline_catalog_boundary.bin)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} -c
+            "import copy,json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); base=d['decks'][0]['cards'][0]; deck={k:v for k,v in d['decks'][0].items() if k != 'cards'}; deck['cards']=[]; [(lambda c,i: (c.__setitem__('id',f'boundary-{i:03d}'),c.__setitem__('front',f'字{i:02d}'),deck['cards'].append(c)))(copy.deepcopy(base),i) for i in range(66)]; json.dump({'decks':[deck]},open(sys.argv[2],'w',encoding='utf-8'),ensure_ascii=False)"
+            ${ROOT}/tools/fixtures/offline_catalog.json ${CATALOG_BOUNDARY_JSON}
+    RESULT_VARIABLE CATALOG_BOUNDARY_JSON_RESULT)
+if(NOT CATALOG_BOUNDARY_JSON_RESULT EQUAL 0)
+    message(FATAL_ERROR "could not create catalog boundary fixture")
+endif()
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} ${ROOT}/tools/gen_offline_catalog.py
+            --fixture-json ${ROOT}/tools/fixtures/offline_catalog.json
+            --output ${CATALOG_FIXTURE} --partition-size 0x770000 --seed 0 --verify
+    RESULT_VARIABLE CATALOG_FIXTURE_RESULT)
+if(NOT CATALOG_FIXTURE_RESULT EQUAL 0)
+    message(FATAL_ERROR "could not generate catalog reader fixture")
+endif()
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} ${ROOT}/tools/gen_offline_catalog.py
+            --fixture-json ${CATALOG_BOUNDARY_JSON}
+            --output ${CATALOG_BOUNDARY_FIXTURE} --partition-size 0x770000 --seed 0 --verify
+    RESULT_VARIABLE CATALOG_BOUNDARY_RESULT)
+if(NOT CATALOG_BOUNDARY_RESULT EQUAL 0)
+    message(FATAL_ERROR "could not generate catalog boundary image")
+endif()
 
 # Opt-in sanitizer build:  cmake -S . -B build -DSANITIZE=ON
 # (Catches memory-safety regressions like UTF-8 over-reads; some sandboxed
@@ -42,6 +77,14 @@ add_host_test(test_kanji_nav test_kanji_nav.c
 add_host_test(test_kanji_parse test_kanji_parse.c
               ${CORE}/kanji_parse.c ${CORE}/kanji_model.c ${CJSON}/cJSON.c)
 
+add_host_test(test_kanji_catalog test_kanji_catalog.c
+              ${CORE}/kanji_catalog.c ${CORE}/kanji_parse.c
+              ${CORE}/kanji_model.c ${CJSON}/cJSON.c)
+target_compile_definitions(test_kanji_catalog PRIVATE
+    CATALOG_FIXTURE="${CATALOG_FIXTURE}"
+    CATALOG_BOUNDARY_FIXTURE="${CATALOG_BOUNDARY_FIXTURE}")
+target_link_libraries(test_kanji_catalog ZLIB::ZLIB)
+
 # Where everything goes on the 648x480 panel. Pure integer geometry, no LVGL —
 # including the grade dock's rectangle, which is handed to the partial-refresh
 # window verbatim.
@@ -65,6 +108,7 @@ enable_testing()
 add_test(NAME kanji_model   COMMAND test_kanji_model)
 add_test(NAME kanji_nav     COMMAND test_kanji_nav)
 add_test(NAME kanji_parse   COMMAND test_kanji_parse)
+add_test(NAME kanji_catalog COMMAND test_kanji_catalog)
 add_test(NAME kanji_layout  COMMAND test_kanji_layout)
 add_test(NAME kanji_service COMMAND test_kanji_service)
 add_test(NAME kanji_mock    COMMAND test_kanji_mock)
