@@ -321,6 +321,8 @@ def encode_catalog(decks, cards, partition_size):
     """Encode deck metadata, card indexes, block indexes, and zlib data."""
     if isinstance(partition_size, bool) or not isinstance(partition_size, int) or partition_size < HEADER_SIZE:
         raise ValueError("partition size is too small")
+    if partition_size > DEFAULT_PARTITION_SIZE:
+        raise ValueError("partition size exceeds absolute 0x770000 ceiling")
     if len(decks) > 255:
         raise ValueError("deck count exceeds the one-byte card deck index")
     seed = _u64(getattr(cards, "seed", 0))
@@ -365,6 +367,8 @@ def encode_catalog(decks, cards, partition_size):
         cursor += len(compressed)
     data = b"".join(compressed_blocks)
     used_size = data_off + len(data)
+    if used_size > DEFAULT_PARTITION_SIZE:
+        raise ValueError("catalog image exceeds absolute 0x770000 ceiling")
     if used_size > partition_size:
         raise ValueError(f"catalog image {used_size} exceeds partition {partition_size}")
 
@@ -434,6 +438,10 @@ def verify_catalog(image):
      card_count, block_count, deck_off, deck_len, card_index_off,
      card_index_len, block_index_off, block_index_len, data_off, data_len,
      seed, catalog_id, source_sha256) = fields
+    if used_size > DEFAULT_PARTITION_SIZE:
+        raise ValueError("catalog used_size exceeds absolute 0x770000 ceiling")
+    if used_size != len(image):
+        raise ValueError("catalog image length differs from used_size")
     if flags != 0 or block_cards != 64:
         raise ValueError("unsupported catalog flags or block cardinality")
     if block_count != (card_count + 63) // 64:
@@ -513,6 +521,15 @@ def verify_catalog(image):
             envelope = json.loads(record.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             raise ValueError("card record is not valid UTF-8 JSON") from None
+        try:
+            canonical_record = json.dumps(
+                envelope, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            raise ValueError("card record cannot be canonical JSON") from None
+        if record != canonical_record:
+            raise ValueError("card record is not canonical JSON")
         if (not isinstance(envelope, dict) or set(envelope) != {"v", "card"}
                 or envelope.get("v") != 1 or not isinstance(envelope.get("card"), dict)
                 or tuple(sorted(envelope["card"])) != tuple(sorted(_CARD_KEYS))):

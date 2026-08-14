@@ -2,6 +2,7 @@
 """Behavior tests for the deterministic offline catalog generator."""
 
 import copy
+import hashlib
 import json
 import os
 import sqlite3
@@ -48,6 +49,25 @@ class Checks:
         try:
             operation()
         except error:
+            return
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            self.failures += 1
+            print(f"FAIL: {message}: raised {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return
+        self.failures += 1
+        print(f"FAIL: {message}: did not raise {error.__name__}", file=sys.stderr)
+
+    def raises_matching(self, error, text, operation, message):
+        self.count += 1
+        try:
+            operation()
+        except error as exc:
+            if text in str(exc):
+                return
+            self.failures += 1
+            print(f"FAIL: {message}: raised {exc!r}, expected text {text!r}",
+                  file=sys.stderr)
             return
         except Exception as exc:  # pragma: no cover - diagnostic path
             self.failures += 1
@@ -218,6 +238,82 @@ def test_fixture_projection_and_format():
             "media, user, session, and FSRS keys are excluded")
 
 
+def rebuilt_noncanonical_image(image):
+    """Rebuild every dependent field after adding JSON-leading whitespace."""
+    header = bytearray(image[:128])
+    deck_off = struct.unpack_from("<I", header, 32)[0]
+    deck_len = struct.unpack_from("<I", header, 36)[0]
+    card_index_off = struct.unpack_from("<I", header, 40)[0]
+    card_index_len = struct.unpack_from("<I", header, 44)[0]
+    block_index_off = struct.unpack_from("<I", header, 48)[0]
+    data_off = struct.unpack_from("<I", header, 56)[0]
+    seed = struct.unpack_from("<Q", header, 64)[0]
+    card_count = struct.unpack_from("<I", header, 24)[0]
+    block_count = struct.unpack_from("<I", header, 28)[0]
+    T.eq(block_count, 1, "noncanonical mutation fixture has exactly one block")
+
+    deck_table = image[deck_off:deck_off + deck_len]
+    card_index = bytearray(image[card_index_off:card_index_off + card_index_len])
+    compressed_off, compressed_len, raw_len, _raw_crc = struct.unpack_from(
+        "<IIII", image, block_index_off)
+    raw = zlib.decompress(image[compressed_off:compressed_off + compressed_len])
+    T.eq(len(raw), raw_len, "mutation starts from the indexed raw length")
+
+    records = []
+    deck_indexes = []
+    for ordinal in range(card_count):
+        record_off, record_len, deck_index = struct.unpack_from(
+            "<IIB3x", card_index, ordinal * 12)
+        records.append(raw[record_off:record_off + record_len])
+        deck_indexes.append(deck_index)
+    records[0] = b" " + records[0]
+
+    rebuilt_raw = bytearray()
+    for ordinal, (record, deck_index) in enumerate(zip(records, deck_indexes)):
+        struct.pack_into("<IIB3x", card_index, ordinal * 12,
+                         len(rebuilt_raw), len(record), deck_index)
+        rebuilt_raw.extend(record)
+    compressed = zlib.compress(bytes(rebuilt_raw), 9)
+    block_index = struct.pack(
+        "<IIII", data_off, len(compressed), len(rebuilt_raw),
+        zlib.crc32(rebuilt_raw) & 0xFFFFFFFF)
+    tables = deck_table + bytes(card_index) + block_index
+
+    source = hashlib.sha256()
+    source.update(deck_table)
+    membership = sorted(
+        zip(deck_indexes, records),
+        key=lambda item: (item[0], json.loads(item[1])["card"]["id"]),
+    )
+    for deck_index, record in membership:
+        source.update(bytes((deck_index,)))
+        source.update(struct.pack("<I", len(record)))
+        source.update(record)
+    source_sha256 = source.digest()
+    catalog_id = hashlib.sha256(
+        b"KJCAT01\0" + struct.pack("<H", 1) + source_sha256 +
+        struct.pack("<Q", seed)
+    ).digest()[:16]
+
+    used_size = data_off + len(compressed)
+    struct.pack_into("<I", header, 16, used_size)
+    struct.pack_into("<I", header, 60, len(compressed))
+    header[72:88] = catalog_id
+    header[88:120] = source_sha256
+    struct.pack_into("<I", header, 124, zlib.crc32(tables) & 0xFFFFFFFF)
+    struct.pack_into("<I", header, 120, zlib.crc32(header[:120]) & 0xFFFFFFFF)
+    return bytes(header) + tables + compressed
+
+
+def test_noncanonical_json_rejected():
+    decks, _cards = load_fixture(FIXTURE)
+    canonical = encode_catalog(decks, balanced_cards(decks, 0), 0x770000)
+    noncanonical = rebuilt_noncanonical_image(canonical)
+    T.raises_matching(
+        ValueError, "canonical", lambda: verify_catalog(noncanonical),
+        "internally consistent leading-whitespace JSON is rejected")
+
+
 def test_boundaries_and_rejection():
     deck = {"id": "many", "name": "Many", "level": "N5", "deck_type": "kanji"}
     cards = []
@@ -257,6 +353,22 @@ def test_boundaries_and_rejection():
              "raw block CRC corruption is rejected independently")
     T.raises(ValueError, lambda: encode_catalog([deck], ordered, len(image) - 1),
              "partition overflow is rejected")
+    T.raises_matching(
+        ValueError, "0x770000", lambda: encode_catalog([deck], ordered, 0x770001),
+        "a caller cannot raise the absolute catalog partition ceiling")
+    T.raises_matching(
+        ValueError, "length", lambda: verify_catalog(image + b"X"),
+        "trailing bytes beyond used_size are rejected")
+    oversized = bytearray(image)
+    data_off = struct.unpack_from("<I", oversized, 56)[0]
+    struct.pack_into("<I", oversized, 16, 0x770001)
+    struct.pack_into("<I", oversized, 60, 0x770001 - data_off)
+    oversized.extend(bytes(0x770001 - len(oversized)))
+    struct.pack_into("<I", oversized, 120,
+                     zlib.crc32(oversized[:120]) & 0xFFFFFFFF)
+    T.raises_matching(
+        ValueError, "0x770000", lambda: verify_catalog(bytes(oversized)),
+        "header used_size cannot exceed the absolute partition ceiling")
     huge = []
     for ordinal in range(64):
         item = copy.deepcopy(cards[ordinal % len(cards)])
@@ -324,6 +436,7 @@ def main():
     test_source_selection()
     test_balanced_order()
     test_fixture_projection_and_format()
+    test_noncanonical_json_rejected()
     test_boundaries_and_rejection()
     test_full_model_maxima_round_trip()
     test_cli_atomic_fixture_write()
