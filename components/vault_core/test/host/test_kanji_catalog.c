@@ -283,6 +283,20 @@ static void test_repaired_structural_corruptions(const image_t *fixture,
     expect_image_open_status(&damaged, KANJI_CATALOG_RECORD_OFFSET);
     free(damaged.bytes);
 
+    /* Move the second record forward by one byte and shorten it by one. Its
+     * end remains unchanged and every span stays in bounds, but byte `start`
+     * is now unclaimed rather than being the next contiguous record byte. */
+    uint32_t second_record = card_index_off + 12;
+    uint32_t second_record_start = get_u32(fixture->bytes + second_record);
+    uint32_t second_record_length = get_u32(fixture->bytes + second_record + 4);
+    CHECK(second_record_length > 1);
+    damaged = clone_image(fixture);
+    put_u32(damaged.bytes + second_record, second_record_start + 1);
+    put_u32(damaged.bytes + second_record + 4, second_record_length - 1);
+    repair_table_crc(&damaged);
+    expect_image_open_status(&damaged, KANJI_CATALOG_RECORD_OFFSET);
+    free(damaged.bytes);
+
     uint32_t boundary_block_index = get_u32(boundary->bytes + 48);
     uint32_t second_entry = boundary_block_index + 16;
     uint32_t second_offset = get_u32(boundary->bytes + second_entry);
