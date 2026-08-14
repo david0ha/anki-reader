@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Obsidian Board",
+    "name": "Kanjis Board",
     "slug": "obsidian-board",
     "scheme": "obsidianboard",
     "version": "1.0.0",
@@ -10,7 +10,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.obsidianboard.app",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Obsidian Board connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
+        "NSLocalNetworkUsageDescription": "Kanjis Board connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
         "NSBonjourServices": ["_http._tcp"],
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true

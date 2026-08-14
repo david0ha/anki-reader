@@ -1,4 +1,4 @@
-// Client for the Obsidian Board's two HTTP/JSON APIs (firmware:
+// Client for the Kanjis Board's two HTTP/JSON APIs (firmware:
 // components/provisioning/prov_portal.c + components/device_api). See docs/app-control.md and
 // components/provisioning/README.md for the contract — this file is the TypeScript mirror of it,
 // and the only place in the app that knows a field name.
@@ -6,16 +6,19 @@
 // [1] Provisioning (SoftAP, http://192.168.4.1): join the board's setup AP first.
 //   GET  /api/info       -> { deviceId, model, apSsid }
 //   GET  /api/scan       -> { networks: [{ ssid, rssi, secure }] }
-//   POST /api/provision  (x-www-form-urlencoded: ssid, password, vault_url?) -> 202 | 4xx
+//   POST /api/provision  (x-www-form-urlencoded: ssid, password, study_url?) -> 202 | 4xx
 //   GET  /api/status     -> { state: idle|connecting|connected|failed, ssid?, reason? }
 //
 // [2] Control (STA, http://obsidianboard.local or the board's IP): same home Wi-Fi.
 //   GET  /api/info          -> { deviceId, model, fw, ip }
 //   GET  /api/state         -> DeviceState snapshot (polled by the dashboard)
-//   POST /api/refresh       -> poll the vault source now
-//   POST /api/page          { page: 0 } (compatibility no-op)
-//   POST /api/vault         { url }      // '' switches the board to its built-in demo snapshot
+//   POST /api/refresh       -> poll the study source now
+//   POST /api/screen        { screen: 0..4 }
+//   POST /api/study         { url }      // '' switches the board to its built-in demo card
 //   POST /api/display/test  -> run the e-Paper self-test sweep
+//
+// The mDNS hostname and the setup-AP name are deliberately unchanged from the board this study
+// firmware replaced — same hardware, same discovery probe, same network identity.
 //
 // Every function takes an injectable fetch/clock so it can be unit-tested without a board.
 
@@ -51,13 +54,13 @@ export interface ProvisionStatus {
 }
 
 /**
- * How the board's last poll of the vault URL went (`source.lastResult`). These are the firmware's
+ * How the board's last poll of the study URL went (`source.lastResult`). These are the firmware's
  * own strings — the three failures are separate codes because they send the user to three
  * different places: `transport` is DNS/connect/timeout (is the PC awake?), `http_status` means the
  * server answered but not with a 2xx (is the path right?), and `bad_payload` means it answered 2xx
- * with something that is not a vault snapshot (is that a captive portal?).
+ * with something that is not a study card (is that a captive portal?).
  */
-export type VaultFetchResult =
+export type StudyFetchResult =
   | 'ok'
   | 'no_url'
   | 'transport'
@@ -68,38 +71,65 @@ export type VaultFetchResult =
 
 const FETCH_RESULTS: readonly string[] = ['ok', 'no_url', 'transport', 'http_status', 'bad_payload']
 
-/** The board's summary of the vault it is displaying (GET /api/state, `vault`). */
-export interface VaultSummary {
-  /** A snapshot has been parsed at least once. False on a board that has never had a good poll. */
+/**
+ * The scheduler state of the card on the glass (`card.fsrsState`). The wire words of FSRS itself,
+ * not the Korean the panel prints — the board sends `fsrs.state`, and the panel's own label is
+ * derived from it on the far side.
+ */
+export type FsrsState = 'new' | 'learning' | 'review' | 'relearning' | 'unknown'
+
+const FSRS_STATES: readonly string[] = ['new', 'learning', 'review', 'relearning']
+
+/** Today's study session, as the board understands it (GET /api/state, `session`). */
+export interface SessionSummary {
+  /** The deck the proxy is serving, e.g. "JLPT N5 Vocabulary". */
+  deck: string
+  /** Consecutive days studied. */
+  streak: number
+  reviewedToday: number
+  /** Unseen cards still queued for today. */
+  leftNew: number
+  /** Scheduled reviews still queued for today. */
+  leftReview: number
+  /** 1-based position in today's queue, and its length. */
+  track: number
+  trackTotal: number
+  /** The queue is empty; the board is showing 오늘 학습 완료 and has stopped asking. */
+  complete: boolean
+}
+
+/** The card on the glass (GET /api/state, `card`). */
+export interface CardSummary {
+  /** A card has been parsed. False when the session served none — see `session.complete`. */
   valid: boolean
-  /** The board is showing its built-in demo snapshot (no vault URL configured). */
+  /** The board is showing its built-in demo card (no study URL configured). */
   demo: boolean
-  name: string
-  /** Clock time the snapshot was generated, as the producer reported it (e.g. "21:04"). */
-  generatedAt: string
-  notes: number
-  links: number
-  orphans: number
-  tags: number
-  addedToday: number
-  added7d: number
-  agents: number
-  agentsRunning: number
-  /** How many recent notes the source summary contains. */
-  recent: number
-  /** Total inbox items — may exceed what fits on the panel. */
-  inbox: number
+  /** The headword, e.g. "会う". */
+  front: string
+  /** The kana reading. */
+  reading: string
+  /** The first Korean gloss. The board holds three; the phone needs the one that names the card. */
+  meaning: string
+  fsrsState: FsrsState
+  /** When this card is next due, as the proxy already worded it ("9일 뒤"). '' = never scheduled. */
+  due: string
+  reps: number
+  lapses: number
+  /** Rounded days of stability. **-1 means "not scheduled yet"**, which is not zero. */
+  stabilityDays: number
+  /** 0..100. -1 means not scheduled yet. */
+  difficultyPct: number
 }
 
 /** Where the board is fetching from and how that is going (GET /api/state, `source`). */
-export interface VaultSource {
-  /** Configured snapshot URL. Empty string = unconfigured, running on the demo snapshot. */
+export interface StudySource {
+  /** Configured card URL. Empty string = unconfigured, running on the demo card. */
   url: string
-  lastResult: VaultFetchResult
+  lastResult: StudyFetchResult
   pollSeconds: number
   /** Seconds since the last SUCCESSFUL poll; -1 when none has ever succeeded. */
   ageSeconds: number
-  /** The board reports that the last good source snapshot is old; the companion may surface it. */
+  /** The board reports that the last good card is old; the companion may surface it. */
   stale: boolean
 }
 
@@ -128,12 +158,17 @@ export interface DeviceState {
   model: string
   fw: string
   ip: string
-  /** Compatibility page index. The fixed artwork composition is always page 0. */
-  page: number
-  /** The board's title for the single composition. */
-  pageTitle: string
-  vault: VaultSummary
-  source: VaultSource
+  /** Which of the five screens is up: 0 문제, 1 정답, 2 설명, 3 댓글, 4 FSRS. */
+  screen: number
+  /** The board's own name for that screen, in the Korean the footer prints. */
+  screenTitle: string
+  /** The answer side has been shown for the current card. */
+  revealed: boolean
+  /** Where the grade dock's cursor is parked, as `kanji_grade_t`: 1 again … 4 easy. */
+  grade: number
+  session: SessionSummary
+  card: CardSummary
+  source: StudySource
   battery: BatteryInfo
   panel: PanelInfo
 }
@@ -148,12 +183,12 @@ export type Esp32ErrorCode =
   | 'ssid_too_long'
   | 'pass_too_long'
   // Shared by /api/provision and the control writes
-  | 'vault_url_invalid'
+  | 'study_url_invalid'
   | 'too_large'
   | 'read_error'
   // POST /api/* (4xx body `error`)
   | 'bad_json'
-  | 'page_range'
+  | 'screen_range'
   | 'busy'
   // Client-side
   | 'http_error'
@@ -199,10 +234,10 @@ export interface WaitForConnectedResult extends ProvisionStatus {
 }
 
 /** Mirrors the firmware's PROV_URL_MAX_LEN — the board rejects anything longer. */
-export const VAULT_URL_MAX_LEN = 128
+export const STUDY_URL_MAX_LEN = 128
 
-/** One fixed landscape artwork; page 0 remains for API compatibility. */
-export const PAGE_COUNT = 1
+/** `KANJI_SCREEN_COUNT`: 문제, 정답, 설명, 댓글, FSRS. */
+export const SCREEN_COUNT = 5
 
 const DEFAULT_BASE_URL = process.env.EXPO_PUBLIC_ESP32_BASE_URL || 'http://192.168.4.1'
 const DEFAULT_TIMEOUT_MS = 8000
@@ -225,32 +260,46 @@ function asStr(v: unknown): string {
   return v == null ? '' : String(v)
 }
 
-function parseVault(raw: Record<string, unknown> | undefined): VaultSummary {
-  const v = raw ?? {}
+function parseSession(raw: Record<string, unknown> | undefined): SessionSummary {
+  const s = raw ?? {}
   return {
-    valid: asBool(v.valid),
-    demo: asBool(v.demo),
-    name: asStr(v.name),
-    generatedAt: asStr(v.generatedAt),
-    notes: asNum(v.notes),
-    links: asNum(v.links),
-    orphans: asNum(v.orphans),
-    tags: asNum(v.tags),
-    addedToday: asNum(v.addedToday),
-    added7d: asNum(v.added7d),
-    agents: asNum(v.agents),
-    agentsRunning: asNum(v.agentsRunning),
-    recent: asNum(v.recent),
-    inbox: asNum(v.inbox),
+    deck: asStr(s.deck),
+    streak: asNum(s.streak),
+    reviewedToday: asNum(s.reviewedToday),
+    leftNew: asNum(s.leftNew),
+    leftReview: asNum(s.leftReview),
+    track: asNum(s.track),
+    trackTotal: asNum(s.trackTotal),
+    complete: asBool(s.complete),
   }
 }
 
-function parseSource(raw: Record<string, unknown> | undefined): VaultSource {
+function parseCard(raw: Record<string, unknown> | undefined): CardSummary {
+  const c = raw ?? {}
+  const state = asStr(c.fsrsState)
+  return {
+    valid: asBool(c.valid),
+    demo: asBool(c.demo),
+    front: asStr(c.front),
+    reading: asStr(c.reading),
+    meaning: asStr(c.meaning),
+    fsrsState: (FSRS_STATES.includes(state) ? state : 'unknown') as FsrsState,
+    due: asStr(c.due),
+    reps: asNum(c.reps),
+    lapses: asNum(c.lapses),
+    // -1 is "the scheduler has no value for this card yet", which is NOT "zero days of
+    // stability". Defaulting a missing field to 0 would print a number the board never claimed.
+    stabilityDays: asNum(c.stabilityDays, -1),
+    difficultyPct: asNum(c.difficultyPct, -1),
+  }
+}
+
+function parseSource(raw: Record<string, unknown> | undefined): StudySource {
   const s = raw ?? {}
   const result = asStr(s.lastResult)
   return {
     url: asStr(s.url),
-    lastResult: (FETCH_RESULTS.includes(result) ? result : 'unknown') as VaultFetchResult,
+    lastResult: (FETCH_RESULTS.includes(result) ? result : 'unknown') as StudyFetchResult,
     pollSeconds: asNum(s.pollSeconds),
     // -1 is "never synced", which is NOT "synced zero seconds ago". Defaulting a missing field to
     // 0 would draw a board that had just polled successfully when it never has.
@@ -357,18 +406,18 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
       .filter((n) => n.ssid.length > 0)
   }
 
-  // POST the home-Wi-Fi credentials and the vault URL as a url-encoded form, matching the
+  // POST the home-Wi-Fi credentials and the study URL as a url-encoded form, matching the
   // firmware's HTML /save path. Returns once the board has accepted them (202); the caller then
   // polls waitForConnected.
   //
-  // `vault_url` is always sent, empty string included. Provisioning REWRITES the whole stored
+  // `study_url` is always sent, empty string included. Provisioning REWRITES the whole stored
   // config (the firmware zeroes its struct and fills it from the form), so omitting the field
   // would still clear the URL — sending '' says that on purpose instead of relying on it.
-  async function provision(ssid: string, password: string, vaultUrl = ''): Promise<void> {
+  async function provision(ssid: string, password: string, studyUrl = ''): Promise<void> {
     const body =
       `ssid=${encodeURIComponent(ssid)}` +
       `&password=${encodeURIComponent(password)}` +
-      `&vault_url=${encodeURIComponent(vaultUrl)}`
+      `&study_url=${encodeURIComponent(studyUrl)}`
     const res = await request('/api/provision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -416,8 +465,8 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
 
   // ----- Control (STA) -----
 
-  // The live snapshot. Defensively coerced so a malformed/partial payload renders as empty
-  // counters rather than crashing the dashboard.
+  // The live snapshot. Defensively coerced so a malformed/partial payload renders as an empty
+  // session rather than crashing the dashboard.
   async function getState(): Promise<DeviceState> {
     const j = await getJson('/api/state', 'state')
     return {
@@ -425,31 +474,35 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
       model: asStr(j.model),
       fw: asStr(j.fw),
       ip: asStr(j.ip),
-      page: 0,
-      pageTitle: 'Artwork',
-      vault: parseVault(j.vault as Record<string, unknown> | undefined),
+      screen: asNum(j.screen),
+      screenTitle: asStr(j.screenTitle),
+      revealed: asBool(j.revealed),
+      grade: asNum(j.grade),
+      session: parseSession(j.session as Record<string, unknown> | undefined),
+      card: parseCard(j.card as Record<string, unknown> | undefined),
       source: parseSource(j.source as Record<string, unknown> | undefined),
       battery: parseBattery(j.battery as Record<string, unknown> | undefined),
       panel: parsePanel(j.panel as Record<string, unknown> | undefined),
     }
   }
 
-  // Compatibility endpoint for the single artwork composition. Only page 0 is valid.
-  async function setPage(page: number): Promise<void> {
-    return postJson('/api/page', { page }, 'page')
+  // Put the board on one of the five screens. It is the same nav state a button press drives, so
+  // the phone can never leave the board somewhere the buttons cannot get out of.
+  async function setScreen(screen: number): Promise<void> {
+    return postJson('/api/screen', { screen }, 'screen')
   }
 
-  // Poll the vault source now instead of waiting out the interval. The board only refreshes the
+  // Poll the study source now instead of waiting out the interval. The board only refreshes the
   // panel when what comes back differs from what is already on the glass, so this is safe to call
   // repeatedly — a no-change refresh costs nothing and flashes nothing.
   async function refresh(): Promise<void> {
     return postEmpty('/api/refresh', 'refresh')
   }
 
-  // Point the board at a different snapshot URL (NVS-persisted, applied live, no reboot). An empty
-  // string is valid and meaningful: it switches the board to its built-in demo snapshot.
-  async function setVaultUrl(url: string): Promise<void> {
-    return postJson('/api/vault', { url }, 'vault')
+  // Point the board at a different study URL (NVS-persisted, applied live, no reboot). An empty
+  // string is valid and meaningful: it switches the board to its built-in demo card.
+  async function setStudyUrl(url: string): Promise<void> {
+    return postJson('/api/study', { url }, 'study')
   }
 
   // Run the e-Paper self-test sweep. Tens of seconds of full refreshes on the board; the request
@@ -468,9 +521,9 @@ export function createEsp32Client(opts: Esp32ClientOptions = {}) {
     waitForConnected,
     // control
     getState,
-    setPage,
+    setScreen,
     refresh,
-    setVaultUrl,
+    setStudyUrl,
     displayTest,
   }
 }

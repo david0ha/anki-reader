@@ -15,29 +15,38 @@
 static void fill(device_state_t *st)
 {
     memset(st, 0, sizeof(*st));
-    snprintf(st->model, sizeof(st->model), "Obsidian Board");
+    snprintf(st->model, sizeof(st->model), "Kanjis Board");
     snprintf(st->fw, sizeof(st->fw), "0.1.0");
     snprintf(st->device_id, sizeof(st->device_id), "1A2B");
     snprintf(st->ip, sizeof(st->ip), "192.168.0.42");
-    st->page = 2;
-    snprintf(st->page_title, sizeof(st->page_title), "에이전트");
 
-    st->vault_valid = true;
+    st->screen = 1;                     /* KANJI_SCREEN_ANSWER */
+    snprintf(st->screen_title, sizeof(st->screen_title), "정답");
+    st->revealed = true;
+    st->grade = 3;                      /* KANJI_GRADE_GOOD */
+
+    st->card_valid = true;
     st->demo = false;
-    snprintf(st->vault, sizeof(st->vault), "second-brain");
-    snprintf(st->generated_at, sizeof(st->generated_at), "21:04");
-    st->notes = 1428;
-    st->links = 3910;
-    st->orphans = 37;
-    st->tags = 212;
-    st->added_today = 6;
-    st->added_7d = 41;
-    st->agents_total = 5;
-    st->agents_running = 2;
-    st->recent_count = 8;
-    st->inbox_total = 11;
+    snprintf(st->front, sizeof(st->front), "会う");
+    snprintf(st->reading, sizeof(st->reading), "あう");
+    snprintf(st->meaning, sizeof(st->meaning), "만나다");
+    snprintf(st->fsrs_state, sizeof(st->fsrs_state), "review");
+    snprintf(st->due, sizeof(st->due), "9일 뒤");
+    st->reps = 5;
+    st->lapses = 1;
+    st->stability_days = 9;
+    st->difficulty_pct = 47;
 
-    snprintf(st->vault_url, sizeof(st->vault_url), "http://mac.local:8123/vault.json");
+    snprintf(st->deck, sizeof(st->deck), "JLPT N5 Vocabulary");
+    st->streak = 12;
+    st->reviewed_today = 34;
+    st->left_new = 7;
+    st->left_review = 18;
+    st->track = 35;
+    st->track_total = 60;
+    st->session_complete = false;
+
+    snprintf(st->kanji_url, sizeof(st->kanji_url), "http://mac.local:8123/kanji.json");
     snprintf(st->last_result, sizeof(st->last_result), "ok");
     st->poll_seconds = 300;
     st->age_seconds = 42;
@@ -106,14 +115,14 @@ static void check_bool(cJSON *o, const char *key, bool want)
 static void test_info(void)
 {
     char buf[256];
-    int n = device_api_json_info(buf, sizeof(buf), "1A2B", "Obsidian Board",
+    int n = device_api_json_info(buf, sizeof(buf), "1A2B", "Kanjis Board",
                                  "0.1.0", "192.168.0.42");
     CHECK(n > 0);
     CHECK_INT((int)strlen(buf), n);
 
     /* The discovery probe reads these four names off every candidate host on
      * the LAN. Renaming one is an app release, not a firmware change. */
-    CHECK_STR(buf, "{\"deviceId\":\"1A2B\",\"model\":\"Obsidian Board\","
+    CHECK_STR(buf, "{\"deviceId\":\"1A2B\",\"model\":\"Kanjis Board\","
                    "\"fw\":\"0.1.0\",\"ip\":\"192.168.0.42\"}");
 }
 
@@ -122,7 +131,7 @@ static void test_state_shape(void)
     device_state_t st;
     fill(&st);
 
-    char buf[2048];
+    char buf[DEVICE_API_STATE_BUF_SZ];
     int n = device_api_json_state(&st, buf, sizeof(buf));
     CHECK(n > 0);
     CHECK_INT((int)strlen(buf), n);
@@ -132,30 +141,43 @@ static void test_state_shape(void)
     if (!r) return;
 
     check_str(r, "deviceId", "1A2B");
-    check_str(r, "model", "Obsidian Board");
+    check_str(r, "model", "Kanjis Board");
     check_str(r, "fw", "0.1.0");
     check_str(r, "ip", "192.168.0.42");
-    check_int(r, "page", 2);
-    check_str(r, "pageTitle", "에이전트");
 
-    cJSON *v = obj(r, "vault");
-    check_bool(v, "valid", true);
-    check_bool(v, "demo", false);
-    check_str(v, "name", "second-brain");
-    check_str(v, "generatedAt", "21:04");
-    check_int(v, "notes", 1428);
-    check_int(v, "links", 3910);
-    check_int(v, "orphans", 37);
-    check_int(v, "tags", 212);
-    check_int(v, "addedToday", 6);
-    check_int(v, "added7d", 41);
-    check_int(v, "agents", 5);
-    check_int(v, "agentsRunning", 2);
-    check_int(v, "recent", 8);
-    check_int(v, "inbox", 11);
+    /* The interaction state. A phone that cannot see which screen is up and
+     * whether the answer is revealed would have to guess what its own POST
+     * /api/screen just did. */
+    check_int(r, "screen", 1);
+    check_str(r, "screenTitle", "정답");
+    check_bool(r, "revealed", true);
+    check_int(r, "grade", 3);
+
+    cJSON *c = obj(r, "card");
+    check_bool(c, "valid", true);
+    check_bool(c, "demo", false);
+    check_str(c, "front", "会う");
+    check_str(c, "reading", "あう");
+    check_str(c, "meaning", "만나다");
+    check_str(c, "fsrsState", "review");
+    check_str(c, "due", "9일 뒤");
+    check_int(c, "reps", 5);
+    check_int(c, "lapses", 1);
+    check_int(c, "stabilityDays", 9);
+    check_int(c, "difficultyPct", 47);
+
+    cJSON *e = obj(r, "session");
+    check_str(e, "deck", "JLPT N5 Vocabulary");
+    check_int(e, "streak", 12);
+    check_int(e, "reviewedToday", 34);
+    check_int(e, "leftNew", 7);
+    check_int(e, "leftReview", 18);
+    check_int(e, "track", 35);
+    check_int(e, "trackTotal", 60);
+    check_bool(e, "complete", false);
 
     cJSON *s = obj(r, "source");
-    check_str(s, "url", "http://mac.local:8123/vault.json");
+    check_str(s, "url", "http://mac.local:8123/kanji.json");
     check_str(s, "lastResult", "ok");
     check_int(s, "pollSeconds", 300);
     check_int(s, "ageSeconds", 42);
@@ -176,44 +198,115 @@ static void test_state_shape(void)
     cJSON_Delete(r);
 }
 
-static void test_korean_passes_through_as_utf8(void)
+/* Walk every number in the document and insist it is whole. Returns how many it
+ * found, so a caller can tell "all integral" from "the numbers all became
+ * strings and nothing was checked". */
+static int check_all_numbers_are_integers(cJSON *node)
 {
-    /* Vault names and note titles are Korean. JSON strings are defined over
-     * Unicode, so escaping them to \u would be legal and pointless — but the
-     * escaper must not mangle them either. */
+    int found = 0;
+    for (cJSON *it = node->child; it != NULL; it = it->next) {
+        if (cJSON_IsNumber(it)) {
+            double d = cJSON_GetNumberValue(it);
+            found++;
+            g_total++;
+            if (d != (double)(long long)d) {
+                g_fail++;
+                printf("  FAIL \"%s\" is fractional (%f)\n",
+                       it->string ? it->string : "?", d);
+            }
+        } else if (cJSON_IsObject(it) || cJSON_IsArray(it)) {
+            found += check_all_numbers_are_integers(it);
+        }
+    }
+    return found;
+}
+
+static void test_every_number_is_an_integer(void)
+{
+    /* device_api_model.h's rule, pinned. A "%.2f" of a large magnitude
+     * truncates on the decimal point and emits a token strict parsers reject,
+     * and the failure would land on the phone rather than in this build — so
+     * the fix is that no field is ever a fraction, and this is what says so. */
     device_state_t st;
     fill(&st);
-    snprintf(st.vault, sizeof(st.vault), "두번째 뇌");
-    snprintf(st.page_title, sizeof(st.page_title), "최근 노트");
 
-    char buf[2048];
+    char buf[DEVICE_API_STATE_BUF_SZ];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
-    CHECK(strstr(buf, "두번째 뇌") != NULL);
+    cJSON *r = cJSON_Parse(buf);
+    CHECK(r != NULL);
+    if (r) {
+        CHECK(check_all_numbers_are_integers(r) == 19);
+        cJSON_Delete(r);
+    }
+}
+
+static void test_unscheduled_card_reports_minus_one(void)
+{
+    /* -1 is the contract's "the scheduler has not decided yet", and it is not
+     * zero: a card whose stability is unknown and one whose interval rounds to
+     * the same day are different cards. Same for a board that has never
+     * completed a fetch versus one that synced this second. */
+    device_state_t st;
+    fill(&st);
+    st.stability_days = -1;
+    st.difficulty_pct = -1;
+    st.age_seconds = -1;
+
+    char buf[DEVICE_API_STATE_BUF_SZ];
+    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+    cJSON *r = cJSON_Parse(buf);
+    CHECK(r != NULL);
+    if (r) {
+        check_int(obj(r, "card"), "stabilityDays", -1);
+        check_int(obj(r, "card"), "difficultyPct", -1);
+        check_int(obj(r, "source"), "ageSeconds", -1);
+        cJSON_Delete(r);
+    }
+}
+
+static void test_cjk_passes_through_as_utf8(void)
+{
+    /* The headword is Japanese, the gloss and the deck name are Korean. JSON
+     * strings are defined over Unicode, so escaping them to \u would be legal
+     * and pointless — but the escaper must not mangle them either. */
+    device_state_t st;
+    fill(&st);
+    snprintf(st.deck, sizeof(st.deck), "일본어 상용한자");
+    snprintf(st.front, sizeof(st.front), "生まれ変わる");
+    snprintf(st.reading, sizeof(st.reading), "うまれかわる");
+
+    char buf[DEVICE_API_STATE_BUF_SZ];
+    CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+    CHECK(strstr(buf, "生まれ変わる") != NULL);
 
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        check_str(r, "pageTitle", "최근 노트");
-        check_str(obj(r, "vault"), "name", "두번째 뇌");
+        check_str(obj(r, "session"), "deck", "일본어 상용한자");
+        check_str(obj(r, "card"), "front", "生まれ変わる");
+        check_str(obj(r, "card"), "reading", "うまれかわる");
         cJSON_Delete(r);
     }
 }
 
 static void test_control_characters_are_escaped(void)
 {
-    /* A note title with a newline in it is not exotic — Obsidian will happily
-     * let you make one, and an unescaped 0x0A is invalid JSON that would break
-     * the app's parser rather than just looking odd. */
+    /* A deck name with a newline in it is not exotic — it is one paste away at
+     * the far end, and kanji_parse copies it through UTF-8-safely without
+     * filtering C0. An unescaped 0x0A is invalid JSON that would break the
+     * app's parser rather than just looking odd; 0x01 has no short form at all
+     * and has to become a six-byte \\u escape. */
     device_state_t st;
     fill(&st);
-    snprintf(st.vault, sizeof(st.vault), "a\"b\\c\nd\te");
+    snprintf(st.deck, sizeof(st.deck), "a\"b\\c\nd\te\x01" "f");
 
-    char buf[2048];
+    char buf[DEVICE_API_STATE_BUF_SZ];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
+    CHECK(strstr(buf, "\\u0001") != NULL);
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        check_str(obj(r, "vault"), "name", "a\"b\\c\nd\te");
+        check_str(obj(r, "session"), "deck", "a\"b\\c\nd\te\x01" "f");
         cJSON_Delete(r);
     }
 }
@@ -230,8 +323,17 @@ static void test_overflow_yields_an_empty_string_not_half_a_document(void)
     CHECK_INT(device_api_json_state(&st, buf, sizeof(buf)), -1);
     CHECK_STR(buf, "");
 
+    /* One byte short of the real document is the interesting case: the sink has
+     * to latch on the last append rather than on the first. */
+    char full[DEVICE_API_STATE_BUF_SZ];
+    int n = device_api_json_state(&st, full, sizeof(full));
+    CHECK(n > 0);
+    CHECK_INT(device_api_json_state(&st, full, (size_t)n), -1);
+    CHECK_STR(full, "");
+    CHECK_INT(device_api_json_state(&st, full, (size_t)n + 1), n);
+
     char tiny[4];
-    CHECK_INT(device_api_json_info(tiny, sizeof(tiny), "1A2B", "Obsidian Board",
+    CHECK_INT(device_api_json_info(tiny, sizeof(tiny), "1A2B", "Kanjis Board",
                                    "0.1.0", "1.2.3.4"), -1);
     CHECK_STR(tiny, "");
 
@@ -250,39 +352,52 @@ static void test_worst_case_fits_the_servers_buffer(void)
     device_state_t st;
     memset(&st, 0, sizeof(st));
 
-    #define FILL_ASCII(field) do { \
+    /* Locally produced: a compile-time constant, a MAC, an IP, a string from a
+     * fixed table. None can carry a byte the escaper expands, so their worst
+     * case is one wire byte per stored byte — which is also what a full field
+     * of Korean costs, since UTF-8 passes through untouched. */
+    #define FILL_LOCAL(field) do { \
         size_t n = sizeof(st.field) - 1; \
         memset(st.field, 'W', n); \
         st.field[n] = '\0'; \
     } while (0)
 
-    FILL_ASCII(model);
-    FILL_ASCII(fw);
-    FILL_ASCII(device_id);
-    FILL_ASCII(ip);
-    FILL_ASCII(vault_url);
-    FILL_ASCII(last_result);
+    FILL_LOCAL(model);
+    FILL_LOCAL(fw);
+    FILL_LOCAL(device_id);
+    FILL_LOCAL(ip);
+    FILL_LOCAL(screen_title);
+    FILL_LOCAL(last_result);
 
-    /* Korean is 3 bytes a syllable, and each of those bytes passes through the
-     * escaper untouched — so a Korean field is the same length on the wire as
-     * an ASCII one. A field full of quotes is NOT: each becomes two bytes. */
-    for (size_t i = 0; i + 1 < sizeof(st.vault); i++) st.vault[i] = '"';
-    st.vault[sizeof(st.vault) - 1] = '\0';
-    for (size_t i = 0; i + 1 < sizeof(st.page_title); i++) st.page_title[i] = '\\';
-    st.page_title[sizeof(st.page_title) - 1] = '\0';
-    for (size_t i = 0; i + 1 < sizeof(st.generated_at); i++) st.generated_at[i] = '\n';
-    st.generated_at[sizeof(st.generated_at) - 1] = '\0';
+    /* Everything else is typed by a human into the portal form or copied out of
+     * a payload the board did not write. A C0 control has no short escape and
+     * costs six bytes on the wire for one in the struct, which is the real
+     * worst case and the only one worth sizing the buffer against. */
+    #define FILL_HOSTILE(field) do { \
+        size_t n = sizeof(st.field) - 1; \
+        memset(st.field, '\x01', n); \
+        st.field[n] = '\0'; \
+    } while (0)
 
-    #undef FILL_ASCII
+    FILL_HOSTILE(front);
+    FILL_HOSTILE(reading);
+    FILL_HOSTILE(meaning);
+    FILL_HOSTILE(fsrs_state);
+    FILL_HOSTILE(due);
+    FILL_HOSTILE(deck);
+    FILL_HOSTILE(kanji_url);
 
-    st.page = 3;
-    st.vault_valid = true;
-    st.notes = st.links = 999999999;
-    st.orphans = st.tags = st.added_today = st.added_7d = 999999999;
-    st.agents_total = st.agents_running = st.recent_count = st.inbox_total = 999999999;
-    st.poll_seconds = st.age_seconds = 999999999;
-    st.battery_pct = st.battery_mv = 999999999;
-    st.partial_chain = st.full_refresh_ms = st.partial_refresh_ms = 999999999;
+    #undef FILL_LOCAL
+    #undef FILL_HOSTILE
+
+    /* Every integer at its widest textual form, which is the negative one. */
+    st.screen = st.grade = -2147483647 - 1;
+    st.reps = st.lapses = st.stability_days = st.difficulty_pct = -2147483647 - 1;
+    st.streak = st.reviewed_today = st.left_new = st.left_review = -2147483647 - 1;
+    st.track = st.track_total = -2147483647 - 1;
+    st.poll_seconds = st.age_seconds = -2147483647 - 1;
+    st.battery_pct = st.battery_mv = -2147483647 - 1;
+    st.partial_chain = st.full_refresh_ms = st.partial_refresh_ms = -2147483647 - 1;
 
     char buf[DEVICE_API_STATE_BUF_SZ];
     int n = device_api_json_state(&st, buf, sizeof(buf));
@@ -319,12 +434,13 @@ static void test_zeroed_state_still_parses(void)
     device_state_t st;
     memset(&st, 0, sizeof(st));
 
-    char buf[2048];
+    char buf[DEVICE_API_STATE_BUF_SZ];
     CHECK(device_api_json_state(&st, buf, sizeof(buf)) > 0);
     cJSON *r = cJSON_Parse(buf);
     CHECK(r != NULL);
     if (r) {
-        check_bool(obj(r, "vault"), "valid", false);
+        check_bool(obj(r, "card"), "valid", false);
+        check_bool(obj(r, "session"), "complete", false);
         check_str(r, "deviceId", "");
         cJSON_Delete(r);
     }
@@ -334,7 +450,9 @@ int main(void)
 {
     test_info();
     test_state_shape();
-    test_korean_passes_through_as_utf8();
+    test_every_number_is_an_integer();
+    test_unscheduled_card_reports_minus_one();
+    test_cjk_passes_through_as_utf8();
     test_control_characters_are_escaped();
     test_worst_case_fits_the_servers_buffer();
     test_overflow_yields_an_empty_string_not_half_a_document();

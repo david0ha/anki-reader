@@ -2,7 +2,7 @@
  * ui_internal.h — the layout grid and the drawing shorthand every page shares.
  *
  * Private to vault_core: it is not in include/, and nothing outside the UI
- * files may include it. The public surface is ui_vault.h.
+ * files may include it. The public surface is ui_kanji.h.
  *
  * Why a shorthand at all: on a 1-bit panel every widget wants the same six
  * style calls (no theme, no radius, black on white, no padding, no scrolling),
@@ -15,42 +15,48 @@
 #include <stdarg.h>
 #include <stddef.h>
 
+#include "kanji_model.h"
+#include "kanji_nav.h"
 #include "lvgl.h"
 #include "ui_fonts.h"
+#include "ui_kanji_layout.h"
 #include "ui_strings.h"
-#include "vault_model.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* --- the grid -------------------------------------------------------------
- * Everything on the glass is placed against these. They are the only magic
- * numbers the pages are allowed to share; a page's own internals stay in that
- * page's file. */
-#define UI_W            648
-#define UI_H            480
+ * Every rectangle on the glass comes from ui_kanji_layout.h, which is pure
+ * integers and is host-tested. Only the two panel dimensions are repeated here,
+ * because a screen file that has to include a layout header to ask how wide the
+ * panel is reads worse than one that already knows. */
+#define UI_W            KANJI_SCREEN_W
+#define UI_H            KANJI_SCREEN_H
+#define UI_PAD          14      /* content inset from the panel edge */
+#define UI_RULE          2      /* the black hairline under/over the chrome */
 
-#define UI_HEADER_H      44
-#define UI_FOOTER_H      34
-#define UI_RULE           2     /* the black hairline under/over the chrome */
-
-#define UI_CONTENT_Y    (UI_HEADER_H + UI_RULE)                       /* 46  */
-#define UI_CONTENT_H    (UI_H - UI_CONTENT_Y - UI_FOOTER_H - UI_RULE) /* 398 */
-
-#define UI_PAD           14     /* content inset from the panel edge */
+/* The screens are placed at the content origin, so a layout rectangle's
+ * pane-local y is its panel y minus that origin. */
+#define LOCAL_Y(v) ((v) - kanji_chrome_layout()->content.y)
 
 /* --- fonts ----------------------------------------------------------------
- * The two Korean faces are FULL 완성형 (see ui_fonts.h), so either can draw any
- * string the network sends. Montserrat is used only where a run of digits
- * wants a proper numeral face. */
+ * All four faces carry 완성형 Hangul, ASCII, kana and JIS X 0208 kanji (see
+ * ui_fonts.h), so any of them can draw any string the network sends — which
+ * matters here more than on most boards, because a single example sentence
+ * mixes all three scripts.
+ *
+ * The hero face is Japanese-only — 56 px of Hangul is flash this board does not
+ * have to spend — so it is never selected by size alone; see ui_hero_face().
+ *
+ * Montserrat 14 is the one Latin face kept, for the header's track counter,
+ * where a run of digits wants a proper numeral face. The larger Montserrats
+ * this UI inherited are gone: nothing drew them, and each was flash. */
 #define UI_F_BODY       (&ui_font_kr_16)
 #define UI_F_HEAD       (&ui_font_kr_20)
+#define UI_F_TITLE      (&ui_font_kr_28)
+#define UI_F_HERO       (&ui_font_jp_56)
 #define UI_F_NUM_SM     (&lv_font_montserrat_14)
-#define UI_F_NUM        (&lv_font_montserrat_20)
-#define UI_F_NUM_LG     (&lv_font_montserrat_28)
-#define UI_F_NUM_XL     (&lv_font_montserrat_44)
-#define UI_F_ART_HEAD   (&ui_font_kr_28)
 
 /* --- shapes ---------------------------------------------------------------
  * All coordinates are relative to `par`. Every one of these returns an object
@@ -62,6 +68,17 @@ lv_obj_t *ui_pane(lv_obj_t *par, int x, int y, int w, int h);
 
 /* A solid black rectangle — rules, bars, filled chips, the header band. */
 lv_obj_t *ui_fill(lv_obj_t *par, int x, int y, int w, int h);
+
+/* A solid WHITE rectangle. Two uses, and both need the opacity rather than
+ * transparency:
+ *
+ *   - a white mark on top of a filled area — the action rail's chips and the
+ *     scrubber, where a transparent object would show the black through;
+ *   - the root of a screen that is paper rather than player, so the sheet
+ *     covers whatever the previous screen left in the framebuffer instead of
+ *     letting it show through.
+ */
+lv_obj_t *ui_fill_white(lv_obj_t *par, int x, int y, int w, int h);
 
 /* A white rectangle with a black border of `bw` px. */
 lv_obj_t *ui_frame(lv_obj_t *par, int x, int y, int w, int h, int bw);
@@ -84,54 +101,84 @@ lv_obj_t *ui_lab_inv(lv_obj_t *par, int x, int y, int w,
  * ellipsis in the middle of an AP name and its instructions is useless. */
 void ui_lab_wrap(lv_obj_t *label, int height);
 
-/* Paint white behind a label's box. For text that sits on top of something
- * already drawn — the graph's node titles over its edges — where transparency
- * would leave a line running through the middle of a word. */
-void ui_lab_opaque(lv_obj_t *label);
-
 void ui_set(lv_obj_t *label, const char *txt);
 void ui_setf(lv_obj_t *label, const char *fmt, ...) LV_FORMAT_ATTRIBUTE(2, 3);
 void ui_show(lv_obj_t *obj, bool visible);
 
+/* Whether `f` has a glyph for every character of `s`. Empty and NULL are true.
+ *
+ * This exists for exactly one caller, and for a defect it already caught: the
+ * hero face is Japanese-only to keep 56 px worth of Hangul out of flash, and
+ * kanji_hero_is_large() picks it by LENGTH — so a short headword containing a
+ * character the hero happens not to carry rendered as a tofu box, at 56 px,
+ * dead centre of the card. Length is a layout constraint and coverage is a font
+ * constraint; both have to hold, and only one of them can be decided without
+ * LVGL. */
+bool ui_font_can_draw(const lv_font_t *f, const char *s);
+
+/* The face the headword should be drawn in: the hero when the word both fits it
+ * and can be drawn by it, the title face otherwise. The two card sides call
+ * this rather than deciding separately, because a headword that changed size
+ * between the question and the answer would read as two different words. */
+const lv_font_t *ui_hero_face(const char *front);
+
 /* --- immediate-mode drawing ----------------------------------------------
- * For the two things LVGL widgets cannot express on this panel: the icon
- * glyphs and the link graph's edges. Called only from a LV_EVENT_DRAW_MAIN
+ * For the things LVGL widgets cannot express on this panel: the icon glyphs
+ * and the wordmark's play badge. Called only from a LV_EVENT_DRAW_MAIN
  * handler, in ABSOLUTE screen coordinates (add lv_obj_get_coords()'s origin).
  *
  * `white` draws in white — used to punch a hole in something already drawn,
- * which is how a node circle stays readable with six edges running under it. */
+ * which is how the wordmark's play triangle is cut out of its badge and how the
+ * Wi-Fi-off glyph gets its slash. */
 void ui_draw_line_abs(lv_layer_t *L, int x1, int y1, int x2, int y2, int w, bool white);
-void ui_draw_disc_abs(lv_layer_t *L, int cx, int cy, int r, bool white);
 void ui_draw_ring_abs(lv_layer_t *L, int cx, int cy, int r, int w, int a0, int a1);
 void ui_draw_rect_abs(lv_layer_t *L, int x1, int y1, int x2, int y2,
                       bool fill, int border, bool white);
 
-/* --- text ----------------------------------------------------------------- */
-
-/* 1428 -> "1,428". Grouping matters here: the four headline counters are the
- * first thing read from across a room, and an ungrouped five-digit number is
- * genuinely slower to parse. */
-void ui_group_int(char *out, size_t n, int v);
-
-/* --- the pages ------------------------------------------------------------
- * Each page is one file and obeys the same two-call contract: create() builds
+/* --- the screens ----------------------------------------------------------
+ * Each screen is one file and obeys the same two-call contract: create() builds
  * a pane the size of the content area and returns it (the router positions and
  * shows/hides it), update() rewrites its widgets from a snapshot and touches
  * nothing else. A NULL snapshot means "blank yourself".
  *
- * Nothing in a page file talks to the panel, keeps state beyond its widgets, or
- * knows which page is on screen. */
-lv_obj_t *ui_page_stats_create(lv_obj_t *par);
-void      ui_page_stats_update(const vault_t *v);
+ * Nothing in a screen file talks to the panel, keeps state beyond its widgets,
+ * or knows which screen is on glass.
+ *
+ * The two card sides take the nav state as well as the card: the answer's grade
+ * dock draws a cursor, and the question's prompt names the button that reveals.
+ * The sheets take a page index because they are paged by KEY0. */
+lv_obj_t *ui_card_question_create(lv_obj_t *par);
+void      ui_card_question_update(const kanji_t *k);
 
-lv_obj_t *ui_page_graph_create(lv_obj_t *par);
-void      ui_page_graph_update(const vault_t *v);
+lv_obj_t *ui_card_answer_create(lv_obj_t *par);
+void      ui_card_answer_update(const kanji_t *k, kanji_grade_t cursor);
 
-lv_obj_t *ui_page_agents_create(lv_obj_t *par);
-void      ui_page_agents_update(const vault_t *v);
+/* The dock alone, for the partial refresh that moves the cursor without
+ * flashing the whole panel. */
+void      ui_card_answer_dock(const kanji_t *k, kanji_grade_t cursor);
 
-lv_obj_t *ui_page_notes_create(lv_obj_t *par);
-void      ui_page_notes_update(const vault_t *v);
+lv_obj_t *ui_sheet_desc_create(lv_obj_t *par);
+void      ui_sheet_desc_update(const kanji_t *k);
+
+lv_obj_t *ui_sheet_comments_create(lv_obj_t *par);
+void      ui_sheet_comments_update(const kanji_t *k, int page);
+
+lv_obj_t *ui_sheet_fsrs_create(lv_obj_t *par);
+void      ui_sheet_fsrs_update(const kanji_t *k, int page);
+
+/* The inverted strip every sheet wears: which card, and which sheet. Built by
+ * the sheet, filled by the router, so the three cannot drift apart. */
+typedef struct {
+    lv_obj_t *word;
+    lv_obj_t *title;
+} ui_sheet_band_t;
+
+void ui_sheet_band_create(lv_obj_t *par, ui_sheet_band_t *out, const char *title);
+void ui_sheet_band_update(const ui_sheet_band_t *band, const kanji_t *k);
+
+/* "1/3" in the body's bottom-right corner. Hidden when there is only one page:
+ * a pager that always says 1/1 trains the eye to ignore it. */
+void      ui_pager_set(lv_obj_t *pager, int page, int pages);
 
 #ifdef __cplusplus
 }

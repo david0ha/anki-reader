@@ -1,4 +1,4 @@
-// Pure (host-testable) configuration model for Wi-Fi + vault-source provisioning.
+// Pure (host-testable) configuration model for Wi-Fi + study-source provisioning.
 // This header MUST NOT depend on ESP-IDF so it can be unit-tested on the host.
 #pragma once
 
@@ -7,19 +7,20 @@
 
 #define PROV_SSID_MAX_LEN     32   // 802.11 SSID limit
 #define PROV_PASS_MAX_LEN     64   // WPA2 passphrase limit
-#define PROV_URL_MAX_LEN     128   // where the vault snapshot is fetched from
+#define PROV_URL_MAX_LEN     128   // where the study card is fetched from
 
 typedef struct {
     char ssid[PROV_SSID_MAX_LEN + 1];
     char password[PROV_PASS_MAX_LEN + 1];
-    // The URL the device polls for its vault snapshot, e.g.
-    // "http://macbook.local:8123/vault.json". Plain HTTP is the normal case:
+    // The URL the device polls for its study card, e.g.
+    // "http://macbook.local:8123/kanji.json". Plain HTTP is the normal case:
     // this is a link between two machines on the user's own LAN, and requiring
     // a certificate for it would mean requiring a certificate authority.
     //
     // Empty is supported: the board renders an explicitly labeled built-in
-    // design preview. A current dated tarot still requires a snapshot source.
-    char vault_url[PROV_URL_MAX_LEN + 1];
+    // demo card, so it is a finished object with no PC running. It cannot
+    // record what the learner answered, which is what the source is for.
+    char study_url[PROV_URL_MAX_LEN + 1];
 } prov_config_t;
 
 #ifdef __cplusplus
@@ -46,7 +47,7 @@ prov_cred_result_t prov_validate_credentials(const char *ssid, const char *passw
 // Deliberately permissive about the rest — a hostname, an IP, a port, a path, a query string
 // are all fine. The point is to catch the two mistakes people actually make, which are pasting
 // a bare hostname with no scheme and pasting a whole file:// path.
-bool prov_validate_vault_url(const char *url);
+bool prov_validate_study_url(const char *url);
 
 #ifdef __cplusplus
 }

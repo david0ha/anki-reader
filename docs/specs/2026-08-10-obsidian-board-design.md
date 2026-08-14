@@ -1,5 +1,14 @@
 # Obsidian Board — design
 
+> **Superseded.** The content axis described here — the four-page Obsidian vault dashboard and its
+> `vault.json` contract — no longer ships. The board is now a kanjis.ai study device; see
+> [../kanji-contract.md](../kanji-contract.md) and the root `CLAUDE.md`. The hardware, the
+> draw-and-present split, the provisioning flow and the device API described below are still
+> accurate, which is why this record is kept. **§8 (Names) is not:** the AP prefix and model string
+> are now `"Kanjis Board"`, and only the mDNS hostname `obsidianboard` survives. The paragraph is
+> left as written because this file is a record of what was decided on 2026-08-10, not a
+> description of what ships.
+
 **Date:** 2026-08-10
 **Status:** implemented — see §9 for where the implementation departed from this, and
 §10 for sub-project 2, which this spec deferred and which was then built anyway

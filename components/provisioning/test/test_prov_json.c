@@ -54,9 +54,9 @@ TEST(json_escape_overflow_yields_empty)
 TEST(json_info_basic)
 {
     char out[256];
-    int n = prov_json_info(out, sizeof(out), "9F3A", "Obsidian Board", "Obsidian Board-9F3A");
+    int n = prov_json_info(out, sizeof(out), "9F3A", "Kanjis Board", "Kanjis Board-9F3A");
     CHECK(n > 0);
-    CHECK_STR(out, "{\"deviceId\":\"9F3A\",\"model\":\"Obsidian Board\",\"apSsid\":\"Obsidian Board-9F3A\"}");
+    CHECK_STR(out, "{\"deviceId\":\"9F3A\",\"model\":\"Kanjis Board\",\"apSsid\":\"Kanjis Board-9F3A\"}");
 }
 
 TEST(json_info_null_fields_empty)

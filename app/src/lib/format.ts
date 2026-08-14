@@ -1,18 +1,29 @@
 // Pure display formatters for the dashboard. Kept tiny and testable so the same number is
 // rendered the same way everywhere and nothing throws on the board's loosely-typed JSON.
 
-import type { VaultFetchResult } from './esp32'
+import type { FsrsState, StudyFetchResult } from './esp32'
 
 /**
- * The panel exposes one fixed artwork composition rather than navigable pages.
+ * The five screens the board can be on, named as the board itself names them.
  *
- * The board also reports its own `pageTitle`; the label is retained for wire compatibility and
- * status display even though there is no page switcher.
+ * These are Korean because the panel is: `kanji_screen_title()` prints exactly these strings in
+ * the footer, and the phone showing "Answer" while the glass shows 정답 would leave the user
+ * translating between two names for one screen.
  */
-export const PAGE_LABELS = ['Artwork'] as const
+export const SCREEN_LABELS = ['문제', '정답', '설명', '댓글', 'FSRS'] as const
 
-export function pageLabel(page: number): string {
-  return PAGE_LABELS[page] ?? `Page ${page}`
+export function screenLabel(screen: number): string {
+  return SCREEN_LABELS[screen] ?? `Screen ${screen}`
+}
+
+/**
+ * The four FSRS ratings, in dock order, as the grade dock prints them. Indexed by the wire value
+ * of `kanji_grade_t`, which starts at 1 (py-fsrs `Rating.Again`) — not at 0.
+ */
+export const GRADE_LABELS = ['다시', '어려움', '보통', '쉬움'] as const
+
+export function gradeLabel(grade: number): string {
+  return GRADE_LABELS[grade - 1] ?? '—'
 }
 
 /** Thousands-separated count. Returns '—' for non-finite. */
@@ -21,26 +32,55 @@ export function formatCount(value: number): string {
   return Math.round(value).toLocaleString('en-US')
 }
 
-/** Signed delta for the "+N today" lines, e.g. "+6" / "0". */
-export function formatDelta(value: number): string {
-  if (!Number.isFinite(value)) return '—'
-  const n = Math.round(value)
-  return n > 0 ? `+${n}` : String(n)
+/** Position in today's queue, e.g. "35 of 60". '—' before the board has a queue at all. */
+export function formatTrack(track: number, total: number): string {
+  if (!Number.isFinite(track) || !Number.isFinite(total) || total <= 0) return '—'
+  return `${Math.round(track)} of ${Math.round(total)}`
+}
+
+/** How far through today's queue, 0..1. Zero when there is no queue, so a bar can always render. */
+export function trackFraction(track: number, total: number): number {
+  if (!Number.isFinite(track) || !Number.isFinite(total) || total <= 0) return 0
+  return Math.max(0, Math.min(1, track / total))
+}
+
+/** Days in a row, e.g. "12 days" / "1 day". */
+export function formatStreak(days: number): string {
+  if (!Number.isFinite(days) || days < 0) return '—'
+  const n = Math.round(days)
+  return n === 1 ? '1 day' : `${n} days`
 }
 
 /**
- * One decimal of percent, e.g. "2.6%". `total` of zero yields '—' rather than NaN or a division
- * by zero — an empty vault has no orphan *rate*, and "0.0%" would claim it has a good one.
+ * When the card is next due.
+ *
+ * The board has no RTC, so this is a Korean span the proxy already worded against its own clock
+ * ("9일 뒤", "곧"). It is passed through verbatim — re-deriving it here would need a timestamp
+ * the contract deliberately never sends. An empty string means the scheduler has never seen this
+ * card, which is a different fact from "due now".
  */
-export function formatRatio(part: number, total: number): string {
-  if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return '—'
-  return `${((part / total) * 100).toFixed(1)}%`
+export function formatDue(due: string): string {
+  const s = (due ?? '').trim()
+  return s.length > 0 ? s : 'not scheduled'
 }
 
-/** Links per note to one decimal — the vault's connectedness. '—' on an empty vault. */
-export function formatDensity(links: number, notes: number): string {
-  if (!Number.isFinite(links) || !Number.isFinite(notes) || notes <= 0) return '—'
-  return (links / notes).toFixed(1)
+/**
+ * FSRS stability in days.
+ *
+ * -1 is the contract's "not scheduled yet" and must not render as a number: a card whose
+ * stability is unknown and one whose interval rounds to zero days are different states, and only
+ * the second of them is worth printing a 0 for.
+ */
+export function formatStability(days: number): string {
+  if (!Number.isFinite(days) || days < 0) return '—'
+  const n = Math.round(days)
+  return n === 1 ? '1 day' : `${n} days`
+}
+
+/** FSRS difficulty as a percentage. -1 is "not scheduled yet", the same as stability. */
+export function formatDifficulty(pct: number): string {
+  if (!Number.isFinite(pct) || pct < 0) return '—'
+  return `${Math.round(pct)}%`
 }
 
 /**
@@ -76,26 +116,63 @@ export function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
+export type Tone = 'up' | 'down' | 'warn' | 'neutral'
+
+/** The scheduler state in English. The board sends the wire word, not its own Korean label. */
+export function fsrsStateLabel(state: FsrsState): string {
+  switch (state) {
+    case 'new':
+      return 'New card'
+    case 'learning':
+      return 'Learning'
+    case 'review':
+      return 'Review'
+    case 'relearning':
+      return 'Relearning'
+    default:
+      return 'Unknown'
+  }
+}
+
+/**
+ * Colour for the scheduler state. `relearning` is the only warning: it is the state a card lands
+ * in after the learner has forgotten it, and it is the one worth noticing on a glance at the
+ * phone. `new` is neutral — an unseen card is the normal start of every card's life.
+ */
+export function fsrsStateTone(state: FsrsState): Tone {
+  switch (state) {
+    case 'review':
+      return 'up'
+    case 'relearning':
+      return 'warn'
+    case 'new':
+    case 'learning':
+      return 'neutral'
+    default:
+      return 'warn'
+  }
+}
+
 /** A sentence for each `source.lastResult`, saying what to go and check. */
-export function fetchResultMessage(result: VaultFetchResult): string {
+export function fetchResultMessage(result: StudyFetchResult): string {
   switch (result) {
     case 'ok':
       return 'Last poll succeeded.'
     case 'no_url':
-      return 'No vault URL set — the board is showing its demo snapshot.'
+      return 'No study URL set — the board is showing its demo card.'
     case 'transport':
-      return 'Couldn’t reach that address. Is the machine serving it awake and on this network?'
+      return 'Couldn’t reach that address. Is the machine running kanji_server.py awake and on this network?'
     case 'http_status':
       return 'The server answered, but with an error. Check the path in the address.'
     case 'bad_payload':
-      return 'The server answered with something that isn’t a vault snapshot.'
+      return 'The server answered with something that isn’t a study card.'
     default:
       return 'The board reported a result this app doesn’t recognise.'
   }
 }
 
-/** Short status word for the chip beside the vault name. */
-export function fetchResultLabel(result: VaultFetchResult): string {
+/** Short status word for the chip beside the deck name. */
+export function fetchResultLabel(result: StudyFetchResult): string {
   switch (result) {
     case 'ok':
       return 'synced'
@@ -112,13 +189,11 @@ export function fetchResultLabel(result: VaultFetchResult): string {
   }
 }
 
-export type Tone = 'up' | 'down' | 'warn' | 'neutral'
-
 /**
  * Chip colour for a fetch result. `no_url` is deliberately neutral, not a warning: a board with no
- * URL is a complete, working product showing its demo snapshot, not a broken one.
+ * URL is a complete, working product showing its demo card, not a broken one.
  */
-export function fetchResultTone(result: VaultFetchResult): Tone {
+export function fetchResultTone(result: StudyFetchResult): Tone {
   switch (result) {
     case 'ok':
       return 'up'

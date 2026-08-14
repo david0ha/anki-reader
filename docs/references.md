@@ -29,13 +29,29 @@ is the most expensive kind of wrong.
 
 ## Fonts
 
-- **Noto Sans KR**, Regular and Medium, SIL Open Font License 1.1 —
-  https://github.com/notofonts/noto-cjk (`Sans/SubsetOTF/KR/`). License text bundled at
-  `components/vault_core/fonts/OFL.txt`.
+- **Noto Sans KR** and **Noto Sans JP**, Regular and Medium, SIL Open Font License 1.1 —
+  https://github.com/notofonts/noto-cjk (`Sans/SubsetOTF/KR/` and `Sans/SubsetOTF/JP/`). License
+  text bundled at `components/vault_core/fonts/OFL.txt`. Both families are cuts of the same Source
+  Han Sans design, which is why a Japanese headword and a Korean gloss share a baseline.
 - **KS X 1001 완성형** — the 2350 syllables are derived at generation time from Python's `euc-kr`
   codec (lead `0xB0..0xC8` × trail `0xA1..0xFE`), so there is no table in this repo to fall out of
   date. See `tools/gen_fonts.py`.
-- [`lv_font_conv`](https://github.com/lvgl/lv_font_conv) — invoked by `tools/gen_fonts.py`.
+- **JIS X 0208** — the kana, the 6355 level 1 + level 2 kanji and the punctuation row are derived
+  the same way, from Python's `euc-jp` codec (rows 4–5 and 16–84). Also no table in this repo.
+- [`lv_font_conv`](https://github.com/lvgl/lv_font_conv) — invoked by `tools/gen_fonts.py`. Worth
+  knowing before you touch the symbol split: when two `--font` groups claim a codepoint the **last**
+  one wins (`lib/ranger.js` overwrites the entry), and if that winner lacks the glyph the character
+  is dropped silently with exit code 0. `verify_face()` in `gen_fonts.py` exists because of this.
+
+## The study source
+
+- [kanjis.ai](https://kanjis.ai) — the study catalog, the session and the FSRS scheduler the board
+  displays. The device never talks to it; `tools/kanji_server.py` does. See
+  [kanji-contract.md](kanji-contract.md).
+- **FSRS** (Free Spaced Repetition Scheduler) —
+  [the algorithm](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm) and
+  [`py-fsrs`](https://github.com/open-spaced-repetition/py-fsrs), whose `Rating` values (Again 1,
+  Hard 2, Good 3, Easy 4) `kanji_grade_t` matches exactly so the enum can go on the wire unmapped.
 
 ## Framework
 

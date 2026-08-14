@@ -36,7 +36,7 @@ typedef struct {
     void           *user;                   // passed back to event_cb
 } prov_options_t;
 
-// Populate `opts` with sensible defaults (prefix "Obsidian Board", 15 s timeout, no callback).
+// Populate `opts` with sensible defaults (prefix "Kanjis Board", 15 s timeout, no callback).
 void provisioning_default_options(prov_options_t *opts);
 
 // Run the flow described above. Returns true when connected to Wi-Fi, with *out holding the

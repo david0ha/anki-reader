@@ -37,6 +37,10 @@ the `AppleT8132USBXHCI` controllers.
 Swap the cable for one you have moved data over before doing anything else. If a device appears and
 flashing still fails, force download mode: hold **BOOT**, tap **RESET**, release BOOT, retry.
 
+If the *build* stops instead, on `Too large font or glyphs in UI_FONT_JP_56`, the checkout's
+`sdkconfig` predates `CONFIG_LV_FONT_FMT_TXT_LARGE=y`. `sdkconfig` is generated once and never
+re-derived from `sdkconfig.defaults`, so `rm sdkconfig && idf.py build` is the fix.
+
 ## 2. Read the boot log in this order
 
 Each line below is the checkpoint for one subsystem. They appear in this sequence; the first one
@@ -98,7 +102,7 @@ First boot has nothing stored:
 
 ```
 I provisioning: no stored network — starting setup portal
-I provisioning: setup portal ready — join Wi-Fi 'Obsidian Board-XXXX' and open http://192.168.4.1
+I provisioning: setup portal ready — join Wi-Fi 'Kanjis Board-XXXX' and open http://192.168.4.1
 ```
 
 The panel should now show the setup overlay with that same SSID on it. **That is the first
@@ -118,20 +122,24 @@ It reboots. On the second boot: `stored network 'X' — attempting to connect`.
 ### `net_time`, `device_api` — online
 
 ```
+I app: online — study URL '...'
 I net_time: time synced
 I device_api: control server up on port 80
 I device_api: mDNS advertising http://obsidianboard.local
 ```
 
-`sntp sync timeout` does not change the artwork layout; snapshot staleness is measured monotonically
-and is unaffected. From here the board is reachable:
+`sntp sync timeout` changes nothing on the glass. This board prints no clock and computes no
+interval: every span it shows — `9일 뒤`, `10분 뒤` — is worded by the proxy against the *server's*
+clock and arrives as a string. Card staleness is measured monotonically and is unaffected. From here
+the board is reachable:
 
 ```bash
 curl -s http://obsidianboard.local/api/info
 ```
 
 If mDNS does not resolve — some routers and most corporate networks block it — use the IP from the
-`got IP` line. The companion app has a host override in Settings for exactly this.
+`got IP` line. The companion app has a host override in Settings for exactly this. The full route
+list is in [app-control.md](app-control.md).
 
 ## 3. Run the self-test
 
@@ -155,7 +163,7 @@ curl -s http://obsidianboard.local/api/state | jq '.panel, .battery'
 | number | where it goes |
 |---|---|
 | `fullRefreshMs` | decides nothing on its own, but see the table in [epaper-5in83.md](epaper-5in83.md#when-the-numbers-arrive) |
-| `partialRefreshMs` | records self-test behavior; normal artwork changes use a full refresh |
+| `partialRefreshMs` | this one is load-bearing now: it is what a KEY0 press on the answer screen costs. See below. |
 | `battery.millivolts` vs a multimeter on the cell | corrects `BATT_DIVIDER` in `components/board_io/board_io.c` |
 
 `BATT_DIVIDER` is 3.0 **from the documentation, never measured**. It is the kind of constant that
@@ -163,30 +171,39 @@ fails quietly — a wrong ratio gives a percentage that looks entirely plausible
 time you glance at the panel. Scale it by the ratio between the two readings, then record here that
 it has been checked, and the question is closed.
 
-Also watch one unchanged poll and one changed `daily_tarot` payload before deciding the refresh
-policy. An unchanged tarot fingerprint must leave the panel untouched; a changed card or reading
-gets one full refresh.
+## 5. Walk the study loop on the glass
 
-## 5. Point it at a real vault
+This is the acceptance test the simulator cannot run, because it is about time rather than pixels.
 
-```bash
-python3 tools/vault_server.py ~/Documents/MyVault      # on the machine holding the vault
-curl -X POST http://obsidianboard.local/api/vault -d '{"url":"http://mymac.local:8123/vault.json"}'
-```
-
-There is deliberately no `DEMO` badge, header or footer on the artwork. Confirm the source through
-`GET /api/state`: `source.lastResult` becomes `ok`, while its three failure codes each send you
-somewhere different — [vault-contract.md](vault-contract.md) has them. On glass, the full-height
-card and the right-hand reading change only when the visible `daily_tarot` fingerprint changes.
+1. **The demo card.** With no study URL the board shows 会う badged `DEMO` within a second of boot.
+   Press KEY0: it reveals. Press KEY0 again three times and watch the grade cursor walk
+   보통 → 쉬움 → 다시 → 어려움. **Only the dock strip should flash** — if the whole panel refreshes,
+   the dock rectangle and the drawn dock have drifted apart; `test_kanji_layout.c` covers the
+   geometry, so look at what `present_dock()` was handed.
+2. **Ghosting.** Keep pressing KEY0. The driver promotes the sixth partial in a row to a full
+   refresh (`EPD_PARTIAL_CHAIN_MAX`). If residue is visible before that, lower it.
+3. **A real session.** Start `tools/kanji_server.py` on your machine and give the board its URL —
+   from the portal, or over the network per [app-control.md](app-control.md). The `DEMO` badge goes;
+   `source.lastResult` in `GET /api/state` becomes `ok`.
+4. **An unchanged poll.** Leave it five minutes. The panel must not move — the log says
+   `study: unchanged, panel untouched` at debug level. This is the single most common outcome in the
+   device's life and the one that must not cost a refresh.
+5. **A grade.** Press KEY1 on the answer side. The panel stays on the answer you just rated until
+   the next card actually arrives; that is deliberate, not a hang. The next card comes back as the
+   *response* to the grade, so anything drawn sooner would be a guess.
+6. **A dead proxy.** Stop `kanji_server.py` and press KEY2. The card stays; the header badge becomes
+   오프라인. Nothing blanks. The three failure codes each send you somewhere different —
+   [kanji-contract.md](kanji-contract.md#how-it-fails) has them.
 
 ## Buttons
 
-| | |
-|---|---|
-| KEY0 | reserved (artwork unchanged) |
-| KEY1 | poll now |
-| KEY2 | tap → reserved · **hold 5 s → reboot into Wi-Fi setup** |
-| BOOT | reserved (artwork unchanged) |
+| | 문제 | 정답 | inside a sheet |
+|---|---|---|---|
+| KEY0 | reveal the answer | walk the grade cursor | next page |
+| KEY1 | open 설명 | commit the rating | close the sheet |
+| KEY2 | refresh, from anywhere · **hold 5 s → reboot into Wi-Fi setup** | | |
+| BOOT | open FSRS | open 설명 | next sheet |
 
 The KEY2 hold is the escape hatch for a board stuck on a network that no longer exists. It keeps the
-saved config so the portal pre-fills, and only the Wi-Fi needs re-entering.
+saved config so the portal pre-fills, and only the Wi-Fi needs re-entering. It is caught before the
+nav state machine sees the press, because the state machine has no notion of how long a press was.

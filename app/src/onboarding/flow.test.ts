@@ -3,10 +3,10 @@ import { ONBOARDING_STEPS, canProceed, progressFor, stepIndex } from './flow'
 
 describe('onboarding flow ordering', () => {
   it('lists the steps in order', () => {
-    // The vault-URL step sits between Wi-Fi selection and the password/join step, so the address
+    // The study-URL step sits between Wi-Fi selection and the password/join step, so the address
     // is collected before provisioning hands it over with the credentials — the board's very
     // first poll after joining then already has somewhere to go.
-    expect(ONBOARDING_STEPS).toEqual(['turn-on', 'wifi-list', 'vault', 'password', 'complete'])
+    expect(ONBOARDING_STEPS).toEqual(['turn-on', 'wifi-list', 'study', 'password', 'complete'])
   })
 
   it('indexes steps', () => {
@@ -21,7 +21,7 @@ describe('onboarding flow ordering', () => {
 })
 
 describe('canProceed', () => {
-  const base = { selectedNetwork: null as string | null, password: '', vaultUrl: '' }
+  const base = { selectedNetwork: null as string | null, password: '', studyUrl: '' }
 
   it('always allows the info + completion steps', () => {
     expect(canProceed('turn-on', base)).toBe(true)
@@ -33,19 +33,19 @@ describe('canProceed', () => {
     expect(canProceed('wifi-list', { ...base, selectedNetwork: 'Home' })).toBe(true)
   })
 
-  it('allows a blank vault URL — the board runs on its demo snapshot', () => {
-    expect(canProceed('vault', base)).toBe(true)
+  it('allows a blank study URL — the board runs on its demo card', () => {
+    expect(canProceed('study', base)).toBe(true)
   })
 
-  it('allows a well-formed vault URL', () => {
-    expect(canProceed('vault', { ...base, vaultUrl: 'http://mac.local:8123/vault.json' })).toBe(true)
+  it('allows a well-formed study URL', () => {
+    expect(canProceed('study', { ...base, studyUrl: 'http://mac.local:8123/kanji.json' })).toBe(true)
   })
 
-  it('blocks a malformed vault URL before the join, not after it', () => {
+  it('blocks a malformed study URL before the join, not after it', () => {
     // The board would reject this too, but only on the far side of a ~45s Wi-Fi join the user
     // cannot undo.
-    expect(canProceed('vault', { ...base, vaultUrl: 'mac.local/vault.json' })).toBe(false)
-    expect(canProceed('vault', { ...base, vaultUrl: 'http://' })).toBe(false)
+    expect(canProceed('study', { ...base, studyUrl: 'mac.local/kanji.json' })).toBe(false)
+    expect(canProceed('study', { ...base, studyUrl: 'http://' })).toBe(false)
   })
 
   it('requires a password only for secured networks', () => {

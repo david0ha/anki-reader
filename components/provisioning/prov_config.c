@@ -22,7 +22,7 @@ prov_cred_result_t prov_validate_credentials(const char *ssid, const char *passw
     return PROV_CRED_OK;
 }
 
-bool prov_validate_vault_url(const char *url)
+bool prov_validate_study_url(const char *url)
 {
     if (url == NULL || url[0] == '\0') {
         return true;                      // empty == run on the demo snapshot

@@ -40,10 +40,10 @@ static void put_int(sink_t *s, int v)
 
 /* Append `in` escaped as the body of a JSON string (no surrounding quotes).
  *
- * UTF-8 passes through byte for byte: vault names and note titles are Korean,
- * and JSON strings are defined over Unicode, so escaping them to \u would be
- * legal but pointless. Only the seven mandatory escapes and the C0 controls are
- * rewritten. */
+ * UTF-8 passes through byte for byte: deck names and glosses are Korean, the
+ * headword and its reading are Japanese, and JSON strings are defined over
+ * Unicode, so escaping them to \u would be legal but pointless. Only the seven
+ * mandatory escapes and the C0 controls are rewritten. */
 static void put_escaped(sink_t *s, const char *in)
 {
     if (!s->ok) {
@@ -146,28 +146,38 @@ int device_api_json_state(const device_state_t *st, char *out, size_t out_size)
     put_str_field(&s, "model", st->model, false);
     put_str_field(&s, "fw", st->fw, false);
     put_str_field(&s, "ip", st->ip, false);
-    put_int_field(&s, "page", st->page, false);
-    put_str_field(&s, "pageTitle", st->page_title, false);
+    put_int_field(&s, "screen", st->screen, false);
+    put_str_field(&s, "screenTitle", st->screen_title, false);
+    put_bool_field(&s, "revealed", st->revealed, false);
+    put_int_field(&s, "grade", st->grade, false);
 
-    put(&s, ",\"vault\":{");
-    put_bool_field(&s, "valid", st->vault_valid, true);
+    put(&s, ",\"card\":{");
+    put_bool_field(&s, "valid", st->card_valid, true);
     put_bool_field(&s, "demo", st->demo, false);
-    put_str_field(&s, "name", st->vault, false);
-    put_str_field(&s, "generatedAt", st->generated_at, false);
-    put_int_field(&s, "notes", st->notes, false);
-    put_int_field(&s, "links", st->links, false);
-    put_int_field(&s, "orphans", st->orphans, false);
-    put_int_field(&s, "tags", st->tags, false);
-    put_int_field(&s, "addedToday", st->added_today, false);
-    put_int_field(&s, "added7d", st->added_7d, false);
-    put_int_field(&s, "agents", st->agents_total, false);
-    put_int_field(&s, "agentsRunning", st->agents_running, false);
-    put_int_field(&s, "recent", st->recent_count, false);
-    put_int_field(&s, "inbox", st->inbox_total, false);
+    put_str_field(&s, "front", st->front, false);
+    put_str_field(&s, "reading", st->reading, false);
+    put_str_field(&s, "meaning", st->meaning, false);
+    put_str_field(&s, "fsrsState", st->fsrs_state, false);
+    put_str_field(&s, "due", st->due, false);
+    put_int_field(&s, "reps", st->reps, false);
+    put_int_field(&s, "lapses", st->lapses, false);
+    put_int_field(&s, "stabilityDays", st->stability_days, false);
+    put_int_field(&s, "difficultyPct", st->difficulty_pct, false);
+    put(&s, "}");
+
+    put(&s, ",\"session\":{");
+    put_str_field(&s, "deck", st->deck, true);
+    put_int_field(&s, "streak", st->streak, false);
+    put_int_field(&s, "reviewedToday", st->reviewed_today, false);
+    put_int_field(&s, "leftNew", st->left_new, false);
+    put_int_field(&s, "leftReview", st->left_review, false);
+    put_int_field(&s, "track", st->track, false);
+    put_int_field(&s, "trackTotal", st->track_total, false);
+    put_bool_field(&s, "complete", st->session_complete, false);
     put(&s, "}");
 
     put(&s, ",\"source\":{");
-    put_str_field(&s, "url", st->vault_url, true);
+    put_str_field(&s, "url", st->kanji_url, true);
     put_str_field(&s, "lastResult", st->last_result, false);
     put_int_field(&s, "pollSeconds", st->poll_seconds, false);
     put_int_field(&s, "ageSeconds", st->age_seconds, false);

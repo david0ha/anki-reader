@@ -3,11 +3,22 @@
  *
  * Four press-to-GND buttons are exposed to the app as a FreeRTOS event queue:
  *
- *   KEY0 — EE04 side button 1  -> reserved by the single artwork UI
- *   KEY1 — EE04 side button 2  -> refresh now
- *   KEY2 — EE04 side button 3  -> tap: back to page 0; 5s hold: Wi-Fi setup
+ *   KEY0 — EE04 side button 1
+ *   KEY1 — EE04 side button 2
+ *   KEY2 — EE04 side button 3
  *   BOOT — the XIAO module's own button: download-mode pin at reset, a normal
  *          input afterwards
+ *
+ * What each one MEANS is deliberately not written here. On this board a button
+ * means something different on every screen — KEY0 reveals the answer, then
+ * walks the grade cursor, then pages a sheet — and the mapping lives in exactly
+ * one place: components/vault_core/kanji_nav.c, which is pure logic and is
+ * driven from every state by test_kanji_nav.c. A second copy of it in a driver
+ * header is a copy that goes stale, which is what happened to the one this
+ * paragraph replaced.
+ *
+ * The single exception the driver has to know about is KEY2's five-second hold,
+ * because it is timed here rather than decided there — see buttons_is_pressed.
  *
  * All are active-low (internal pull-up + falling-edge interrupt) and debounced
  * in the ISR. A press posts one button_event_t to the caller-owned queue; the

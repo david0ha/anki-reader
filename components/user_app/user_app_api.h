@@ -7,7 +7,7 @@
  * e-Paper panel directly:
  *
  *   - reads  (user_app_snapshot)  take the app's state lock and copy out plain data.
- *   - writes (page/refresh/url/display_test) validate cheaply, then post a
+ *   - writes (screen/refresh/url/display_test) validate cheaply, then post a
  *     command onto the app's queue; the UI task applies it via the same code
  *     path as a button press.
  *
@@ -24,13 +24,15 @@
 
 #include "device_api_model.h"
 
-/* Identity reported to the app and advertised over mDNS.
+/* The human-readable identity: reported by GET /api/info and advertised as the
+ * mDNS service instance name. The mDNS HOSTNAME is a separate string and does
+ * not follow this one — device_api.c says why.
  *
- * These are NOT the fortune board's names. That project's `tickerboard.local`
- * and "Ticker Board" SSID prefix are hardcoded in its shipped companion app, so
- * reusing them would make two different devices answer the same discovery
- * probe on the same LAN. */
-#define DEVICE_MODEL  "Obsidian Board"
+ * Not the fortune board's "Ticker Board" either. That name and
+ * `tickerboard.local` are hardcoded in another project's shipped companion app,
+ * so reusing them would make two different devices answer one discovery probe
+ * on the same LAN. */
+#define DEVICE_MODEL  "Kanjis Board"
 #define DEVICE_FW     "0.1.0"
 
 #ifdef __cplusplus
@@ -41,17 +43,21 @@ extern "C" {
  * out->ip empty for the caller (device_api owns esp_netif/esp_mac). */
 void user_app_snapshot(device_state_t *out);
 
-/* Compatibility endpoint for the single composition. Only page 0 is valid. */
-bool user_app_set_page(int page);
+/* Put the board on `screen`, one of kanji_screen_t's 0..KANJI_SCREEN_COUNT-1.
+ *
+ * It drives the same nav state a button press does rather than a parallel one,
+ * so a phone cannot leave the board on a screen the buttons cannot get it out
+ * of. Returns false for an out-of-range screen. */
+bool user_app_set_screen(int screen);
 
-/* Poll the vault source now instead of waiting out the interval. The panel is
- * only refreshed if the fetched content differs from what is on the glass. */
+/* Poll the study source now instead of waiting out the interval. The panel is
+ * only refreshed if the fetched card differs from what is on the glass. */
 bool user_app_refresh_now(void);
 
-/* Point the device at a different snapshot URL. Validated, persisted to NVS and
- * applied live — no reboot. Empty switches to the built-in demo snapshot.
- * Returns false if the URL is not usable (see prov_validate_vault_url). */
-bool user_app_set_vault_url(const char *url);
+/* Point the device at a different study URL. Validated, persisted to NVS and
+ * applied live — no reboot. Empty switches to the built-in demo card.
+ * Returns false if the URL is not usable (see prov_validate_study_url). */
+bool user_app_set_study_url(const char *url);
 
 /* Run the e-Paper self-test pattern sweep. Blocks the UI task for tens of
  * seconds once it starts, so this only enqueues it. */

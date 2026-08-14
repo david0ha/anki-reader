@@ -27,8 +27,10 @@ contrast, no greys, nothing that depends on a hairline surviving a threshold.
 
 **No RTC, and the two pins that used to carry I2C are taken.** The EE05 routed GPIO5/GPIO6 to an
 I2C side header; on the EE04 they are KEY2 and the battery divider's load-switch enable. So the
-PCF85063A driver and the whole I2C bus are gone, and the header clock comes from SNTP alone. It is
-blank (`--:--`) until the first sync, which is a few seconds after Wi-Fi comes up.
+PCF85063A driver and the whole I2C bus are gone. Nothing on the glass needs them: this UI prints no
+clock, and every interval it shows arrives from the proxy already worded. SNTP still runs, for
+logs — a board whose timestamps all read 1970 is unpleasant to debug — but a `sntp sync timeout`
+changes nothing a learner can see.
 
 **PSRAM is required here.** Two RGB565 draw buffers at 648 × 480 are 622 KB each; that is 1.2 MB,
 and there is no internal-RAM fallback that could hold them. The XIAO ESP32-S3 **Plus** has 8 MB, so
@@ -65,7 +67,28 @@ refresh policy already keeps refreshes rare (see [epaper-5in83.md](epaper-5in83.
 
 ## Firmware footprint
 
-Current tarot build: **0x2ea660 bytes (about 2.93 MB)** of an 8 MB app partition, leaving **64%**.
-The main additions are 78 native 1-bit cards (1,231,152 payload bytes) and three full 완성형 Noto
-Sans KR faces at 16/20/28 px. Asset and font coverage are verified by the host and artwork simulator
-tests rather than estimated from generated C source size.
+**0x53acb0 bytes (5.23 MiB)** of the 8 MB app partition, leaving **35%**.
+
+The fonts are most of that. Four faces, measured with `xtensa-esp32s3-elf-size` on the objects the
+IDF build produces:
+
+| Face | `.rodata` |
+|---|---|
+| `ui_font_kr_16` | 387 KiB |
+| `ui_font_kr_20` | 531 KiB |
+| `ui_font_kr_28` | 860 KiB |
+| `ui_font_jp_56` | 2,194 KiB |
+
+Just under 3.9 MiB of the 5.23, and it is not padding: three of those faces carry 9,242 glyphs each
+— 완성형 Hangul, ASCII, every kana, both JIS X 0208 kanji levels and the 158 component forms the
+설명 sheet's shape stories cite — because the strings on this board arrive from kanjis.ai at runtime
+and there is nothing safe to subset from. The hero face carries 6,713 and is Japanese-only, for the
+same reason in reverse: Hangul at 56 px would be another ~790 KB for glyphs a Japanese headword
+cannot contain.
+
+`ui_font_jp_56` is also why the build needs `CONFIG_LV_FONT_FMT_TXT_LARGE=y`. LVGL packs a glyph's
+bitmap offset into 20 bits otherwise, which caps one face at 1 MB of bitmap; this one has 2.02 MB.
+Setting it widens every glyph descriptor in the build from 8 bytes to 16, which costs the three body
+faces about 213 KB between them. It fails loudly — `lv_font_conv` writes an `#error` into the
+generated file — but only if your `sdkconfig` was regenerated after the option landed in
+`sdkconfig.defaults`; see [esp-idf-development.md](esp-idf-development.md#sdkconfigdefaults-is-read-once-and-only-once).

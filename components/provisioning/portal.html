@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Obsidian Board · Setup</title>
+<title>Kanjis Board · Setup</title>
 <style>
   :root{
     --bg:#0b0e14; --panel:#141925; --panel-2:#1b2230; --line:#262e3d;
@@ -84,7 +84,7 @@
         <path d="M5 19 L11 13 L15 16 L24 7" fill="none" stroke="#1fcf8f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
         <path d="M24 7 L24 12 M24 7 L19 7" fill="none" stroke="#1fcf8f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      <span><b>Obsidian Board</b><span class="sub">Connect your display</span></span>
+      <span><b>Kanjis Board</b><span class="sub">Connect your display</span></span>
     </div>
   </header>
 
@@ -116,17 +116,19 @@
     </div>
 
     <div class="card">
-      <h2>Vault</h2>
+      <h2>Study source</h2>
       <div class="field">
-        <label for="vaultUrl">Snapshot URL</label>
-        <!-- The display polls this every few minutes and draws whatever it returns.
-             Plain http:// is expected: this is one machine on your LAN talking to
-             another, and requiring TLS here would mean requiring a certificate. -->
-        <input class="input" id="vaultUrl" name="vault_url" value="{{VAULT_URL}}"
-               placeholder="http://macbook.local:8123/vault.json"
+        <label for="studyUrl">Card server URL</label>
+        <!-- tools/kanji_server.py on your machine. It holds the kanjis.ai
+             session and serves the display one flat card; the display itself
+             carries no account. Plain http:// is expected: this is one machine
+             on your LAN talking to another, and requiring TLS here would mean
+             requiring a certificate. -->
+        <input class="input" id="studyUrl" name="study_url" value="{{STUDY_URL}}"
+               placeholder="http://macbook.local:8123/kanji.json"
                autocomplete="off" autocapitalize="none" spellcheck="false"
                inputmode="url" maxlength="128">
-        <div class="hint">Leave blank to run the built-in demo screen — the display still works, it just shows sample data.</div>
+        <div class="hint">Leave blank to run the built-in demo card — the display still works, it just cannot record what you answered.</div>
       </div>
     </div>
   </form>

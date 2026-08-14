@@ -1,4 +1,4 @@
-// Design tokens for the Obsidian Board companion app. Dark, terminal-flavored palette —
+// Design tokens for the Kanjis Board companion app. Dark, terminal-flavored palette —
 // monochrome surfaces with a single accent, plus a green/red/amber status triad.
 
 export const colors = {

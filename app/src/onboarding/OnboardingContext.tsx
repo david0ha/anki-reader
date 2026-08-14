@@ -6,8 +6,8 @@ interface OnboardingContextValue extends OnboardingState {
   setSelectedNetwork: (ssid: string | null) => void
   setSelectedSecured: (secured: boolean | undefined) => void
   setPassword: (password: string) => void
-  /** The vault snapshot URL entered on the vault step; sent with /api/provision. */
-  setVaultUrl: (url: string) => void
+  /** The study URL entered on the study step; sent with /api/provision. */
+  setStudyUrl: (url: string) => void
   /** Identity read from the board's GET /api/info, used to seed the dashboard on completion. */
   deviceInfo: DeviceInfo | null
   setDeviceInfo: (info: DeviceInfo | null) => void
@@ -20,7 +20,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null)
   const [selectedSecured, setSelectedSecured] = useState<boolean | undefined>(undefined)
   const [password, setPassword] = useState('')
-  const [vaultUrl, setVaultUrl] = useState('')
+  const [studyUrl, setStudyUrl] = useState('')
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null)
 
   const value = useMemo<OnboardingContextValue>(
@@ -28,22 +28,22 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       selectedNetwork,
       selectedSecured,
       password,
-      vaultUrl,
+      studyUrl,
       deviceInfo,
       setSelectedNetwork,
       setSelectedSecured,
       setPassword,
-      setVaultUrl,
+      setStudyUrl,
       setDeviceInfo,
       reset: () => {
         setSelectedNetwork(null)
         setSelectedSecured(undefined)
         setPassword('')
-        setVaultUrl('')
+        setStudyUrl('')
         setDeviceInfo(null)
       },
     }),
-    [selectedNetwork, selectedSecured, password, vaultUrl, deviceInfo],
+    [selectedNetwork, selectedSecured, password, studyUrl, deviceInfo],
   )
 
   return <OnboardingContext.Provider value={value}>{children}</OnboardingContext.Provider>

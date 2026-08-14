@@ -17,7 +17,7 @@ import { BackButton } from '../../components/BackButton'
 import { useOnboarding } from '../../onboarding/OnboardingContext'
 import { ONBOARDING_ROUTES } from '../../onboarding/flow'
 import { esp32, Esp32Error } from '../../lib/esp32'
-import { validateVaultUrl, vaultUrlErrorMessage } from '../../lib/vaulturl'
+import { validateStudyUrl, studyUrlErrorMessage } from '../../lib/studyurl'
 import { colors, layout, radius } from '../../theme'
 
 // Map a provisioning failure to a short, user-facing reason.
@@ -31,10 +31,10 @@ function failureMessage(e: unknown): string {
       case 'ssid_empty':
       case 'ssid_too_long':
         return 'Please check the Wi-Fi name and try again.'
-      case 'vault_url_invalid':
-        return 'The board rejected the snapshot URL. Go back and check it.'
+      case 'study_url_invalid':
+        return 'The board rejected the card URL. Go back and check it.'
       case 'too_large':
-        return 'That was too much for the board to accept. Shorten the snapshot URL and try again.'
+        return 'That was too much for the board to accept. Shorten the card URL and try again.'
       default:
         return 'Something went wrong sending your settings. Please try again.'
     }
@@ -44,7 +44,7 @@ function failureMessage(e: unknown): string {
 
 export default function Password() {
   const router = useRouter()
-  const { selectedNetwork, setSelectedNetwork, selectedSecured, password, setPassword, vaultUrl, setDeviceInfo } =
+  const { selectedNetwork, setSelectedNetwork, selectedSecured, password, setPassword, studyUrl, setDeviceInfo } =
     useOnboarding()
   // "Other…" leaves selectedNetwork null; the user types the SSID here.
   const isManualSsid = selectedNetwork === null
@@ -69,11 +69,11 @@ export default function Password() {
   const join = async () => {
     if (!enabled || !ssid) return
 
-    // Re-validate the snapshot URL here, not only on the step that collected it. This is the last
+    // Re-validate the card URL here, not only on the step that collected it. This is the last
     // point before a ~45s join, and the board's own rejection would land on the far side of it.
-    const vu = validateVaultUrl(vaultUrl)
-    if (!vu.ok) {
-      setError(vaultUrlErrorMessage(vu))
+    const su = validateStudyUrl(studyUrl)
+    if (!su.ok) {
+      setError(studyUrlErrorMessage(su))
       return
     }
 
@@ -81,8 +81,8 @@ export default function Password() {
     setPending(true)
     if (isManualSsid) setSelectedNetwork(ssid) // remember it for the completion screen copy
     try {
-      // '' is meaningful and is sent as such: it puts the board on its built-in demo snapshot.
-      await esp32.provision(ssid, password, vu.value ?? '')
+      // '' is meaningful and is sent as such: it puts the board on its built-in demo card.
+      await esp32.provision(ssid, password, su.value ?? '')
     } catch (e) {
       if (!mounted.current) return
       setPending(false)
@@ -174,9 +174,9 @@ export default function Password() {
           {/* What the board will do once it is on the network — shown here because this screen is
               the last chance to go back and change it. */}
           <Text style={styles.hint}>
-            {vaultUrl.trim()
-              ? `Once connected, the board will fetch ${vaultUrl.trim()}.`
-              : 'No snapshot URL set — the board will show its built-in demo data. You can add an address later from Settings.'}
+            {studyUrl.trim()
+              ? `Once connected, the board will fetch ${studyUrl.trim()}.`
+              : 'No card URL set — the board will show its built-in demo card. You can add an address later from Settings.'}
           </Text>
 
           {pending ? (

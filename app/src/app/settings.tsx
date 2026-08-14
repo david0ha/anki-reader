@@ -19,7 +19,7 @@ import { useDevice } from '../lib/device'
 import { Esp32Error, type DeviceInfo, type DeviceState } from '../lib/esp32'
 import { DEFAULT_HOST, discoverDevice, normalizeBaseUrl } from '../lib/discovery'
 import { clearDeviceBaseUrl, getDeviceBaseUrl, resetOnboarding } from '../lib/store'
-import { validateVaultUrl, vaultUrlErrorMessage } from '../lib/vaulturl'
+import { validateStudyUrl, studyUrlErrorMessage } from '../lib/studyurl'
 import { fetchResultLabel, fetchResultMessage, formatAge, formatInterval } from '../lib/format'
 import { colors, layout, radius, space } from '../theme'
 
@@ -137,11 +137,11 @@ export default function Settings() {
             </Card>
           </Section>
 
-          {/* The vault snapshot URL — the one setting that decides what the board shows. */}
-          <Section title="Vault source">
+          {/* The study card URL — the one setting that decides what the board shows. */}
+          <Section title="Study source">
             <Text style={styles.help}>
-              The address the board fetches its snapshot from. Clear it and save to put the board
-              back on its built-in demo data.
+              The address the board fetches its card from — your kanjis.ai proxy on this network.
+              Clear it and save to put the board back on its built-in demo card.
             </Text>
             {source ? (
               <Card style={styles.infoCard}>
@@ -153,7 +153,7 @@ export default function Settings() {
             {source && source.lastResult !== 'ok' ? (
               <Text style={styles.help}>{fetchResultMessage(source.lastResult)}</Text>
             ) : null}
-            <VaultUrlEditor
+            <StudyUrlEditor
               // Remount when the board reports a different URL, so the field picks up the new
               // value instead of holding a draft the board has already moved past.
               key={source?.url ?? ''}
@@ -161,9 +161,9 @@ export default function Settings() {
               onSave={async (next) => {
                 if (!client) return 'Not connected to the board.'
                 try {
-                  await client.setVaultUrl(next)
+                  await client.setStudyUrl(next)
                 } catch (e) {
-                  if (e instanceof Esp32Error && e.code === 'vault_url_invalid') {
+                  if (e instanceof Esp32Error && e.code === 'study_url_invalid') {
                     return 'The board wouldn’t accept that address.'
                   }
                   return 'Couldn’t update. Please try again.'
@@ -235,13 +235,13 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /**
- * The snapshot-URL field. Prefilled with what the board reports, validated locally against the
+ * The card-URL field. Prefilled with what the board reports, validated locally against the
  * firmware's own rule before any request goes out, and explicit about the empty case: clearing the
- * field and saving is a real, supported action (back to the demo snapshot), not a mistake.
+ * field and saving is a real, supported action (back to the demo card), not a mistake.
  *
  * `onSave` returns null on success or a sentence to show on failure.
  */
-function VaultUrlEditor({
+function StudyUrlEditor({
   initial,
   onSave,
 }: {
@@ -253,8 +253,8 @@ function VaultUrlEditor({
   const [done, setDone] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
 
-  const result = validateVaultUrl(draft)
-  const localError = !result.ok ? vaultUrlErrorMessage(result) : null
+  const result = validateStudyUrl(draft)
+  const localError = !result.ok ? studyUrlErrorMessage(result) : null
   const dirty = draft.trim() !== initial.trim()
 
   const save = async () => {
@@ -278,7 +278,7 @@ function VaultUrlEditor({
             setDone(false)
             setFailure(null)
           }}
-          placeholder="http://mymac.local:8123/vault.json"
+          placeholder="http://mymac.local:8123/kanji.json"
           placeholderTextColor={colors.textFaint}
           autoCapitalize="none"
           autoCorrect={false}
@@ -291,11 +291,11 @@ function VaultUrlEditor({
       {failure ? <Text style={styles.error}>{failure}</Text> : null}
       {done ? (
         <Text style={styles.saved}>
-          {draft.trim() ? 'Saved. The board is fetching it now.' : 'Cleared — the board is back on demo data.'}
+          {draft.trim() ? 'Saved. The board is fetching it now.' : 'Cleared — the board is back on its demo card.'}
         </Text>
       ) : null}
       <Button
-        label={dirty && !draft.trim() ? 'Clear and use demo data' : 'Save address'}
+        label={dirty && !draft.trim() ? 'Clear and use the demo card' : 'Save address'}
         variant="secondary"
         disabled={!result.ok || !dirty}
         loading={saving}

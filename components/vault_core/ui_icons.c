@@ -11,13 +11,17 @@
 #include <stdint.h>
 
 /* One spec per icon; icons live for the app lifetime, so a static pool avoids
- * per-object heap churn and, more usefully, makes the count auditable. */
+ * per-object heap churn and, more usefully, makes the count auditable.
+ *
+ * The UI builds exactly four: the header's battery/plug indicator, and the
+ * question screen's three-item action rail. Eight is that with room for one
+ * more rail, and small enough that the number is a claim about the UI rather
+ * than a shrug. */
 typedef struct { uint8_t type; int16_t pct; } icon_spec_t;
-static icon_spec_t g_specs[48];
+static icon_spec_t g_specs[8];
 static int g_spec_n = 0;
 
 /* Local shorthand over the shared primitives in ui_common.c. */
-#define disc(L,cx,cy,r)             ui_draw_disc_abs((L),(cx),(cy),(r), false)
 #define ring(L,cx,cy,r,w,a0,a1)     ui_draw_ring_abs((L),(cx),(cy),(r),(w),(a0),(a1))
 #define seg(L,x1,y1,x2,y2,w)        ui_draw_line_abs((L),(x1),(y1),(x2),(y2),(w), false)
 #define box(L,x1,y1,x2,y2,f,b)      ui_draw_rect_abs((L),(x1),(y1),(x2),(y2),(f),(b), false)
@@ -55,37 +59,34 @@ static void draw_icon(lv_layer_t *L, const icon_spec_t *s, int x0, int y0, int s
         box(L, FX(44), FY(62), FX(54), FY(94), 1, 0);
         break;
     }
-    case ICON_WIFI:
-    case ICON_WIFI_OFF: {
-        /* Three arcs plus a dot, drawn from the bottom centre. LVGL measures
-         * arc angles clockwise from 3 o'clock, so 215..325 is the upper fan. */
-        int bx = cx, by = FY(80);
-        disc(L, bx, by, st);
-        ring(L, bx, by, sz * 26 / 100, st, 215, 325);
-        ring(L, bx, by, sz * 44 / 100, st, 215, 325);
-        ring(L, bx, by, sz * 62 / 100, st, 215, 325);
-        if (s->type == ICON_WIFI_OFF) {
-            /* A white slash under the black one keeps the bar visible where it
-             * crosses an arc — without it the two blacks merge and the "off"
-             * reading is lost. */
-            ui_draw_line_abs(L, FX(14), FY(14), FX(86), FY(86), st + 4, true);
-            seg(L, FX(16), FY(16), FX(84), FY(84), st);
-        }
+    case ICON_BOOK: {
+        /* A page with three rules of text. An open book — two leaves and a
+         * spine — was the first shape here and it collapsed into a black blob:
+         * at 26 px each leaf is ten pixels wide and a two-pixel border eats
+         * six of them. A single frame with room inside it survives. */
+        box(L, FX(14), FY(6), FX(86), FY(94), 0, st);
+        seg(L, FX(28), FY(30), FX(72), FY(30), st);
+        seg(L, FX(28), FY(50), FX(72), FY(50), st);
+        seg(L, FX(28), FY(70), FX(58), FY(70), st);
         break;
     }
-    case ICON_DOT_FULL:
-        disc(L, cx, cy, sz * 40 / 100);
+    case ICON_COMMENT: {
+        /* A speech bubble: a rounded-off box with a tail at the lower left.
+         * The two rules inside are what make it read as a comment rather than
+         * as an empty frame at this size. */
+        box(L, FX(8), FY(12), FX(92), FY(70), 0, st);
+        seg(L, FX(20), FY(70), FX(20), FY(92), st);
+        seg(L, FX(20), FY(92), FX(44), FY(70), st);
+        seg(L, FX(22), FY(32), FX(78), FY(32), st);
+        seg(L, FX(22), FY(50), FX(60), FY(50), st);
         break;
-    case ICON_DOT_HOLLOW:
-        ring(L, cx, cy, sz * 38 / 100, st, 0, 360);
-        break;
-    case ICON_CROSS:
-        seg(L, FX(18), FY(18), FX(82), FY(82), st);
-        seg(L, FX(82), FY(18), FX(18), FY(82), st);
-        break;
-    case ICON_CHECK:
-        seg(L, FX(14), FY(52), FX(40), FY(78), st);
-        seg(L, FX(40), FY(78), FX(88), FY(20), st);
+    }
+    case ICON_CLOCK:
+        /* A clock face with the hands at roughly ten past two — asymmetric on
+         * purpose, so it cannot be mistaken for the hollow dot. */
+        ring(L, cx, cy, sz * 42 / 100, st, 0, 360);
+        seg(L, cx, cy, cx, FY(22), st);
+        seg(L, cx, cy, FX(76), cy, st);
         break;
     }
     #undef FX
