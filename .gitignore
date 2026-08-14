@@ -4,6 +4,9 @@
 # ESP-IDF build artifacts
 build/
 sdkconfig.old
+# Optional root-level outputs selected with gen_offline_catalog.py --output.
+/kanji-catalog.bin
+/kanji-catalog-*.bin
 # Generated per-developer config (may hold a WiFi password) — never commit. Shared config goes in sdkconfig.defaults
 sdkconfig
 *.pyc
