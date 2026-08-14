@@ -6,4 +6,4 @@ idf_component_register(
 # These entry points run on 8 KiB firmware tasks. Reject future inline card or
 # runtime copies before they can silently consume the task stack again.
 target_compile_options(${COMPONENT_LIB} PRIVATE
-    -Wframe-larger-than=2048 -fstack-usage)
+    -Wframe-larger-than=2048 -Werror=frame-larger-than=2048 -fstack-usage)
