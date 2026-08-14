@@ -36,10 +36,6 @@ typedef struct {
     kanji_rect_t footer;
     kanji_rect_t keycap[4];
     kanji_rect_t key_action[4];
-    /* Compile-only locations for the Task 5 replacement of legacy simulator
-     * pixel probes. The UI never draws or consumes these rectangles. */
-    kanji_rect_t header;
-    kanji_rect_t key[4];
 } kanji_chrome_t;
 
 typedef struct {
@@ -47,8 +43,6 @@ typedef struct {
     kanji_rect_t prompt;
     kanji_rect_t secondary;
     kanji_rect_t counts;
-    /* Legacy simulator probes, not presentation regions. */
-    kanji_rect_t player, caption, queue, rail, scrubber;
 } kanji_question_layout_t;
 
 typedef struct {
@@ -65,8 +59,6 @@ typedef struct {
     kanji_rect_t cell[KANJI_GRADE_COUNT];
     kanji_rect_t cell_label[KANJI_GRADE_COUNT];
     kanji_rect_t cell_span[KANJI_GRADE_COUNT];
-    /* Legacy simulator probes, not presentation regions. */
-    kanji_rect_t band, level;
 } kanji_answer_layout_t;
 
 typedef struct {
@@ -76,8 +68,6 @@ typedef struct {
     kanji_rect_t stats;
     kanji_rect_t stat[KANJI_STAT_CELLS];
     kanji_rect_t pager;
-    /* Legacy simulator probes, not presentation regions. */
-    kanji_rect_t band, band_word, band_title;
 } kanji_sheet_layout_t;
 
 const kanji_chrome_t          *kanji_chrome_layout(void);

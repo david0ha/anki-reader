@@ -36,8 +36,6 @@ static const kanji_chrome_t CHROME = {
     .footer        = { EDGE, FOOTER_Y, KANJI_SCREEN_W - 2 * EDGE, FOOTER_H },
     .keycap        = { KEYCAP(0), KEYCAP(1), KEYCAP(2), KEYCAP(3) },
     .key_action    = { ACTION(0), ACTION(1), ACTION(2), ACTION(3) },
-    .header        = { MAIN_X, EDGE, MAIN_W, 24 },
-    .key           = { ACTION(0), ACTION(1), ACTION(2), ACTION(3) },
 };
 
 static const kanji_question_layout_t QUESTION = {
@@ -45,11 +43,6 @@ static const kanji_question_layout_t QUESTION = {
     .prompt    = { MAIN_X, 224, MAIN_W, 28 },
     .secondary = { MAIN_X, 264, MAIN_W, 48 },
     .counts    = { MAIN_X, 328, MAIN_W, 24 },
-    .player    = { MAIN_X, MAIN_Y, MAIN_W, MAIN_H },
-    .caption   = { MAIN_X, 264, MAIN_W, 48 },
-    .queue     = { MAIN_X, 328, MAIN_W, 24 },
-    .rail      = { EDGE, EDGE, RAIL_W, 408 },
-    .scrubber  = { MAIN_X, 423, MAIN_W, 1 },
 };
 
 static const kanji_answer_layout_t ANSWER = {
@@ -64,8 +57,6 @@ static const kanji_answer_layout_t ANSWER = {
     .cell         = { CELL(0), CELL(1), CELL(2), CELL(3) },
     .cell_label   = { LABEL(0), LABEL(1), LABEL(2), LABEL(3) },
     .cell_span    = { SPAN(0), SPAN(1), SPAN(2), SPAN(3) },
-    .band         = { MAIN_X, MAIN_Y, MAIN_W, 105 },
-    .level        = { MAIN_X, 164, MAIN_W, 24 },
 };
 
 #define SHEET_COMMON \
@@ -78,9 +69,6 @@ static const kanji_sheet_layout_t SHEET_PLAIN = {
     .stats = { 0, 0, 0, 0 },
     .stat  = { {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,0,0} },
     .pager = { 572, 64, 60, 20 },
-    .band = { MAIN_X, MAIN_Y, MAIN_W, 32 },
-    .band_word = { MAIN_X, MAIN_Y, 280, 32 },
-    .band_title = { 400, 60, 160, 28 },
 };
 
 #define STAT_W (MAIN_W / KANJI_STAT_CELLS)
@@ -92,9 +80,6 @@ static const kanji_sheet_layout_t SHEET_WITH_STATS = {
     .stats = { MAIN_X, 348, MAIN_W, 76 },
     .stat  = { STAT(0), STAT(1), STAT(2), STAT(3), STAT(4) },
     .pager = { 572, 64, 60, 20 },
-    .band = { MAIN_X, MAIN_Y, MAIN_W, 32 },
-    .band_word = { MAIN_X, MAIN_Y, 280, 32 },
-    .band_title = { 400, 60, 160, 28 },
 };
 
 const kanji_chrome_t *kanji_chrome_layout(void) { return &CHROME; }

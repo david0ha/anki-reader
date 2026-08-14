@@ -123,8 +123,11 @@ static void test_display_headword_canonicalizes_maximum_whitespace_content(void)
 {
     char raw[KANJI_FRONT_MAX];
     static const char whitespace[] = { ' ', '\n', '\r', '\t', '\f', '\v' };
+    const size_t whitespace_count = sizeof whitespace / sizeof whitespace[0];
     for (int i = 0; i < KANJI_FRONT_MAX - 1; i++) {
-        raw[i] = (i % 2 == 0) ? 'W' : whitespace[(i / 2) % 5];
+        raw[i] = (i % 2 == 0)
+                     ? 'W'
+                     : whitespace[(i / 2) % whitespace_count];
     }
     raw[KANJI_FRONT_MAX - 1] = '\0';
     CHECK_INT((int)strlen(raw), KANJI_FRONT_MAX - 1);
