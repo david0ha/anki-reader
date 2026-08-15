@@ -148,11 +148,12 @@ curl -s http://obsidianboard.local/api/state | jq .panel
 # {"partialChain": 3, "fullRefreshMs": ..., "partialRefreshMs": ...}
 ```
 
-then run the display self-test and walk the grade cursor through all four ratings.
+then run the display self-test and commit a grade on each of the four buttons, watching the
+chosen cell invert. That inversion is the board's only partial refresh.
 
 | what you see | change | where |
 |---|---|---|
-| the dock ghosts before the sixth press | lower `EPD_PARTIAL_CHAIN_MAX` | `components/port_bsp/epd_panel.h` |
+| the dock ghosts after several cards | lower `EPD_PARTIAL_CHAIN_MAX` | `components/port_bsp/epd_panel.h` |
 | six partials in a row leave no residue | raise it — every promotion the learner does not need is a full flash they do not see | same |
 | a partial is over ~1 s | the dock stops feeling like an input; consider a shorter dock rectangle before anything else | `components/vault_core/ui_kanji_layout.c` |
 | full refresh is over ~6 s | nothing to change — it is why API writes return before the panel has caught up | — |

@@ -30,15 +30,14 @@ add_executable(kanji_sim
     ${CORE}/kanji_mock.c
     ${CORE}/kanji_service.c
     ${CORE}/kanji_nav.c
+    ${CORE}/kanji_clock.c
+    ${CORE}/kanji_fsrs.c
     ${CORE}/ui_common.c
     ${CORE}/ui_icons.c
     ${CORE}/ui_kanji.c
     ${CORE}/ui_kanji_layout.c
-    ${CORE}/ui_card_question.c
-    ${CORE}/ui_card_answer.c
-    ${CORE}/ui_sheet_desc.c
-    ${CORE}/ui_sheet_comments.c
-    ${CORE}/ui_sheet_fsrs.c
+    ${CORE}/ui_card_front.c
+    ${CORE}/ui_card_back.c
     ${CORE}/fonts/ui_font_kr_16.c
     ${CORE}/fonts/ui_font_kr_20.c
     ${CORE}/fonts/ui_font_kr_28.c

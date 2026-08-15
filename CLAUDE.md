@@ -106,36 +106,38 @@ See [docs/pinout.md](docs/pinout.md).
 > The panel is 648 px wide, which is a multiple of 8, so a framebuffer row is exactly 81 bytes with
 > no padding. The framebuffer is 81 × 480 = 38,880 bytes.
 
-## Five screens, three buttons
+## Two faces, four buttons
 
-Three side buttons and no touch have to drive five screens and a four-way rating. The mapping is a
-pure state machine in `components/vault_core/kanji_nav.c` — no LVGL, no panel, no card content
-beyond "is there a card" and "how long is the open sheet" — and `test_kanji_nav.c` drives every
-button from every reachable state. **Read that file rather than guessing; nothing else in the
-firmware knows the mapping.**
+A card has a front and a back and nothing else. The mapping is a pure state machine in
+`components/vault_core/kanji_nav.c` — no LVGL, no panel, no card content beyond "is there a card" —
+and `test_kanji_nav.c` drives every button from every reachable state against a complete oracle.
+**Read that file rather than guessing; nothing else in the firmware knows the mapping.**
 
-| Screen | What it holds |
+| Face | What it holds |
 |---|---|
-| 문제 | the headword alone on a filled player, and the reveal prompt |
-| 정답 | the headword, its reading, the Korean senses, examples, and the four-rating dock |
-| 설명 | the shape story, the memory hook, the headword's components |
-| 댓글 | what people said under this card, two to a page |
-| FSRS | what the scheduler is, in three fixed pages, plus this card's own numbers |
+| 문제 | an art print: the headword, a Japanese example set as a pull-quote, and the learner's own FSRS history with this card |
+| 정답 | a dictionary spread: reading, senses, 성립, 구성, 예문, the FSRS figures, and the four-rating dock — all at once |
 
-| Button | 문제 | 정답 | inside a sheet |
-|---|---|---|---|
-| KEY0 | reveal the answer | walk the grade cursor | next page |
-| KEY1 | open 설명 | commit the rating | close the sheet |
-| KEY2 | refresh — from anywhere. **Hold 5 s → reboot into Wi-Fi setup** | | |
-| BOOT | open FSRS | open 설명 | next sheet, then back to the card |
+| Button | 문제 | 정답 |
+|---|---|---|
+| KEY0 | 뜻 보기 | **다시** (again) |
+| KEY1 | 뜻 보기 | **어려움** (hard) |
+| KEY2 | 새로고침 · **hold 5 s → reboot into Wi-Fi setup** | **보통** (good) · same hold |
+| BOOT | 뜻 보기 | **쉬움** (easy) |
 
-The cursor cycles 보통 → 쉬움 → 다시 → 어려움 → 보통, so every rating is at most three presses away
-and the default is where FSRS and Anki both start. BOOT skips a sheet that has nothing to say about
-this card; FSRS is always available, because a learner staring at an empty session is exactly who
-wants to read what the scheduler does.
+**The board has four buttons and FSRS has four grades, so a rating costs exactly one press.** The
+five-screen UI this replaced spent up to three presses walking a cursor around the dock, and a full
+refresh on each — nine seconds of strobing before the learner had told the board anything. Each
+dock cell prints its own button glyph, so the legend documents itself instead of being a fixed
+strip that has to be kept true by hand.
 
-The footer legend is derived from the same nav state (`kanji_nav_hint_*`). A fixed legend on a board
-whose KEY0 means 정답 on one screen and 등급 on the next is a lie printed in 16 px.
+**The front is spoiler-bound.** It may print only Japanese and the learner's own history — never
+`senses`, never `parts[].meaning`, never `examples[].gloss`. The last is the trap: it reads as
+harmless context right up until it prints 우연히 만나다 under 会う. The simulator asserts it.
+
+A second press while a grade is in flight is refused rather than counted, because the proxy answers
+a repeat of the id it just graded with the same payload, and a *different* rating on the same card
+is not a retry — it is a mis-grade.
 
 ## The two things that make this board different
 
@@ -150,9 +152,11 @@ epd_refresh_full();       /* or epd_refresh_partial_area(...) */
 
 The LVGL flush callback **never** refreshes the panel. Exactly one task (`UiTask` in
 `components/user_app/user_app.cpp`) touches LVGL or starts a refresh; everything else posts a
-command. Full refresh for a new card or a screen change; a windowed partial for exactly one thing —
-the grade dock. Choosing among four ratings takes up to three presses, and three full refreshes is
-nine seconds of the panel strobing before the learner has told the board anything.
+command. Full refresh for a new card or a face change; a windowed partial for exactly one thing —
+the grade dock, once, to acknowledge a press. Grading is an HTTP round trip to a laptop that may be
+asleep, so the gap between the press and the next card is measured in seconds, and a panel that
+changes nothing for that long reads as a board that missed the button. Inverting the chosen cell
+costs a 600x52 window instead of a whole-panel flash.
 
 **2. A poll that changes nothing must not touch the panel.** `kanji_hash()` fingerprints everything
 that reaches the glass and `KanjiTask` compares before it notifies `UiTask`. On a device that polls
@@ -178,9 +182,11 @@ components/
     kanji_mock.c          the built-in demo card (shown when no URL is set)
     kanji_service.c       one fetch and one grade: http_get + parse
     kanji_nav.c           the button state machine — the only interaction state on the board
-    ui_kanji.c            header, footer, overlay, screen routing
-    ui_card_{question,answer}.c   the player side and the answer side
-    ui_sheet_{desc,comments,fsrs}.c   one file per rising sheet
+    kanji_fsrs.c          FSRS-6 on the board — the backend's py-fsrs 6.3.1, transcribed
+    kanji_clock.c         an SNTP-anchored clock in three honest tiers, + the Korean span wording
+    ui_kanji.c            overlay and the two-face router
+    ui_card_front.c       문제 — the art print
+    ui_card_back.c        정답 — the dictionary spread
     ui_kanji_layout.c     every rectangle, as pure integers; host-tested before a widget exists
     ui_common.c           the shared shapes; ui_internal.h holds the drawing shorthand
     ui_icons.c            vector glyphs
@@ -213,7 +219,7 @@ tools/
   the generator rather than trusting this line: `python3 -c "import sys; sys.path.insert(0,'tools');
   import gen_fonts; print(len(gen_fonts.symbol_set()))"`. That is 완성형 Hangul, ASCII, every kana,
   both JIS X 0208 kanji levels, the JIS punctuation row, and the 158 curated component forms in
-  `S_DATA_RADICALS` that the 설명 sheet's shape stories cite. The hero face carries 6,713 — Japanese
+  `S_DATA_RADICALS` that the 성립 block's shape stories cite. The hero face carries 6,713 — Japanese
   only, because 56 px of Hangul is flash for glyphs a Japanese headword cannot contain. None of
   those tables is in this repo: they are derived from Python's own EUC-KR and EUC-JP codecs, and the
   row counts are asserted on every run. **All fixed user-visible strings belong in `ui_strings.h`** — that is where
@@ -221,7 +227,7 @@ tools/
   Subsetting is not an option here: a headword, a かな reading and a comment body all arrive over the
   network, and the failure mode of guessing is a tofu box in the middle of somebody's card.
 - **The grade dock's rectangle is the only partial refresh on the board, and it must stay
-  byte-aligned.** `kanji_answer_layout()->dock` goes verbatim to `epd_refresh_partial_area()`.
+  byte-aligned.** `kanji_back_layout()->dock` goes verbatim to `epd_refresh_partial_area()`.
   `test_kanji_layout.c` asserts that its x and w are multiples of 8 and that every cell, label and
   span it draws is inside it. Drift by one pixel and the panel refreshes a strip that does not
   contain the thing that changed — the board then silently shows a stale rating, and nothing logs it.

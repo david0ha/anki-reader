@@ -11,9 +11,11 @@ reading, Korean senses, and shape notes — and accepts four ratings on three bu
 [kanjis.ai](https://kanjis.ai) proxy can take over when Wi-Fi is available. Reveal, rate, next card.
 No screen to unlock, no app to open, no notification.
 
-Five screens: **문제** (the headword alone), **정답** (the answer and the four-rating dock),
-**설명** (where the character comes from), **댓글**, and **FSRS** (what the scheduler is doing to
-you, and to this card).
+Two faces, and nothing else. **문제** is an art print — the headword, one Japanese example set as a
+pull-quote, and the learner's own record with this card. **정답** is a dictionary spread that puts
+everything on one page at once: the reading, the Korean senses, where the character comes from, what
+it is built out of, its examples, its FSRS figures, and the four-rating dock. Nothing is behind a
+button, because a learner does not have time to press four of them to read two lines.
 
 The board holds **no credentials**. `tools/kanji_server.py` runs on a machine you own, holds the
 kanjis.ai session, and serves the board one flat card over the LAN. Nothing on the device can leak
@@ -79,23 +81,29 @@ matches the active catalog. Changing the database content, selected user, seed, 
 content can produce a new catalog ID and intentionally starts fresh progress even though the old
 state bytes remain in flash. `idf.py erase-flash` physically erases them.
 
-Offline ratings persist the current position, grade, repetitions, and lapses. They do not upload
-or calculate trusted FSRS due dates: the board has no battery-backed wall clock, so local v1
-deliberately advances the deterministic catalog sequence instead. Generated catalog images are
-local build artifacts and must not be committed or redistributed without a separate rights review.
+Offline ratings persist the current position, grade, repetitions, lapses, and now the scheduler's
+own state: stability, difficulty and a due epoch, as fixed point in the two-bank flash journal.
+`components/vault_core/kanji_fsrs.c` is FSRS-6 transcribed from the backend's own py-fsrs 6.3.1,
+pinned by host tests against golden vectors printed by that interpreter, and it runs **unfuzzed** —
+the interval a learner is shown has to be the interval they get.
+
+The board still has no battery-backed wall clock, and `kanji_clock.c` does not pretend otherwise.
+It answers in three tiers: `TRUSTED` after an SNTP sync this boot, `APPROXIMATE` from a persisted
+anchor plus uptime, and `UNKNOWN` when it has never synced — which is a real state with its own
+wording, not a zero standing in for a date. A day-granular scheduler tolerates hours of drift,
+which is why the middle tier is useful rather than dangerous.
+
+Generated catalog images are local build artifacts and must not be committed or redistributed
+without a separate rights review.
 
 ## Controls
 
-| | 문제 | 정답 | inside a sheet |
-|---|---|---|---|
-| KEY0 | 정답 — reveal | 등급 — walk the rating cursor | 다음 쪽 |
-| KEY1 | 설명 | 확정 — commit the rating | 닫기 |
-| KEY2 | 새로고침, from anywhere · **hold 5 s → reboot into Wi-Fi setup** | | |
-| BOOT | FSRS | 설명 | 다음 탭 |
-
-The cursor cycles 보통 → 쉬움 → 다시 → 어려움 → 보통, so every rating is at most three presses
-away. The footer always prints what the three buttons do *right now*, because what they do changes
-with the screen.
+| Button | 문제 | 정답 |
+|---|---|---|
+| KEY0 | 뜻 보기 — reveal | **다시** (again) |
+| KEY1 | 뜻 보기 — reveal | **어려움** (hard) |
+| KEY2 | 새로고침 · **hold 5 s → reboot into Wi-Fi setup** | **보통** (good) · same hold |
+| BOOT | 뜻 보기 — reveal | **쉬움** (easy) |
 
 ## Verify before claiming anything works
 
@@ -181,9 +189,11 @@ components/
     kanji_mock.c        the built-in demo card
     kanji_service.c     one fetch and one grade: http_get + parse
     kanji_nav.c         the button state machine — the only interaction state on the board
-    ui_kanji.c          header, footer, overlay, screen routing
-    ui_card_*.c         the question and answer sides
-    ui_sheet_*.c        설명 / 댓글 / FSRS
+    kanji_fsrs.c        FSRS-6 on the board — the backend's py-fsrs 6.3.1, transcribed
+    kanji_clock.c       SNTP-anchored clock in three tiers + the Korean span wording
+    ui_kanji.c          overlay and the two-face router
+    ui_card_front.c     문제 — the art print
+    ui_card_back.c      정답 — the dictionary spread
     ui_kanji_layout.c   every rectangle, as pure integers, host-tested
     fonts/              Noto Sans KR + JP faces (OFL) — generated, do not hand-edit
     test/host/          unit tests for all of the above

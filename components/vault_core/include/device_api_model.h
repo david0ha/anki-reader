@@ -37,7 +37,7 @@
 #define DEV_FW_MAXLEN        16
 #define DEV_DEVID_MAXLEN     16
 #define DEV_IP_MAXLEN        16
-#define DEV_SCREEN_MAXLEN    24   /* kanji_screen_title(): "문제" … "FSRS"   */
+#define DEV_SCREEN_MAXLEN    24   /* kanji_screen_title(): "문제" or "정답"  */
 #define DEV_DECK_MAXLEN      40   /* >= KANJI_DECK_MAX                       */
 #define DEV_FRONT_MAXLEN     40   /* >= KANJI_FRONT_MAX                      */
 #define DEV_READING_MAXLEN   64   /* >= KANJI_READING_MAX                    */
@@ -53,13 +53,17 @@ typedef struct {
     char ip[DEV_IP_MAXLEN];
 
     /* --- what is on the glass ---
-     * The board has three buttons and no touch panel, so the phone drives the
+     * The board has four buttons and no touch panel, so the phone drives the
      * same nav state a press does. Reporting it back is what stops the two
-     * disagreeing about which screen is up. */
-    int  screen;                            /* kanji_screen_t, 0..4           */
+     * disagreeing about which screen is up.
+     *
+     * There are TWO screens now, not five: 유래, 구성요소 and the FSRS figures
+     * all sit on the answer face, so a phone that used to page a sheet has
+     * nothing left to page. */
+    int  screen;                            /* kanji_screen_t, 0..1           */
     char screen_title[DEV_SCREEN_MAXLEN];   /* the word the footer shows      */
     bool revealed;                          /* the answer side is up          */
-    int  grade;                             /* kanji_grade_t: the dock cursor */
+    int  grade;                             /* kanji_grade_t, once committed  */
 
     /* --- the card --- */
     bool card_valid;                    /* false = the session served no card */

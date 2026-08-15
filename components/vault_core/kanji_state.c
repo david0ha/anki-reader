@@ -3,10 +3,48 @@
 #include <limits.h>
 #include <string.h>
 
-#define STATE_SCHEMA          1u
+/* Schema 2 added the schedule triple at offsets 16..27 and moved the CRC.  It
+ * moves in lockstep with KANJI_STATE_RECORD_SIZE, which the header also
+ * carries, so an image from either side of the change is rejected twice over
+ * by header_prefix_valid() and the partition restarts empty.  A schema that
+ * grew silently would be worse than a corrupt one: 20-byte records read at a
+ * 32-byte stride still satisfy their CRC nowhere, so replay would stop at the
+ * first record and quietly present a learner's whole history as unreviewed. */
+#define STATE_SCHEMA          2u
 #define STATE_COMMIT          0x434f4d4du
-#define STATE_RECORD_CAPACITY \
-    ((KANJI_STATE_BANK_SIZE - KANJI_STATE_HEADER_SIZE) / KANJI_STATE_RECORD_SIZE)
+#define STATE_RECORD_CAPACITY KANJI_STATE_RECORDS_PER_BANK
+
+/*
+ * The 32-byte record, little-endian throughout and read byte-wise so no field
+ * needs the record to be aligned:
+ *
+ *    0  sequence      u32     16  stability     u32  (milli-days)
+ *    4  card          u16     20  difficulty    u16  (milli-points)
+ *    6  next_ordinal  u16     22  reserved      u16  (must be 0)
+ *    8  reps          u16     24  due           u32  (minutes since epoch)
+ *   10  lapses        u16     28  crc32         u32  (over bytes 0..27)
+ *   12  grade         u8
+ *   13  flags         u8
+ *   14  reserved      u16  (must be 0)
+ *
+ * Both reserved halfwords are checked for zero on the way in.  They are the
+ * only room a future schema has to add a field without moving the CRC again,
+ * and a record that has a programmed bit there was written by something this
+ * build does not understand.
+ */
+#define REC_SEQUENCE   0u
+#define REC_CARD       4u
+#define REC_NEXT       6u
+#define REC_REPS       8u
+#define REC_LAPSES     10u
+#define REC_GRADE      12u
+#define REC_FLAGS      13u
+#define REC_RESERVED1  14u
+#define REC_STABILITY  16u
+#define REC_DIFFICULTY 20u
+#define REC_RESERVED2  22u
+#define REC_DUE        24u
+#define REC_CRC        28u
 
 typedef struct {
     bool valid;
@@ -89,6 +127,44 @@ static bool summary_reviewed(const kanji_rating_summary_t *summary)
     return encoded_grade_valid(summary->grade);
 }
 
+/* The layout constants and the record size have to agree or every offset past
+ * the first record is wrong, which is precisely the failure a CRC cannot see:
+ * a mis-strided read lands on real bytes with a real checksum somewhere else
+ * in the bank. */
+_Static_assert(REC_CRC + 4u == KANJI_STATE_RECORD_SIZE,
+               "record layout does not fill KANJI_STATE_RECORD_SIZE");
+_Static_assert(KANJI_STATE_RECORDS_PER_BANK > 0,
+               "a bank must hold at least one record");
+
+static bool schedule_in_range(uint32_t stability_milli,
+                              uint32_t difficulty_milli)
+{
+    return stability_milli >= KANJI_STATE_STABILITY_MIN &&
+           stability_milli <= KANJI_STATE_STABILITY_MAX &&
+           difficulty_milli >= KANJI_STATE_DIFFICULTY_MIN &&
+           difficulty_milli <= KANJI_STATE_DIFFICULTY_MAX;
+}
+
+/* Whole minutes since the Unix epoch, truncated down.
+ *
+ * Negative and pre-epoch times collapse to zero rather than being rejected.
+ * The board has no RTC, so the offline session this journal exists for is
+ * exactly the one most likely to be scheduling against a clock that never
+ * synced; refusing the write there would throw away the learner's press, while
+ * storing zero reads back as "overdue", which is the truthful answer for a
+ * card scheduled by a clock that does not know what year it is. */
+static uint32_t due_minutes_from_epoch(int64_t due_epoch)
+{
+    if (due_epoch <= 0) return 0;
+    const int64_t minutes = due_epoch / KANJI_STATE_DUE_TICK_SECONDS;
+    return minutes > (int64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)minutes;
+}
+
+static int64_t due_epoch_from_minutes(uint32_t minutes)
+{
+    return (int64_t)minutes * KANJI_STATE_DUE_TICK_SECONDS;
+}
+
 static uint32_t next_sequence(uint32_t sequence)
 {
     sequence++;
@@ -141,24 +217,48 @@ static void make_record(uint8_t encoded[KANJI_STATE_RECORD_SIZE],
                         uint16_t card, const kanji_rating_summary_t *summary)
 {
     memset(encoded, 0, KANJI_STATE_RECORD_SIZE);
-    put_u32(encoded + 0, summary->sequence);
-    put_u16(encoded + 4, card);
-    put_u16(encoded + 6, summary->next_ordinal);
-    put_u16(encoded + 8, summary->reps);
-    put_u16(encoded + 10, summary->lapses);
-    encoded[12] = summary->grade;
-    encoded[13] = summary->flags;
-    put_u32(encoded + 16, state_crc32(encoded, 16));
+    put_u32(encoded + REC_SEQUENCE, summary->sequence);
+    put_u16(encoded + REC_CARD, card);
+    put_u16(encoded + REC_NEXT, summary->next_ordinal);
+    put_u16(encoded + REC_REPS, summary->reps);
+    put_u16(encoded + REC_LAPSES, summary->lapses);
+    encoded[REC_GRADE] = summary->grade;
+    encoded[REC_FLAGS] = summary->flags;
+    put_u32(encoded + REC_STABILITY, summary->stability_milli);
+    put_u16(encoded + REC_DIFFICULTY, summary->difficulty_milli);
+    /* The summary's due_epoch is already a whole number of minutes — every
+     * path that sets it went through due_epoch_from_minutes() — so compaction
+     * re-encoding a summary it decoded is exactly idempotent.  Truncating here
+     * a second time is what makes that true rather than nearly true. */
+    put_u32(encoded + REC_DUE, due_minutes_from_epoch(summary->due_epoch));
+    put_u32(encoded + REC_CRC, state_crc32(encoded, REC_CRC));
+}
+
+/* The schedule triple is either wholly absent or wholly in range.  Accepting a
+ * half-written one — a stability with no due date, say — would let a corrupt
+ * record present itself as a schedule and put a card at the wrong end of the
+ * queue for as long as it takes the learner to notice, which on a card due in
+ * nine days is nine days. */
+static bool encoded_schedule_valid(const uint8_t encoded[KANJI_STATE_RECORD_SIZE])
+{
+    const uint32_t stability = get_u32(encoded + REC_STABILITY);
+    const uint32_t difficulty = get_u16(encoded + REC_DIFFICULTY);
+    const uint32_t due = get_u32(encoded + REC_DUE);
+    if (stability == 0 && difficulty == 0 && due == 0) return true;
+    return schedule_in_range(stability, difficulty);
 }
 
 static bool record_valid(const uint8_t encoded[KANJI_STATE_RECORD_SIZE],
                          uint16_t card_count)
 {
-    return get_u32(encoded + 0) != UINT32_MAX &&
-           get_u16(encoded + 4) < card_count &&
-           get_u16(encoded + 6) < card_count &&
-           encoded_grade_valid(encoded[12]) && get_u16(encoded + 14) == 0 &&
-           get_u32(encoded + 16) == state_crc32(encoded, 16);
+    return get_u32(encoded + REC_SEQUENCE) != UINT32_MAX &&
+           get_u16(encoded + REC_CARD) < card_count &&
+           get_u16(encoded + REC_NEXT) < card_count &&
+           encoded_grade_valid(encoded[REC_GRADE]) &&
+           get_u16(encoded + REC_RESERVED1) == 0 &&
+           get_u16(encoded + REC_RESERVED2) == 0 &&
+           encoded_schedule_valid(encoded) &&
+           get_u32(encoded + REC_CRC) == state_crc32(encoded, REC_CRC);
 }
 
 static bool bytes_erased(const uint8_t *bytes, size_t length)
@@ -172,12 +272,16 @@ static bool bytes_erased(const uint8_t *bytes, size_t length)
 static void record_to_summary(const uint8_t encoded[KANJI_STATE_RECORD_SIZE],
                               kanji_rating_summary_t *summary)
 {
-    summary->sequence = get_u32(encoded + 0);
-    summary->next_ordinal = get_u16(encoded + 6);
-    summary->reps = get_u16(encoded + 8);
-    summary->lapses = get_u16(encoded + 10);
-    summary->grade = encoded[12];
-    summary->flags = encoded[13];
+    memset(summary, 0, sizeof *summary);
+    summary->sequence = get_u32(encoded + REC_SEQUENCE);
+    summary->next_ordinal = get_u16(encoded + REC_NEXT);
+    summary->reps = get_u16(encoded + REC_REPS);
+    summary->lapses = get_u16(encoded + REC_LAPSES);
+    summary->grade = encoded[REC_GRADE];
+    summary->flags = encoded[REC_FLAGS];
+    summary->stability_milli = get_u32(encoded + REC_STABILITY);
+    summary->difficulty_milli = get_u16(encoded + REC_DIFFICULTY);
+    summary->due_epoch = due_epoch_from_minutes(get_u32(encoded + REC_DUE));
 }
 
 static bool read_bank_candidate(const kanji_state_io_t *io, uint32_t base,
@@ -270,6 +374,14 @@ static bool compact(kanji_state_t *state)
     for (uint16_t ordinal = 0; ordinal < state->card_count; ordinal++) {
         if (summary_reviewed(&state->summaries[ordinal])) reviewed++;
     }
+    /* Compaction writes one record per reviewed card, so a catalog with more
+     * reviewed cards than a bank holds cannot be compacted and grading stops
+     * for good.  Schema 1's 20-byte record left room for 13107, which is why
+     * nobody had to think about it against a 9956-card catalog; schema 2's
+     * schedule brings that down to 8190 and the ceiling is now reachable.  The
+     * failure is at least loud in the only way that matters here — the append
+     * returns false and no flash is touched, so the previous state stands —
+     * but the fix is a bigger study_state partition, not code in this file. */
     if (reviewed >= STATE_RECORD_CAPACITY) return false;
 
     const uint32_t old_base = state->active_bank;
@@ -387,12 +499,23 @@ const kanji_rating_summary_t *kanji_state_summary(const kanji_state_t *state,
     return &state->summaries[ordinal];
 }
 
-bool kanji_state_append_grade(kanji_state_t *state, uint16_t ordinal,
-                              uint16_t next_ordinal, kanji_grade_t grade)
+bool kanji_state_append_review(kanji_state_t *state, uint16_t ordinal,
+                               uint16_t next_ordinal, kanji_grade_t grade,
+                               const kanji_state_schedule_t *schedule)
 {
     if (state == NULL || !state->ready || ordinal >= state->card_count ||
         ordinal != state->current_ordinal || next_ordinal >= state->card_count ||
         !requested_grade_valid(grade)) {
+        return false;
+    }
+    /* Validated before anything is written, alongside the other arguments,
+     * because a schedule the journal would refuse on the way back in is one
+     * this board must never put on flash: replay stops at the first record it
+     * cannot parse, so a single out-of-range stability would truncate every
+     * grade appended after it. */
+    if (schedule != NULL &&
+        !schedule_in_range(schedule->stability_milli,
+                           schedule->difficulty_milli)) {
         return false;
     }
     const uint8_t grade_value = (uint8_t)grade;
@@ -401,12 +524,29 @@ bool kanji_state_append_grade(kanji_state_t *state, uint16_t ordinal,
     updated.sequence = state->next_sequence;
     updated.next_ordinal = next_ordinal;
     if (updated.reps != UINT16_MAX) updated.reps++;
-    if (grade_value == (uint8_t)KANJI_GRADE_AGAIN &&
-        updated.lapses != UINT16_MAX) {
-        updated.lapses++;
-    }
+    /* See kanji_state_schedule_t.lapse: a caller holding a schedule holds the
+     * state machine too and is the only one that can tell a lapse from a 다시.
+     * Without one there is nothing better than counting the presses. */
+    const bool lapse = schedule != NULL
+                           ? schedule->lapse
+                           : grade_value == (uint8_t)KANJI_GRADE_AGAIN;
+    if (lapse && updated.lapses != UINT16_MAX) updated.lapses++;
     updated.grade = grade_value;
     updated.flags = 0;
+    if (schedule != NULL) {
+        updated.stability_milli = schedule->stability_milli;
+        updated.difficulty_milli = schedule->difficulty_milli;
+        /* Round-trip the due time through the storage unit here rather than
+         * storing what the caller passed.  RAM then holds exactly what flash
+         * holds, so a reboot cannot change a due date the learner has already
+         * been shown, and compaction re-encodes without drifting. */
+        updated.due_epoch =
+            due_epoch_from_minutes(due_minutes_from_epoch(schedule->due_epoch));
+    } else {
+        updated.stability_milli = 0;
+        updated.difficulty_milli = 0;
+        updated.due_epoch = 0;
+    }
 
     uint8_t erased[KANJI_STATE_RECORD_SIZE];
     bool need_compaction = state->record_count == STATE_RECORD_CAPACITY;
@@ -438,4 +578,10 @@ bool kanji_state_append_grade(kanji_state_t *state, uint16_t ordinal,
     state->record_count++;
     state->next_sequence = next_sequence(state->next_sequence);
     return true;
+}
+
+bool kanji_state_append_grade(kanji_state_t *state, uint16_t ordinal,
+                              uint16_t next_ordinal, kanji_grade_t grade)
+{
+    return kanji_state_append_review(state, ordinal, next_ordinal, grade, NULL);
 }

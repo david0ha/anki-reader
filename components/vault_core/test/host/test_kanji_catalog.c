@@ -90,9 +90,41 @@ static bool inflate_exact(void *dst, size_t *dst_len,
     return ok;
 }
 
+static bool fail_next_inflate_after_write;
+
+static bool inflate_exact_with_recoverable_failure(void *dst, size_t *dst_len,
+                                                   const void *src,
+                                                   size_t src_len)
+{
+    bool ok = inflate_exact(dst, dst_len, src, src_len);
+    if (ok && fail_next_inflate_after_write) {
+        fail_next_inflate_after_write = false;
+        return false;
+    }
+    return ok;
+}
+
 static uint32_t catalog_crc32(const void *data, size_t length)
 {
     return (uint32_t)crc32(0, data, (uInt)length);
+}
+
+/* Arming this makes exactly the next CRC come out wrong, which is how a block
+ * whose raw bytes inflated cleanly still gets rejected. Corrupting the stored
+ * CRC in the image cannot reach the same state: the reader would then reject
+ * the block on its very first load, and the defect under test needs a block
+ * that loaded fine once and only fails on the second, different block. */
+static bool fail_next_raw_crc;
+
+static uint32_t catalog_crc32_with_recoverable_failure(const void *data,
+                                                       size_t length)
+{
+    uint32_t crc = catalog_crc32(data, length);
+    if (fail_next_raw_crc) {
+        fail_next_raw_crc = false;
+        return ~crc;
+    }
+    return crc;
 }
 
 static kanji_catalog_io_t io_for(image_t *image)
@@ -272,6 +304,69 @@ static void test_read_rejects_missing_or_aliased_workspace(const image_t *fixtur
     CHECK(!kanji_catalog_read_card(&catalog, 0, &out, &out));
     CHECK_EQ(kanji_catalog_status(&catalog), KANJI_CATALOG_BAD_ARGUMENT);
     CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+}
+
+static void test_failed_block_load_invalidates_cached_workspace(
+    const image_t *boundary)
+{
+    uint8_t compressed[65536];
+    uint8_t raw[98304];
+    kanji_catalog_t catalog;
+    kanji_catalog_io_t io = io_for((image_t *)boundary);
+    io.inflate = inflate_exact_with_recoverable_failure;
+    CHECK(kanji_catalog_open(&catalog, &io, (uint32_t)boundary->length,
+                             compressed, sizeof compressed, raw, sizeof raw));
+
+    kanji_t out;
+    kanji_t workspace;
+    CHECK(kanji_catalog_read_card(&catalog, 0, &out, &workspace));
+    CHECK_STREQ(out.card.id, "boundary-059");
+
+    memset(&out, 0xA5, sizeof out);
+    kanji_t sentinel = out;
+    fail_next_inflate_after_write = true;
+    CHECK(!kanji_catalog_read_card(&catalog, 64, &out, &workspace));
+    CHECK_EQ(kanji_catalog_status(&catalog), KANJI_CATALOG_INFLATE);
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+
+    CHECK(kanji_catalog_read_card(&catalog, 0, &out, &workspace));
+    CHECK_STREQ(out.card.id, "boundary-059");
+}
+
+/* The CRC rejection is the same defect wearing a different coat, and it is the
+ * nastier of the two: here the inflate succeeded, so the workspace holds a full
+ * block's worth of plausible-looking records rather than a short prefix. If the
+ * cache still named the previous block afterwards, the next read of that block
+ * would parse those records at the old block's offsets and hand back a card
+ * that is structurally valid and simply belongs to somebody else. */
+static void test_failed_block_crc_invalidates_cached_workspace(
+    const image_t *boundary)
+{
+    uint8_t compressed[65536];
+    uint8_t raw[98304];
+    kanji_catalog_t catalog;
+    kanji_catalog_io_t io = io_for((image_t *)boundary);
+    io.crc32 = catalog_crc32_with_recoverable_failure;
+    CHECK(kanji_catalog_open(&catalog, &io, (uint32_t)boundary->length,
+                             compressed, sizeof compressed, raw, sizeof raw));
+
+    kanji_t out;
+    kanji_t workspace;
+    CHECK(kanji_catalog_read_card(&catalog, 0, &out, &workspace));
+    CHECK_STREQ(out.card.id, "boundary-059");
+
+    memset(&out, 0xA5, sizeof out);
+    kanji_t sentinel = out;
+    fail_next_raw_crc = true;
+    CHECK(!kanji_catalog_read_card(&catalog, 64, &out, &workspace));
+    CHECK_EQ(kanji_catalog_status(&catalog), KANJI_CATALOG_RAW_CRC);
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+    /* If this is still armed the reader never reached the raw CRC, and the
+     * rest of this test would pass for the wrong reason. */
+    CHECK(!fail_next_raw_crc);
+
+    CHECK(kanji_catalog_read_card(&catalog, 0, &out, &workspace));
+    CHECK_STREQ(out.card.id, "boundary-059");
 }
 
 static void test_open_corruptions(const image_t *fixture)
@@ -469,6 +564,8 @@ int main(void)
         test_open_and_metadata(&fixture);
         test_cards_and_boundary(&fixture, &boundary);
         test_read_rejects_missing_or_aliased_workspace(&fixture);
+        test_failed_block_load_invalidates_cached_workspace(&boundary);
+        test_failed_block_crc_invalidates_cached_workspace(&boundary);
         test_open_corruptions(&fixture);
         test_repaired_structural_corruptions(&fixture, &boundary);
         test_read_corruptions(&fixture);

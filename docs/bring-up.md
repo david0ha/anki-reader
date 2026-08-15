@@ -211,12 +211,15 @@ This is the acceptance test the simulator cannot run, because it is about time r
 
 ## Buttons
 
-| | 문제 | 정답 | inside a sheet |
-|---|---|---|---|
-| KEY0 | reveal the answer | walk the grade cursor | next page |
-| KEY1 | open 설명 | commit the rating | close the sheet |
-| KEY2 | refresh, from anywhere · **hold 5 s → reboot into Wi-Fi setup** | | |
-| BOOT | open FSRS | open 설명 | next sheet |
+| Button | 문제 | 정답 |
+|---|---|---|
+| KEY0 | reveal the answer | **다시** (again) |
+| KEY1 | reveal the answer | **어려움** (hard) |
+| KEY2 | refresh · **hold 5 s → reboot into Wi-Fi setup** | **보통** (good) · same hold |
+| BOOT | reveal the answer | **쉬움** (easy) |
+
+On the answer face each button commits a rating directly, so a grade is one press and one panel
+event. There is no cursor to walk and no sheet to page.
 
 The KEY2 hold is the escape hatch for a board stuck on a network that no longer exists. It keeps the
 saved config so the portal pre-fills, and only the Wi-Fi needs re-entering. It is caught before the

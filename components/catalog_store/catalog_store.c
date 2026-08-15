@@ -2,10 +2,13 @@
 
 #include <limits.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "catalog_store_core.h"
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
+#include "esp_timer.h"
+#include "kanji_clock.h"
 #include "zlib.h"
 
 #define CATALOG_PARTITION_TYPE ((esp_partition_type_t)0x40)
@@ -13,6 +16,39 @@
 #define STORE_PARTITION_SUBTYPE ((esp_partition_subtype_t)0x00)
 
 static catalog_store_core_t s_store;
+
+/* The board's only wall clock, and the only thing on this side that knows the
+ * time comes from SNTP.
+ *
+ * The EE04 has no RTC and no coin cell (docs/pinout.md), so a cold boot starts
+ * at KANJI_CLOCK_UNKNOWN and the system clock sits at 1970 until
+ * components/provisioning/net_time.c gets an answer from pool.ntp.org. The
+ * moment it does, settimeofday() moves time(NULL) into kanji_clock.h's
+ * plausibility window and the tier climbs to TRUSTED; before that,
+ * kanji_clock_sync() rejects the reading and the clock stays UNKNOWN, which is
+ * what makes catalog_store_core_grade() decline to invent a due date.
+ *
+ * Anchoring rather than reading time(NULL) directly is what keeps that honest
+ * in the other direction too: once an anchor exists the reading advances from
+ * esp_timer's monotonic count, so a later settimeofday() that lands outside the
+ * window — a second SNTP attempt against a bad server — cannot drag an already
+ * TRUSTED board back to 1970. */
+static kanji_clock_t s_clock;
+
+static int64_t uptime_seconds(void)
+{
+    return esp_timer_get_time() / INT64_C(1000000);
+}
+
+static bool wall_clock_now(void *context, int64_t *out_epoch)
+{
+    (void)context;
+    /* Unconditional: kanji_clock_sync() drops an implausible epoch and leaves
+     * the clock exactly as it was, so "has SNTP answered yet" needs no flag of
+     * its own here. */
+    kanji_clock_sync(&s_clock, (int64_t)time(NULL), uptime_seconds());
+    return kanji_clock_now(&s_clock, uptime_seconds(), out_epoch);
+}
 
 static void *workspace_alloc(void *context, size_t size)
 {
@@ -117,6 +153,7 @@ bool catalog_store_init(void)
         .erase = partition_erase,
         .inflate = inflate_exact,
         .crc32 = zlib_crc32,
+        .now = wall_clock_now,
         .compressed_capacity =
             (size_t)compressBound(KANJI_CATALOG_MAX_RAW_BLOCK),
     };

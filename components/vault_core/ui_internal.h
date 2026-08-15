@@ -1,5 +1,5 @@
 /*
- * ui_internal.h — the layout grid and the drawing shorthand every page shares.
+ * ui_internal.h — the drawing shorthand every face shares.
  *
  * Private to vault_core: it is not in include/, and nothing outside the UI
  * files may include it. The public surface is ui_kanji.h.
@@ -9,6 +9,14 @@
  * and repeating them four hundred times is how a page ends up with a rounded
  * corner or a grey border that binarizes into a dashed line. One helper per
  * shape, used everywhere, means the panel's constraints are enforced once.
+ *
+ * There is no grid in this file. Every rectangle on the glass is a named field
+ * of kanji_front_layout_t or kanji_back_layout_t in ui_kanji_layout.h, which is
+ * pure integers and host-tested, and a screen pane is now the full 648x480 —
+ * so a layout rectangle is used verbatim, with no translation. The rail-and-
+ * main-column geometry this file used to carry (LOCAL_X/LOCAL_Y, UI_PAD,
+ * UI_RULE) is gone with the rail: two copies of a coordinate is one copy too
+ * many, and the copy in a header is the one nothing asserts on.
  */
 #pragma once
 
@@ -19,6 +27,7 @@
 #include "kanji_nav.h"
 #include "lvgl.h"
 #include "ui_fonts.h"
+#include "ui_kanji.h"
 #include "ui_kanji_layout.h"
 #include "ui_strings.h"
 
@@ -26,20 +35,11 @@
 extern "C" {
 #endif
 
-/* --- the grid -------------------------------------------------------------
- * Every rectangle on the glass comes from ui_kanji_layout.h, which is pure
- * integers and is host-tested. Only the two panel dimensions are repeated here,
- * because a screen file that has to include a layout header to ask how wide the
- * panel is reads worse than one that already knows. */
+/* The two panel dimensions are repeated here because a screen file that has to
+ * include a layout header to ask how wide the panel is reads worse than one
+ * that already knows. Nothing else about the geometry lives in this file. */
 #define UI_W            KANJI_SCREEN_W
 #define UI_H            KANJI_SCREEN_H
-#define UI_PAD          16      /* approved panel edge */
-#define UI_RULE          1      /* ordinary separation rule */
-
-/* Screen panes begin at the main-column origin. Layout rectangles are panel
- * coordinates, so both axes must be converted before creating pane children. */
-#define LOCAL_X(v) ((v) - kanji_chrome_layout()->main.x)
-#define LOCAL_Y(v) ((v) - kanji_chrome_layout()->main.y)
 
 /* --- fonts ----------------------------------------------------------------
  * The body, heading, and title faces carry the complete multilingual set (see
@@ -93,6 +93,48 @@ lv_obj_t *ui_lab(lv_obj_t *par, int x, int y, const lv_font_t *f, const char *tx
 lv_obj_t *ui_lab_w(lv_obj_t *par, int x, int y, int w,
                    const lv_font_t *f, lv_text_align_t align, const char *txt);
 
+/* ui_lab_w taking a layout rectangle, so a screen file never unpacks x/y/w by
+ * hand. `r.h` is deliberately NOT used: the box is pinned to one line of `f`
+ * for the reason ui_lab_w's body explains — a label with only a width set grows
+ * downwards and wraps instead of ellipsizing, and the second line lands on
+ * whatever the layout put below it. The layout's `h` is the slot the row is
+ * allowed to occupy; the label's height is what decides wrap-vs-ellipsis, and
+ * conflating the two is how a one-line row silently becomes two.
+ *
+ * Use ui_lab_wrap_r for a block the layout genuinely sized for several lines. */
+lv_obj_t *ui_lab_r(lv_obj_t *par, kanji_rect_t r,
+                   const lv_font_t *f, lv_text_align_t align, const char *txt);
+
+/* A fixed w AND h block that wraps inside the rectangle instead of ellipsizing.
+ * For the blocks the layout sized for more than one line — the senses at two
+ * and the 성립 prose at three. Text that overruns `r.h` is clipped at the
+ * rectangle rather than pushing the block below it down the page, which is the
+ * behaviour the 831-byte description depends on: it ellipsizes into its slot by
+ * design, and the simulator asserts it never overflows. */
+lv_obj_t *ui_lab_wrap_r(lv_obj_t *par, kanji_rect_t r,
+                        const lv_font_t *f, lv_text_align_t align, const char *txt);
+
+/* Letter-spacing, in px.
+ *
+ * The rule this exists under: tracking is for CAPS and short cut labels, which
+ * were drawn to be spaced and read as one long word without it. Korean or
+ * Japanese PROSE must never take it — a CJK glyph is already full-width and its
+ * own advance is the word spacing, so adding to it takes the sentence apart
+ * into a column of unrelated characters. This helper is for eyebrows, and for
+ * nothing else. */
+void ui_track(lv_obj_t *label, int px);
+
+/* An eyebrow: UI_F_BODY, left-aligned, filling `r`, with 2 px of tracking.
+ *
+ * The single most load-bearing device on the answer face. Every block opens
+ * with one — 뜻 · いみ, 성립 · 成り立ち, 예문 · れいぶん, 읽기 · よみ — and it is
+ * what makes a page this dense read as designed rather than dumped: the eye
+ * finds the four openings before it reads a word, and a section becomes
+ * eyebrow -> hairline -> content instead of an undifferentiated block of type.
+ * It costs three lines, which is why there is no excuse for a block without
+ * one. */
+lv_obj_t *ui_eyebrow(lv_obj_t *par, kanji_rect_t r, const char *txt);
+
 /* A fixed headword box that wraps without ellipsis. `h` is sized from the
  * fallback face's measured worst case, so every model-valid front remains
  * visible; short covered words still use the serif face. */
@@ -108,7 +150,8 @@ lv_obj_t *ui_lab_inv(lv_obj_t *par, int x, int y, int w,
                      const lv_font_t *f, lv_text_align_t align, const char *txt);
 
 /* Let a fixed prose label wrap inside `height` px instead of ellipsizing.
- * Provisioning, description, comments, and FSRS use this for bounded bodies. */
+ * The in-place form of ui_lab_wrap_r, for a label already built by something
+ * else — the overlay body, and the provisioning states. */
 void ui_lab_wrap(lv_obj_t *label, int height);
 
 void ui_set(lv_obj_t *label, const char *txt);
@@ -127,7 +170,7 @@ void ui_show(lv_obj_t *obj, bool visible);
 bool ui_font_can_draw(const lv_font_t *f, const char *s);
 
 /* The face the headword should be drawn in: the hero when the word both fits it
- * and can be drawn by it, the title face otherwise. The two card sides call
+ * and can be drawn by it, the title face otherwise. The two card faces call
  * this rather than deciding separately, because a headword that changed size
  * between the question and the answer would read as two different words. */
 const lv_font_t *ui_hero_face(const char *front);
@@ -145,49 +188,36 @@ void ui_draw_ring_abs(lv_layer_t *L, int cx, int cy, int r, int w, int a0, int a
 void ui_draw_rect_abs(lv_layer_t *L, int x1, int y1, int x2, int y2,
                       bool fill, int border, bool white);
 
-/* --- the screens ----------------------------------------------------------
- * Each screen is one file and obeys the same two-call contract: create() builds
- * a pane the size of the content area and returns it (the router positions and
- * shows/hides it), update() rewrites its widgets from a snapshot and touches
+/* --- the two faces --------------------------------------------------------
+ * A card has a front and a back and nothing else. Each is one file and obeys
+ * the same two-call contract: create() builds a pane the FULL SIZE OF THE PANEL
+ * (0,0,648,480) and returns it, so every layout rectangle is used verbatim with
+ * no translation; update() rewrites its widgets from a snapshot and touches
  * nothing else. A NULL snapshot means "blank yourself".
  *
- * Nothing in a screen file talks to the panel, keeps state beyond its widgets,
- * or knows which screen is on glass.
+ * Nothing in a face file talks to the panel, keeps state beyond its widgets, or
+ * knows which face is on glass.
  *
- * The answer takes a grade cursor as well as the card. Reading sheets take a
- * semantic page index selected by the first physical key. */
-lv_obj_t *ui_card_question_create(lv_obj_t *par);
-void      ui_card_question_update(const kanji_t *k);
+ * Both faces take the board status as well as the card: 오프라인 / 오래됨 / DEMO
+ * belongs on whichever face is up, and a frame that hides its own staleness on
+ * one of the two is a frame that lies half the time.
+ *
+ * The back takes the nav rather than a grade cursor. There is no cursor: the
+ * four buttons ARE the four grades, so the dock reads nav->committed to know
+ * whether to ink a cell at all, and nav->grade to know which. */
+lv_obj_t *ui_card_front_create(lv_obj_t *par);
+void      ui_card_front_update(const kanji_t *k, const ui_status_t *st);
 
-lv_obj_t *ui_card_answer_create(lv_obj_t *par);
-void      ui_card_answer_update(const kanji_t *k, kanji_grade_t cursor);
+lv_obj_t *ui_card_back_create(lv_obj_t *par);
+void      ui_card_back_update(const kanji_t *k, const kanji_nav_t *nav,
+                              const ui_status_t *st);
 
-/* The dock alone, for the partial refresh that moves the cursor without
- * flashing the whole panel. */
-void      ui_card_answer_dock(const kanji_t *k, kanji_grade_t cursor);
-
-lv_obj_t *ui_sheet_desc_create(lv_obj_t *par);
-void      ui_sheet_desc_update(const kanji_t *k, int page);
-
-lv_obj_t *ui_sheet_comments_create(lv_obj_t *par);
-void      ui_sheet_comments_update(const kanji_t *k, int page);
-
-lv_obj_t *ui_sheet_fsrs_create(lv_obj_t *par);
-void      ui_sheet_fsrs_update(const kanji_t *k, int page);
-
-/* The paper title row every sheet shares: headword at left, page title at
- * right. The rail carries the sheet identity and page position. */
-typedef struct {
-    lv_obj_t *word;
-    lv_obj_t *title;
-} ui_sheet_band_t;
-
-void ui_sheet_band_create(lv_obj_t *par, ui_sheet_band_t *out, const char *title);
-void ui_sheet_band_update(const ui_sheet_band_t *band, const kanji_t *k);
-
-/* "1/3" in the body's bottom-right corner. Hidden when there is only one page:
- * a pager that always says 1/1 trains the eye to ignore it. */
-void      ui_pager_set(lv_obj_t *pager, int page, int pages);
+/* The dock alone. The grade-cursor partial refresh it was written for is gone
+ * with the cursor — committing is one press and one full redraw — but the dock
+ * is still the one region that changes without the card changing, so it keeps
+ * its own entry point rather than making the router redraw a whole face to ink
+ * one cell. */
+void      ui_card_back_dock(const kanji_t *k, const kanji_nav_t *nav);
 
 #ifdef __cplusplus
 }

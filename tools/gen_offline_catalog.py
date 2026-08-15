@@ -13,7 +13,13 @@ import sys
 import tempfile
 import zlib
 
-from kanji_server import project_card_content
+# _readings() is private to kanji_server and imported anyway, on purpose: it is
+# the function that decides what counts as an on_yomi/kun_yomi entry, and the
+# offline card has to agree with the polled card about that. A local two-line
+# copy would be a second definition to keep in step, and the day they diverge
+# the symptom is a board that quotes a different sentence offline than online.
+from kanji_server import (_readings, card_examples, parse_json_column,
+                          project_card_content)
 
 
 MAGIC = b"KJCAT01\0"
@@ -35,7 +41,7 @@ _BLOCK_INDEX = struct.Struct("<IIII")
 _CARD_KEYS = (
     "id", "front", "reading", "on_reading", "kun_reading", "level",
     "gloss", "senses", "description", "hook_title", "hook_body",
-    "composition", "parts",
+    "composition", "parts", "examples",
 )
 _LEVEL = re.compile(r"N[1-5]")
 
@@ -83,6 +89,34 @@ def _level(name, cards=()):
         if isinstance(value, str) and _LEVEL.fullmatch(value):
             return value
     return ""
+
+
+def _projected(source):
+    """One source row as a packable card, examples included.
+
+    project_card_content() stops short of the 예문 rows because the polled card
+    gets them further down kanji_server, in flatten_card(), which reads the
+    same decoded `back` a second time.  Rather than re-walking on_yomi[] and
+    kun_yomi[] here, this calls the proxy's own card_examples() on the proxy's
+    own _readings() — so the offline card and the polled card show the SAME
+    three sentences in the same order.  A learner who studies on a train and
+    then plugs the board back into the LAN must not watch the pull-quote change
+    under them, and a second implementation of "on-yomi before kun-yomi, source
+    order within each, first three wins" would drift the first time either side
+    learned about a new field.
+
+    card_examples() clips each field to the device model's caps (39/143/143
+    bytes) on a UTF-8 boundary, so nothing that reaches the image is bytes
+    kanji_str_copy() would throw away on the board.  _clean_card() re-checks it
+    anyway: a projection bug here would otherwise ship 9,956 quietly-wrong
+    cards into read-only flash.
+    """
+    source = source if isinstance(source, dict) else {}
+    back = parse_json_column(source.get("back"))
+    projected = project_card_content(source)
+    projected["examples"] = card_examples(_readings(back, "on_yomi"),
+                                          _readings(back, "kun_yomi"))
+    return projected
 
 
 def select_user(conn, explicit_user_id=None):
@@ -141,7 +175,7 @@ def load_source(conn, user_id):
             tags = []
         source = {"id": card_id, "front": front, "back": back, "hint": hint,
                   "tags": tags if isinstance(tags, list) else []}
-        projected = project_card_content(source)
+        projected = _projected(source)
         deck["cards"].append(projected)
         cards.append(projected)
     for deck in decks:
@@ -170,7 +204,7 @@ def load_fixture(path):
             "cards": [],
         }
         for raw_card in raw_deck["cards"]:
-            projected = project_card_content(raw_card)
+            projected = _projected(raw_card)
             deck["cards"].append(projected)
             cards.append(projected)
         decks.append(deck)
@@ -271,6 +305,8 @@ def _clean_card(card, deck_level):
         raise ValueError(f"card {clean['id']} senses must be strings")
     if not isinstance(clean["parts"], list):
         raise ValueError(f"card {clean['id']} parts must be an array")
+    if not isinstance(clean["examples"], list):
+        raise ValueError(f"card {clean['id']} examples must be an array")
     byte_limits = {
         "id": 40, "front": 40, "reading": 144, "on_reading": 144,
         "kun_reading": 144, "level": 24, "gloss": 144,
@@ -286,6 +322,27 @@ def _clean_card(card, deck_level):
     for sense in clean["senses"]:
         if len(sense.encode("utf-8")) >= 144:
             raise ValueError(f"card {clean['id']} has a sense above 143 UTF-8 bytes")
+    # KANJI_EXAMPLES_MAX is 3. Rejecting a fourth rather than truncating it is
+    # the difference between a build that stops and a catalog whose 예문 block
+    # silently disagrees with the proxy's: kanji_parse.c breaks out of the loop
+    # at three, so a packed fourth row is bytes nobody will ever see.
+    if len(clean["examples"]) > 3:
+        raise ValueError(f"card {clean['id']} exceeds three examples")
+    for example in clean["examples"]:
+        if (not isinstance(example, dict) or set(example) != {"text", "reading", "gloss"}
+                or not all(isinstance(example[name], str) for name in example)):
+            raise ValueError(f"card {clean['id']} has an invalid example")
+        # parse_examples() in kanji_parse.c skips a row whose text is blank —
+        # "no text, no row" — so packing one would make the image's example
+        # count disagree with the panel's, which nothing logs and no screenshot
+        # shows. Refuse it at build time instead.
+        if not example["text"]:
+            raise ValueError(f"card {clean['id']} has an example with no text")
+        for name, capacity in (("text", 40), ("reading", 144), ("gloss", 144)):
+            if len(example[name].encode("utf-8")) >= capacity:
+                raise ValueError(
+                    f"card {clean['id']} example {name} exceeds "
+                    f"{capacity - 1} UTF-8 bytes")
     if len(clean["parts"]) > 6:
         raise ValueError(f"card {clean['id']} exceeds six components")
     for part in clean["parts"]:

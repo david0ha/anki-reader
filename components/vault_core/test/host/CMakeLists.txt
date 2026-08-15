@@ -85,6 +85,11 @@ target_compile_definitions(test_kanji_catalog PRIVATE
     CATALOG_BOUNDARY_FIXTURE="${CATALOG_BOUNDARY_FIXTURE}")
 target_link_libraries(test_kanji_catalog ZLIB::ZLIB)
 
+# The board's only clock, and the Korean it words a span in. Pure and injected
+# — the test supplies both the epoch and the monotonic reading, which is the
+# only way a decade of drift fits inside a unit test.
+add_host_test(test_kanji_clock test_kanji_clock.c ${CORE}/kanji_clock.c)
+
 # The raw-NOR state journal. The test supplies the same read/write/erase seam
 # used by the ESP partition adapter, including torn writes and reboot replay.
 add_host_test(test_kanji_state test_kanji_state.c ${CORE}/kanji_state.c)
@@ -108,13 +113,21 @@ add_host_test(test_kanji_mock test_kanji_mock.c
               ${CORE}/kanji_mock.c ${CORE}/kanji_parse.c ${CORE}/kanji_model.c
               ${CJSON}/cJSON.c)
 
+# FSRS-6 as the board runs it offline, pinned to golden vectors printed by the
+# backend's own py-fsrs. This is the one place a wrong number is invisible: an
+# off-by-a-weight scheduler keeps producing plausible intervals for years while
+# the learner's history quietly diverges from the server's.
+add_host_test(test_kanji_fsrs test_kanji_fsrs.c ${CORE}/kanji_fsrs.c)
+
 enable_testing()
 add_test(NAME kanji_model   COMMAND test_kanji_model)
 add_test(NAME kanji_nav     COMMAND test_kanji_nav)
 add_test(NAME kanji_parse   COMMAND test_kanji_parse)
 add_test(NAME kanji_catalog COMMAND test_kanji_catalog)
+add_test(NAME kanji_clock   COMMAND test_kanji_clock)
 add_test(NAME kanji_state   COMMAND test_kanji_state)
 add_test(NAME kanji_layout  COMMAND test_kanji_layout)
 add_test(NAME kanji_service COMMAND test_kanji_service)
 add_test(NAME kanji_mock    COMMAND test_kanji_mock)
+add_test(NAME kanji_fsrs    COMMAND test_kanji_fsrs)
 add_test(NAME api_json      COMMAND test_api_json)

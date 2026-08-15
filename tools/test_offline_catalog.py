@@ -24,12 +24,24 @@ from gen_offline_catalog import (  # noqa: E402
     select_user,
     verify_catalog,
 )
+from gen_fonts import symbol_set  # noqa: E402
+from kanji_server import check_glyphs  # noqa: E402
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(ROOT, "tools", "fixtures", "offline_catalog.json")
 GENERATOR = os.path.join(ROOT, "tools", "gen_offline_catalog.py")
 PARTITIONS = os.path.join(ROOT, "partitions.csv")
+
+# The device model's caps, restated here as literals rather than imported from
+# kanji_model.h through kanji_server.  A test that reads its expectation from
+# the same header the generator clips against cannot catch the generator
+# clipping against the wrong header field, which is precisely the mistake that
+# ships a 40-byte example.text into a 40-byte char array.
+EXAMPLE_TEXT_CAP = 39
+EXAMPLE_READING_CAP = 143
+EXAMPLE_GLOSS_CAP = 143
+EXAMPLES_PER_CARD = 3
 
 
 class Checks:
@@ -272,6 +284,146 @@ def _validate_independent_glosses(decoded_cards, expected_by_id):
     if missing:
         raise ValueError(f"gloss oracle rows were not decoded: {len(missing)}")
     return len(decoded_cards), nonempty
+
+
+def _independent_clip(text, cap):
+    """Truncate to `cap` bytes on a character boundary. Test-local on purpose.
+
+    Deliberately not kanji_server.clip(): if the production clipper started
+    cutting mid-sequence, or started counting characters instead of bytes,
+    calling it here would move the expectation with the bug.  Encoding each
+    character and stopping before the one that would not fit is the definition
+    the C side's kanji_str_copy() implements, written out.
+    """
+    out = ""
+    used = 0
+    for character in text:
+        width = len(character.encode("utf-8"))
+        if used + width > cap:
+            break
+        out += character
+        used += width
+    return out
+
+
+def _independent_examples_from_raw(back_column):
+    """Derive the three packed 예문 straight from a raw `back` column.
+
+    Test-local for the same reason the formula and gloss oracles are: it must
+    be possible for card_examples() to be rewritten and for this file to say
+    so.  The rule being asserted is the documented one — walk on_yomi[] then
+    kun_yomi[] in source order, take each entry's examples[] in source order,
+    skip a row with no Japanese text, stop at three, clip each field to the
+    device model's cap.
+    """
+    back = _oracle_json_object(back_column)
+    out = []
+    entries = []
+    for key in ("on_yomi", "kun_yomi"):
+        value = back.get(key)
+        if isinstance(value, list):
+            entries.extend(entry for entry in value if isinstance(entry, dict))
+    for entry in entries:
+        examples = entry.get("examples")
+        if not isinstance(examples, list):
+            continue
+        for example in examples:
+            if not isinstance(example, dict):
+                continue
+            text = example.get("text")
+            if not isinstance(text, str) or not text:
+                continue
+            reading = example.get("reading")
+            gloss = example.get("gloss")
+            out.append({
+                "text": _independent_clip(text, EXAMPLE_TEXT_CAP),
+                "reading": _independent_clip(
+                    reading if isinstance(reading, str) else "", EXAMPLE_READING_CAP),
+                "gloss": _independent_clip(
+                    gloss if isinstance(gloss, str) else "", EXAMPLE_GLOSS_CAP),
+            })
+            if len(out) >= EXAMPLES_PER_CARD:
+                return out
+    return out
+
+
+def _load_live_example_oracle(connection, user_id):
+    """Load the expected 예문 rows for every reachable raw card row."""
+    rows = connection.execute("""
+        SELECT ct.id, ct.back
+          FROM study_decks AS sd
+          JOIN deck_templates AS dt ON dt.id = sd.template_deck_id
+          JOIN card_templates AS ct ON ct.template_deck_id = dt.id
+         WHERE sd.user_id = ? AND sd.archived_at IS NULL
+         ORDER BY dt.sort_order ASC, dt.id ASC, ct.sort_order ASC, ct.id ASC
+    """, (user_id,)).fetchall()
+    expected = {}
+    for card_id, back_column in rows:
+        if not isinstance(card_id, str) or not card_id:
+            raise ValueError("raw example row has no stable card id")
+        if card_id in expected:
+            raise ValueError(f"duplicate raw example row: {card_id}")
+        expected[card_id] = _independent_examples_from_raw(back_column)
+    return expected
+
+
+def _validate_independent_examples(decoded_cards, expected_by_id):
+    """Reject any decoded example list that differs from the raw-row oracle."""
+    if len(decoded_cards) != len(expected_by_id):
+        raise ValueError(
+            f"example cardinality mismatch: decoded={len(decoded_cards)} "
+            f"raw={len(expected_by_id)}")
+    seen = set()
+    nonempty = rows = 0
+    for ordinal, card in enumerate(decoded_cards):
+        card_id = card.get("id") if isinstance(card, dict) else None
+        if not isinstance(card_id, str) or card_id not in expected_by_id:
+            raise ValueError(f"example card {ordinal} has no raw-row oracle")
+        if card_id in seen:
+            raise ValueError(f"duplicate decoded example card: {card_id}")
+        seen.add(card_id)
+        expected = expected_by_id[card_id]
+        actual = card.get("examples")
+        if actual != expected:
+            raise ValueError(
+                f"example mismatch at ordinal {ordinal} card {card_id}: "
+                f"got {actual!r}, expected {expected!r}")
+        nonempty += bool(expected)
+        rows += len(expected)
+    missing = set(expected_by_id).difference(seen)
+    if missing:
+        raise ValueError(f"example oracle rows were not decoded: {len(missing)}")
+    return len(decoded_cards), nonempty, rows
+
+
+def test_independent_example_oracle_rules():
+    """The raw-row oracle's own rules, pinned before it judges 9,956 cards."""
+    back = json.dumps({
+        "on_yomi": [
+            {"reading": "カン", "examples": [
+                {"text": "", "reading": "skip", "gloss": "skip"},
+                {"text": "関連", "reading": "かんれん", "gloss": "관련"},
+            ]},
+            {"reading": "ケン", "examples": [
+                {"text": "関係", "reading": "かんけい"},
+            ]},
+        ],
+        "kun_yomi": [
+            {"reading": "せき", "examples": [
+                {"text": "関所", "reading": "せきしょ", "gloss": "관문"},
+                {"text": "関わる", "reading": "かかわる", "gloss": "관계되다"},
+            ]},
+        ],
+    }, ensure_ascii=False)
+    T.eq(_independent_examples_from_raw(back), [
+        {"text": "関連", "reading": "かんれん", "gloss": "관련"},
+        {"text": "関係", "reading": "かんけい", "gloss": ""},
+        {"text": "関所", "reading": "せきしょ", "gloss": "관문"},
+    ], "raw-row oracle walks on before kun, skips blanks, and stops at three")
+    T.eq(_independent_examples_from_raw("not json"), [],
+        "raw-row oracle treats an unusable back column as no examples")
+    T.eq(_independent_clip("字" * 20, EXAMPLE_TEXT_CAP), "字" * 13,
+         "raw-row oracle clips on a character boundary, never mid-sequence")
 
 
 def _parse_flash_payloads(arguments_path, build_directory):
@@ -566,10 +718,24 @@ def test_fixture_projection_and_format():
     punish = next(card["card"] for card in manifest.cards if card["card"]["front"] == "懲らしめる")
     T.eq(study["composition"], "勉 + 強 = 勉強", "compound sub-radicals are excluded")
     T.eq(punish["composition"], "徴 + 心 = 懲", "okurigana result is constituent kanji")
-    forbidden = {"image_url", "audio_url", "comments", "examples", "session",
+    # `examples` used to sit in this set.  It was moved out deliberately, not
+    # relaxed: the redesigned question face quotes a Japanese example sentence
+    # and the answer face carries an 예문 block, so an offline card without
+    # examples draws two empty rectangles the layout still reserves.  The
+    # exclusion that remains is the one that was always the point — nothing
+    # user-specific, session-specific, per-review or fetched-at-runtime belongs
+    # in a read-only image flashed once.
+    forbidden = {"image_url", "audio_url", "comments", "session",
                  "fsrs", "user_id", "study_card_id", "due_at", "tags"}
     T.check(not any(forbidden.intersection(card["card"]) for card in manifest.cards),
             "media, user, session, and FSRS keys are excluded")
+    T.check(all("examples" in card["card"] for card in manifest.cards),
+            "every packed card carries an examples array")
+    # The committed fixture's cards have no examples[] in their back JSON, so
+    # this is also the "a card with no examples still packs" case running on
+    # every build that touches the generator.
+    T.eq([card["card"].get("examples") for card in manifest.cards], [[]] * 5,
+         "a fixture card with no source examples packs an empty array")
 
 
 def test_independent_formula_oracle_rules():
@@ -605,6 +771,274 @@ def test_independent_formula_oracle_rules():
     )
     for front, back, hint, expected, message in cases:
         T.eq(_independent_formula_from_raw(front, back, hint), expected, message)
+
+
+# ---------------------------------------------------------------------------
+# 예문
+# ---------------------------------------------------------------------------
+#
+# The offline card is the ONLY card a board with no proxy on the LAN will ever
+# show, and the redesigned question face puts a Japanese example sentence on it
+# as a pull-quote.  A packed card with no examples renders that pull-quote and
+# the answer face's 예문 block as empty rectangles the layout still reserves
+# space for, so "offline" reads to the learner as "broken" rather than as
+# "unplugged".  Everything below is about the one field that closes that gap.
+
+
+def _example_deck(cards, deck_id="deck-examples", level="N5", deck_type="kanji"):
+    """One source-shaped deck, ready for json.dump() into a fixture file."""
+    return {"id": deck_id, "name": f"JLPT {level} Kanji", "level": level,
+            "deck_type": deck_type, "cards": cards}
+
+
+def _example_card(card_id, front, on_entries, kun_entries, level="N5"):
+    """One source-shaped card whose readings carry the given example rows.
+
+    Shaped like a real card_templates row: `back` holds on_yomi[]/kun_yomi[],
+    each entry carrying its own examples[] of {text, reading, gloss}.  The
+    entries are lists of example lists so a test can put examples on the second
+    on-yomi reading, which is where the on-before-kun ordering rule stops being
+    the same thing as "the first entry wins".
+    """
+    return {
+        "id": card_id,
+        "front": front,
+        "back": {
+            "kanji": front,
+            "meaning": {"gloss": f"gloss-{card_id}", "senses": [f"sense-{card_id}"]},
+            "on_yomi": [{"reading": f"オン{index}", "examples": examples}
+                        for index, examples in enumerate(on_entries)],
+            "kun_yomi": [{"reading": f"くん{index}", "examples": examples}
+                         for index, examples in enumerate(kun_entries)],
+            "shape_explanation": f"설명-{card_id}",
+        },
+        "hint": {"principle": "형성", "reason": f"이유-{card_id}", "shapes": []},
+        "tags": [level],
+    }
+
+
+def _pack_example_cards(cards, seed=0):
+    """Take source-shaped cards through the real fixture path to decoded cards.
+
+    Deliberately through load_fixture() and a file on disk rather than through
+    a hand-built dict: load_fixture() and load_source() are two call sites of
+    the same projection, and a field wired into only one of them is exactly the
+    bug that ships a full catalog and an empty simulator (or the reverse).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "examples.json")
+        with open(path, "w", encoding="utf-8") as output:
+            json.dump({"decks": [_example_deck(cards)]}, output, ensure_ascii=False)
+        decks, _cards = load_fixture(path)
+    ordered = balanced_cards(decks, seed)
+    manifest = verify_catalog(encode_catalog(decks, ordered, 0x770000))
+    by_id = {envelope["card"]["id"]: envelope["card"] for envelope in manifest.cards}
+    return decks, ordered, manifest, by_id
+
+
+def test_examples_are_packed_in_wire_order():
+    example = lambda tag: {"text": f"例{tag}", "reading": f"れい{tag}",  # noqa: E731
+                           "gloss": f"예{tag}"}
+    cards = [
+        # Three on-yomi examples spread over two readings, then a kun-yomi one
+        # that must lose: on before kun, source order within each.
+        _example_card("ordered", "関",
+                      [[example("a"), example("b")], [example("c")]],
+                      [[example("k")]]),
+        # A fourth row is dropped rather than packed and silently truncated on
+        # the device: KANJI_EXAMPLES_MAX is 3 and kanji_parse.c stops there.
+        _example_card("capped", "係",
+                      [[example("1"), example("2"), example("3"), example("4")]],
+                      []),
+        # kanji_parse.c's parse_examples() drops a row with a blank text ("no
+        # text, no row").  Packing one would make the catalog's example count
+        # disagree with what the panel draws, which is invisible until somebody
+        # counts pull-quotes.
+        _example_card("blank", "節",
+                      [[{"text": "", "reading": "れい", "gloss": "예"},
+                        example("x"), example("y"), example("z")]],
+                      []),
+        # A card with nothing to quote still has to pack.  1,525 of the 9,956
+        # real cards are this card.
+        _example_card("silent", "税", [[]], []),
+    ]
+    _decks, _ordered, _manifest, by_id = _pack_example_cards(cards)
+
+    T.eq([e["text"] for e in by_id["ordered"]["examples"]], ["例a", "例b", "例c"],
+         "on-yomi examples fill the three rows before kun-yomi is reached")
+    T.eq(by_id["ordered"]["examples"][0],
+         {"text": "例a", "reading": "れいa", "gloss": "예a"},
+         "an example keeps its text, reading and Korean gloss")
+    T.eq([e["text"] for e in by_id["capped"]["examples"]], ["例1", "例2", "例3"],
+         "a fourth example is dropped, not packed")
+    T.eq([e["text"] for e in by_id["blank"]["examples"]], ["例x", "例y", "例z"],
+         "an example the device parser would drop is never packed")
+    T.eq(by_id["silent"]["examples"], [],
+         "a card with no examples packs an empty array, not a missing key")
+    for card_id, card in by_id.items():
+        T.check("examples" in card, f"card {card_id} carries the examples key")
+
+
+def test_example_order_is_deterministic():
+    example = lambda tag: {"text": f"例{tag}", "reading": f"れい{tag}",  # noqa: E731
+                           "gloss": f"예{tag}"}
+    # Two on-yomi readings whose example rows would sort differently under any
+    # incidental ordering (a dict, a set, a hash) than they do in source order.
+    cards = [_example_card("deterministic", "関",
+                           [[example("z"), example("a")], [example("m")]], [])]
+    decks, ordered, manifest, by_id = _pack_example_cards(cards)
+    T.eq([e["text"] for e in by_id["deterministic"]["examples"]],
+         ["例z", "例a", "例m"],
+         "source order is preserved, not sorted")
+    repeated = encode_catalog(decks, balanced_cards(decks, 0), 0x770000)
+    T.eq(encode_catalog(decks, ordered, 0x770000), repeated,
+         "a catalog carrying examples is still byte-identical when rebuilt")
+
+
+def test_example_caps_truncate_on_a_utf8_boundary():
+    # 20 kanji is 60 bytes against a 39-byte field; 60 kana and 60 hangul are
+    # 180 bytes each against 143-byte fields.  None of the three caps lands on
+    # a character boundary, which is the whole point: a byte-count truncation
+    # would leave a half-encoded lead byte the C reader turns into a tofu box.
+    long_example = {"text": "字" * 20, "reading": "あ" * 60, "gloss": "한" * 60}
+    cards = [_example_card("long", "字", [[long_example]], [])]
+    _decks, _ordered, _manifest, by_id = _pack_example_cards(cards)
+    packed = by_id["long"]["examples"][0]
+
+    T.eq(packed["text"], "字" * 13, "39-byte text cap keeps 13 whole kanji")
+    T.eq(packed["reading"], "あ" * 47, "143-byte reading cap keeps 47 whole kana")
+    T.eq(packed["gloss"], "한" * 47, "143-byte gloss cap keeps 47 whole hangul")
+    for field, cap in (("text", EXAMPLE_TEXT_CAP),
+                       ("reading", EXAMPLE_READING_CAP),
+                       ("gloss", EXAMPLE_GLOSS_CAP)):
+        raw = packed[field].encode("utf-8")
+        T.check(len(raw) <= cap,
+                f"example {field} is {len(raw)} bytes, at or under {cap}")
+        T.check(raw.decode("utf-8", errors="strict") == packed[field],
+                f"truncated example {field} is still whole UTF-8")
+        T.check(long_example[field].startswith(packed[field]),
+                f"example {field} loses only its tail")
+
+
+def test_oversized_example_is_rejected_not_clipped():
+    """The encoder refuses bytes the device would throw away rather than pack.
+
+    The generator clips at the projection, so an over-long example can only
+    reach encode_catalog() if a caller hand-built one.  _clean_card() is the
+    backstop, and it has to be a rejection: silently shortening here would let
+    a future projection bug ship 9,956 quietly-different cards.
+    """
+    deck = {"id": "over", "name": "Over", "level": "N5", "deck_type": "kanji"}
+    base = {"id": "over-1", "front": "字", "reading": "ジ", "on_reading": "ジ",
+            "kun_reading": "", "level": "N5", "gloss": "글자", "senses": ["글자"],
+            "description": "설명", "hook_title": "", "hook_body": "기억",
+            "composition": "", "parts": [], "examples": []}
+    for field, size in (("text", EXAMPLE_TEXT_CAP + 1),
+                        ("reading", EXAMPLE_READING_CAP + 1),
+                        ("gloss", EXAMPLE_GLOSS_CAP + 1)):
+        card = copy.deepcopy(base)
+        card["examples"] = [{"text": "例", "reading": "れい", "gloss": "예"}]
+        card["examples"][0][field] = "x" * size
+        T.raises_matching(
+            ValueError, field,
+            lambda card=card: encode_catalog(
+                [deck], balanced_cards([{**deck, "cards": [card]}], 0), 0x770000),
+            f"an example {field} one byte over the device cap is rejected")
+
+    too_many = copy.deepcopy(base)
+    too_many["examples"] = [{"text": f"例{i}", "reading": "れい", "gloss": "예"}
+                            for i in range(EXAMPLES_PER_CARD + 1)]
+    T.raises_matching(
+        ValueError, "example",
+        lambda: encode_catalog(
+            [deck], balanced_cards([{**deck, "cards": [too_many]}], 0), 0x770000),
+        "a fourth example is rejected by the encoder as well as the projection")
+
+    blank = copy.deepcopy(base)
+    blank["examples"] = [{"text": "", "reading": "れい", "gloss": "예"}]
+    T.raises_matching(
+        ValueError, "example",
+        lambda: encode_catalog(
+            [deck], balanced_cards([{**deck, "cards": [blank]}], 0), 0x770000),
+        "an example the device parser drops is rejected rather than packed")
+
+    malformed = copy.deepcopy(base)
+    malformed["examples"] = [{"text": "例", "reading": "れい"}]
+    T.raises_matching(
+        ValueError, "example",
+        lambda: encode_catalog(
+            [deck], balanced_cards([{**deck, "cards": [malformed]}], 0), 0x770000),
+        "an example missing a field is rejected rather than half-packed")
+
+
+def _packed_strings(card):
+    """Every string a packed card puts on the glass, with a label for each."""
+    for key in ("front", "reading", "on_reading", "kun_reading", "level",
+                "gloss", "description", "hook_title", "hook_body", "composition"):
+        yield card[key], key
+    for sense in card["senses"]:
+        yield sense, "sense"
+    for example in card["examples"]:
+        yield example["text"], "example.text"
+        yield example["reading"], "example.reading"
+        yield example["gloss"], "example.gloss"
+    for part in card["parts"]:
+        yield part["glyph"], "part.glyph"
+        yield part["meaning"], "part.meaning"
+        yield part["reading"], "part.reading"
+
+
+def undrawable_fields(cards, charset):
+    """(id, label, character) for every packed string the faces cannot draw.
+
+    The offline catalog never passes through kanji_server's substitute_missing()
+    — it is written once, at build time, and the board has no second chance to
+    ask anybody for a replacement.  So a character no shipped face covers is a
+    tofu box burned into 0x770000 of read-only flash, and the only place to
+    catch it is here.  check_glyphs() and symbol_set() are the same two halves
+    the wire path's sweep uses, so "drawable" means the same thing on both
+    sides rather than two lists to keep in step.
+    """
+    found = []
+    for card in cards:
+        for value, label in _packed_strings(card):
+            for character in sorted(check_glyphs({"s": value}, charset, warn=False)):
+                found.append((card.get("id"), label, character))
+    return found
+
+
+def example_glyph_failures(cards, charset):
+    """Only the undrawable characters that came in through an example row.
+
+    Examples get a hard gate and the rest of the card does not, and the reason
+    is not that the rest matters less.  It is that the offline catalog ALREADY
+    packs undrawable characters into 설명 prose and component meanings — see
+    the UNDRAWABLE lines the live sweep prints — because it has no equivalent
+    of the wire path's substitute_missing() step.  Pinning that set here would
+    write a font bug down as an expectation.  Examples are new, they are clean,
+    and a gate that starts at zero is the only one that stays at zero.
+    """
+    return [entry for entry in undrawable_fields(cards, charset)
+            if entry[1].startswith("example.")]
+
+
+def test_packed_examples_pass_the_glyph_gate():
+    charset = symbol_set()
+    decks, _cards = load_fixture(FIXTURE)
+    manifest = verify_catalog(encode_catalog(decks, balanced_cards(decks, 0), 0x770000))
+    fixture_cards = [envelope["card"] for envelope in manifest.cards]
+    T.eq(undrawable_fields(fixture_cards, charset)[:3], [],
+         "every string the fixture catalog packs is drawable by a shipped face")
+
+    # The gate has to be able to fail, or it is decoration.  U+1F600 is in no
+    # face this board ships and never will be.
+    _decks, _ordered, _manifest, by_id = _pack_example_cards(
+        [_example_card("emoji", "字",
+                       [[{"text": "例\U0001F600", "reading": "れい", "gloss": "예"}]], [])])
+    T.eq([(label, character)
+          for _id, label, character in example_glyph_failures([by_id["emoji"]], charset)],
+         [("example.text", "\U0001F600")],
+         "an undrawable character inside an example is caught, not ignored")
 
 
 def rebuilt_noncanonical_image(image):
@@ -691,7 +1125,7 @@ def test_boundaries_and_rejection():
                 "on_reading": "ジ", "kun_reading": "", "level": "N5",
                 "gloss": "글자", "senses": ["글자"], "description": "설명",
                 "hook_title": "", "hook_body": "기억", "composition": "",
-                "parts": [], "deck_index": 0}
+                "parts": [], "examples": [], "deck_index": 0}
         cards.append(card)
     ordered = balanced_cards([{**deck, "cards": cards}], 0)
     image = encode_catalog([deck], ordered, 0x770000)
@@ -762,6 +1196,8 @@ def test_full_model_maxima_round_trip():
         "composition": "c" * 95,
         "parts": [{"glyph": str(i), "meaning": f"part-{i}",
                    "reading": "" if i == 5 else f"read-{i}"} for i in range(6)],
+        "examples": [{"text": "字" * 13, "reading": "あ" * 47,
+                      "gloss": "" if i == 2 else "한" * 47} for i in range(3)],
     }
     ordered = balanced_cards([{**deck, "cards": [card]}], 0)
     manifest = verify_catalog(encode_catalog([deck], ordered, 0x770000))
@@ -774,6 +1210,12 @@ def test_full_model_maxima_round_trip():
     T.eq(len(decoded["parts"]), 6, "six components survive a round trip")
     T.eq(decoded["parts"][5]["reading"], "",
          "a missing component reading remains empty")
+    T.eq(len(decoded["examples"]), 3, "three examples survive a round trip")
+    T.eq([(len(e["text"].encode("utf-8")), len(e["reading"].encode("utf-8")))
+          for e in decoded["examples"]], [(39, 141)] * 3,
+         "the largest whole-character example text and reading survive intact")
+    T.eq(decoded["examples"][2]["gloss"], "",
+         "an example with no Korean gloss keeps an empty gloss")
     too_long = copy.deepcopy(card)
     too_long["description"] = "x" * 832
     T.raises(ValueError,
@@ -859,6 +1301,19 @@ def _live_maxima(cards, manifest):
         "senses": max(len(card["senses"]) for card in cards),
         "sense_bytes": max(len(sense.encode("utf-8"))
                            for card in cards for sense in card["senses"]),
+        "examples": max(len(card["examples"]) for card in cards),
+        # default=0 rather than a bare max(): a catalog whose cards all lack
+        # examples is a legitimate (if useless) catalog, and it must report
+        # zero rather than raise from inside the maxima line of a sweep.
+        "example_text_bytes": max((len(example["text"].encode("utf-8"))
+                                   for card in cards
+                                   for example in card["examples"]), default=0),
+        "example_reading_bytes": max((len(example["reading"].encode("utf-8"))
+                                      for card in cards
+                                      for example in card["examples"]), default=0),
+        "example_gloss_bytes": max((len(example["gloss"].encode("utf-8"))
+                                    for card in cards
+                                    for example in card["examples"]), default=0),
         "parts": max(len(card["parts"]) for card in cards),
         "part_glyph_bytes": max(len(part["glyph"].encode("utf-8"))
                                 for card in cards for part in card["parts"]),
@@ -882,6 +1337,7 @@ def run_live_database_sweep(database):
         decks, source_cards = load_source(connection, user_id)
         formula_oracle = _load_live_formula_oracle(connection, user_id)
         gloss_oracle = _load_live_gloss_oracle(connection, user_id)
+        example_oracle = _load_live_example_oracle(connection, user_id)
     finally:
         connection.close()
 
@@ -903,7 +1359,7 @@ def run_live_database_sweep(database):
         expected = {key: source_card[key] for key in (
             "id", "front", "reading", "on_reading", "kun_reading", "level",
             "gloss", "senses", "description", "hook_title", "hook_body",
-            "composition", "parts",
+            "composition", "parts", "examples",
         )}
         if not expected["level"]:
             expected["level"] = decks[source_card["deck_index"]]["level"]
@@ -917,11 +1373,21 @@ def run_live_database_sweep(database):
         decoded_cards, gloss_oracle)
     T.eq((gloss_checks, gloss_nonempty), (9956, 9956),
          "every live decoded card has its raw explicit-or-first-sense gloss")
+    example_checks, example_nonempty, example_rows = (
+        _validate_independent_examples(decoded_cards, example_oracle))
+    T.eq((example_checks, example_nonempty, example_rows), (9956, 8431, 24627),
+         "raw DB oracle checks every live 예문 list and its exact occupancy")
+    # 24,627 example sentences went into the image in this change and not one
+    # of them may be a tofu box burned into read-only flash.
+    undrawable = undrawable_fields(decoded_cards, symbol_set())
+    T.eq(example_glyph_failures(decoded_cards, symbol_set())[:3], [],
+         "no live packed example string is undrawable in flash")
 
     mutated = copy.deepcopy(ordered)
     for card in mutated:
         card["composition"] = "BROKEN"
         card["gloss"] = ""
+        card["examples"] = []
     mutated_manifest = verify_catalog(encode_catalog(decks, mutated, 0x770000))
     mutated_cards = [envelope["card"] for envelope in mutated_manifest.cards]
     T.raises_matching(
@@ -932,6 +1398,10 @@ def run_live_database_sweep(database):
         ValueError, "gloss mismatch",
         lambda: _validate_independent_glosses(mutated_cards, gloss_oracle),
         "raw DB oracle rejects a production-output mutation to every gloss")
+    T.raises_matching(
+        ValueError, "example mismatch",
+        lambda: _validate_independent_examples(mutated_cards, example_oracle),
+        "raw DB oracle rejects a catalog that silently drops every 예문")
 
     deck_counts = ",".join(
         f"{deck['type']}:{deck['level']}={deck['card_count']}"
@@ -942,7 +1412,19 @@ def run_live_database_sweep(database):
           f"blocks={manifest.block_count} bytes={manifest.used_size} "
           f"formula_checks={formula_checks} formula_nonempty={formula_nonempty} "
           f"formula_empty={formula_empty} gloss_checks={gloss_checks} "
-          f"gloss_nonempty={gloss_nonempty} deck_counts={deck_counts} maxima={maxima}")
+          f"gloss_nonempty={gloss_nonempty} example_cards={example_nonempty} "
+          f"example_rows={example_rows} deck_counts={deck_counts} maxima={maxima}")
+    # Informational, like the wire sweep's substitution count: which characters
+    # the shipped faces cannot draw is a property of the FONT, and gen_fonts.py
+    # owns that. It is printed rather than asserted because the count is not
+    # zero today — this catalog packs its 설명 prose verbatim, with no
+    # equivalent of the proxy's substitute_missing() pass — and every one of
+    # these is a tofu box a learner will eventually see.
+    distinct = sorted({character for _id, _label, character in undrawable})
+    fields = sorted({label for _id, label, _character in undrawable})
+    print(f"  ({len(undrawable)} undrawable placements over {len(distinct)} "
+          f"distinct characters in fields {','.join(fields)}: "
+          f"{''.join(distinct)})")
 
 
 def test_live_database_sweep():
@@ -1156,6 +1638,12 @@ def main():
     test_balanced_order()
     test_fixture_projection_and_format()
     test_independent_formula_oracle_rules()
+    test_examples_are_packed_in_wire_order()
+    test_example_order_is_deterministic()
+    test_example_caps_truncate_on_a_utf8_boundary()
+    test_oversized_example_is_rejected_not_clipped()
+    test_packed_examples_pass_the_glyph_gate()
+    test_independent_example_oracle_rules()
     test_noncanonical_json_rejected()
     test_boundaries_and_rejection()
     test_full_model_maxima_round_trip()

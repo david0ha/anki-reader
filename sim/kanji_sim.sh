@@ -8,32 +8,26 @@ set -e
 cd "$(dirname "$0")"
 
 canonical=(
-  01-question
-  02-answer
-  03-answer-easy
-  04-answer-again
-  04b-answer-three-examples
-  05-description-shape
-  05b-description-hook
-  05c-description-parts
-  06-comments
-  07-comments-page2
-  08-fsrs-1
-  09-fsrs-2
-  10-fsrs-3
-  11-session-complete
-  12-long-headword
-  12b-ascii-headword
-  13-offline
-  14-setup
-  15-no-data
-  16-stale
+  01-front
+  02-back
+  03-front-kanji
+  04-back-kanji
+  05-back-again
+  06-back-easy
+  07-front-new-card
+  08-back-new-card
+  09-front-no-examples
+  10-back-worst-case
+  11-front-worst-case
+  12-front-offline
+  13-back-stale
+  14-session-complete
+  15-front-long-headword
+  16-back-long-headword
+  17-setup
+  18-no-data
 )
-auxiliary=(
-  aux-description-shape-max
-  aux-description-hook-max
-  aux-description-parts-max
-)
+auxiliary=()
 
 check_gallery() {
   local ext="$1"
@@ -42,16 +36,16 @@ check_gallery() {
   aux_count=$(find shots -maxdepth 1 -type f -name "aux-*.${ext}" | wc -l | tr -d ' ')
   total_count=$(find shots -maxdepth 1 -type f -name "*.${ext}" | wc -l | tr -d ' ')
 
-  [ "$canonical_count" -eq 20 ] || {
-    echo "expected 20 canonical ${ext} files, found ${canonical_count}" >&2
+  [ "$canonical_count" -eq 18 ] || {
+    echo "expected 18 canonical ${ext} files, found ${canonical_count}" >&2
     return 1
   }
-  [ "$aux_count" -eq 3 ] || {
-    echo "expected 3 auxiliary ${ext} files, found ${aux_count}" >&2
+  [ "$aux_count" -eq 0 ] || {
+    echo "expected 0 auxiliary ${ext} files, found ${aux_count}" >&2
     return 1
   }
-  [ "$total_count" -eq 23 ] || {
-    echo "expected 23 total ${ext} files, found ${total_count}" >&2
+  [ "$total_count" -eq 18 ] || {
+    echo "expected 18 total ${ext} files, found ${total_count}" >&2
     return 1
   }
 
@@ -100,4 +94,4 @@ if [ "$(uname -s)" = Darwin ]; then
   done
   check_gallery png
 fi
-echo "screenshots in sim/shots/ — 20 canonical states and 3 auxiliary max-content proofs"
+echo "screenshots in sim/shots/ — 18 states, both faces, every degradation"

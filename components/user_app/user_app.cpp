@@ -352,9 +352,8 @@ static void action_set_screen(int screen)
     const bool accepted =
         kanji_nav_set_screen(&s_nav, (kanji_screen_t)screen, &s_data);
     const bool changed = accepted &&
-                         (before.sheet != s_nav.sheet ||
-                          before.revealed != s_nav.revealed ||
-                          before.sheet_page != s_nav.sheet_page);
+                         (before.revealed != s_nav.revealed ||
+                          before.committed != s_nav.committed);
     state_unlock();
 
     if (!accepted) {
@@ -567,10 +566,25 @@ static void handle_press(button_id_t id)
         break;
 
     case KANJI_ACT_SUBMIT:
-        /* Hand the rating to KanjiTask and return. The panel is deliberately
-         * left showing the answer the learner just graded: the next card is
-         * what the grade request returns, so drawing anything now would be
-         * drawing a guess. */
+        /* Acknowledge the press, then hand the rating to KanjiTask and return.
+         *
+         * The acknowledgement is the ONE partial refresh left on this board and
+         * it is worth its rectangle: grading is an HTTP round trip to a laptop
+         * that may be asleep, so the gap between the press and the next card is
+         * measured in seconds, and a panel that changes nothing for that long
+         * reads as a board that missed the button. Inverting the chosen cell
+         * costs a 600x52 window rather than a whole-panel flash, and it is
+         * honest — it says which rating was taken, not what comes next.
+         *
+         * The card itself is deliberately left alone. The next card is what the
+         * grade request returns, so drawing anything else now would be drawing
+         * a guess. */
+        if (Lvgl_lock(-1)) {
+            ui_kanji_set_nav(&nav);
+            Lvgl_unlock();
+        }
+        present_dock();
+
         if (queued_grade) {
             ESP_LOGI(TAG, "grading %s from captured %s source",
                      kanji_grade_name(nav.grade),
@@ -600,8 +614,9 @@ static void handle_press(button_id_t id)
 static void UiTask(void *arg)
 {
     (void)arg;
-    ESP_LOGI(TAG, "controls: KEY0/KEY1 per the footer, KEY2 = refresh "
-                  "(hold 5s = Wi-Fi setup), BOOT = sheets");
+    ESP_LOGI(TAG, "controls: 문제 = any key reveals, KEY2 refreshes; "
+                  "정답 = KEY0 다시 / KEY1 어려움 / KEY2 보통 / BOOT 쉬움; "
+                  "KEY2 held 5s = Wi-Fi setup");
 
     /* TaskInit publishes the restored catalog card before this task starts.
      * The mock remains a last-resort fallback if the catalog was unavailable. */

@@ -33,6 +33,8 @@ add_executable(test_catalog_store_core
     ${CORE}/kanji_state.c
     ${CORE}/kanji_parse.c
     ${CORE}/kanji_model.c
+    ${CORE}/kanji_clock.c
+    ${CORE}/kanji_fsrs.c
     ${CJSON}/cJSON.c)
 target_include_directories(test_catalog_store_core PRIVATE
     ${STORE} ${CORE}/include ${CJSON})
@@ -43,7 +45,8 @@ target_link_libraries(test_catalog_store_core PRIVATE catalog_store_core ZLIB::Z
 
 add_executable(test_catalog_store_adapter
     test_catalog_store_adapter.c
-    ${STORE}/catalog_store.c)
+    ${STORE}/catalog_store.c
+    ${CORE}/kanji_clock.c)
 target_include_directories(test_catalog_store_adapter PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${STORE} ${CORE}/include)
 target_compile_options(test_catalog_store_adapter PRIVATE -Wall -Wextra -Werror)

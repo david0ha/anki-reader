@@ -101,7 +101,16 @@ FAILURES = []
 CHECKS = [0]
 
 # A fixed instant, so every span in this file is arithmetic rather than a race.
-NOW = datetime(2026, 8, 14, 12, 0, 0, tzinfo=timezone.utc)
+# The clock every fixture timestamp is measured from.
+#
+# It has to be the REAL current time, not a frozen literal, and that is a fix rather than a
+# convenience. Every relative_due() test below passes NOW in explicitly, so those are equally
+# deterministic either way. But answer_response()'s next_rating_preview goes through the PROXY,
+# and the proxy words a span against datetime.now() — so a frozen NOW makes the gap between the
+# fixture and the wall clock widen by one day per day. Pinned to 2026-08-14 the suite passed on
+# the day it was written and began failing the next morning, asserting "9일 뒤" against a card
+# the proxy could correctly see was eight days out.
+NOW = datetime.now(timezone.utc)
 
 
 def check(cond, label, got=None, want=None):

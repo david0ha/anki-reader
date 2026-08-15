@@ -439,6 +439,33 @@ bool kanji_catalog_deck(kanji_catalog_t *cat, uint32_t deck_index,
 static bool load_block(kanji_catalog_t *cat, uint32_t block_id)
 {
     if (cat->_cached_block == block_id) return true;
+
+    /* Drop the cache here, before a single byte of either workspace is written,
+     * and do not name a block again until its raw bytes have been both inflated
+     * and CRC-checked at the bottom of this function. The state being prevented
+     * is "_cached_block says block A while _raw_workspace holds half of block
+     * B", and two exits below produce exactly that: inflate writes however many
+     * bytes it managed before it gave up, and a CRC mismatch means the bytes now
+     * sitting in _raw_workspace are wrong by definition. Both then return false
+     * with the workspace already clobbered.
+     *
+     * If the cache still named block A after one of those, the next read of any
+     * card in block A would take the early return above, skip the inflate and
+     * the CRC that would have caught the damage, parse whatever of block B is
+     * lying in the workspace, and return TRUE with a corrupt card. Nothing logs
+     * that, and the stored raw CRC cannot save us, because it is only checked on
+     * the load path the early return just skipped.
+     *
+     * Invalidating up front rather than at those two exits is the point. The
+     * earlier failures here — the block-index read, the bounds checks, the
+     * workspace-capacity check — leave _raw_workspace untouched and would be
+     * safe either way, but one invalidation at the top means no later edit can
+     * reopen the window by adding a `return false` after a write. Clearing
+     * _cached_raw_length with it keeps the pair honest: a raw length means
+     * nothing while no block is named. */
+    cat->_cached_block = NO_CACHED_BLOCK;
+    cat->_cached_raw_length = 0;
+
     uint32_t relative;
     uint32_t entry_offset;
     uint8_t entry[CATALOG_BLOCK_INDEX_SIZE];

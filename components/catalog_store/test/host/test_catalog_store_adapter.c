@@ -57,6 +57,11 @@ bool catalog_store_core_grade(catalog_store_core_t *core, kanji_grade_t grade)
     return false;
 }
 
+int64_t esp_timer_get_time(void)
+{
+    return 0;
+}
+
 void *heap_caps_malloc(size_t size, uint32_t capabilities)
 {
     (void)capabilities;
