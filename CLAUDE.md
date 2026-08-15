@@ -33,10 +33,18 @@ connection. It activates the IDF environment if you have not.
 - If it won't enter flash mode, **hold BOOT while pressing RESET**, release, and retry.
 - If it finds no port at all, check the USB-C cable carries data. A charge-only cable powers the
   board — the panel will even light up — and enumerates nothing.
-- If the build stops on `Too large font or glyphs in UI_FONT_JP_56`, your `sdkconfig` predates
-  `CONFIG_LV_FONT_FMT_TXT_LARGE=y` in `sdkconfig.defaults`. `sdkconfig` is generated once and never
-  re-derived, so `rm sdkconfig && idf.py build` is the fix — not menuconfig, and not editing the
-  generated face.
+- **`sdkconfig` is generated once and never re-derived, so any setting added to `sdkconfig.defaults`
+  after your checkout is silently missing from your build.** The symptom is always a compile error
+  that reads like a code bug, and the fix is always `rm sdkconfig && idf.py build` — not menuconfig,
+  and not editing the generated file. Two that have actually happened:
+  - `Too large font or glyphs in UI_FONT_JP_56` — missing `CONFIG_LV_FONT_FMT_TXT_LARGE=y`.
+  - `'lv_font_montserrat_18' undeclared` in `ui_card_back.c` — missing
+    `CONFIG_LV_FONT_MONTSERRAT_18=y`, which `UI_F_UTILITY` in `ui_internal.h` needs for the grade
+    dock's button glyphs. An old `sdkconfig` has `MONTSERRAT_14` instead, which is what the
+    compiler helpfully suggests and which is the wrong size.
+
+  `sdkconfig` is gitignored and per-developer, so back it up first if you have local settings worth
+  keeping. A green build in one worktree proves nothing about another: each carries its own.
 
 ## Verify before claiming anything works
 

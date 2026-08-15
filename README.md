@@ -43,6 +43,16 @@ KEY2 for five seconds when you want the `Kanjis Board-XXXX` setup network, then 
 credentials and, optionally, a remote study URL. A missing or corrupt catalog uses the built-in
 card badged `DEMO` as the final fallback rather than leaving a blank board.
 
+**If `idf.py build` fails on a font symbol, the problem is your `sdkconfig`, not the code.** It is
+generated once and never re-derived, so anything added to `sdkconfig.defaults` after your checkout
+is silently absent — and the symptom is always a compile error that reads like a bug. `rm sdkconfig
+&& idf.py build` is the fix; `sdkconfig` is gitignored and per-developer, so back it up first if you
+keep local settings there. Both instances so far were fonts: `Too large font or glyphs in
+UI_FONT_JP_56` wants `CONFIG_LV_FONT_FMT_TXT_LARGE=y`, and `'lv_font_montserrat_18' undeclared`
+wants `CONFIG_LV_FONT_MONTSERRAT_18=y` for the grade dock's button glyphs. Do not take the
+compiler's suggestion of `lv_font_montserrat_14` — an old `sdkconfig` really does have it, and it is
+the wrong size, so the dock would shrink instead of failing.
+
 Doing this for the **first** time on a given board, follow [docs/bring-up.md](docs/bring-up.md)
 instead: the three things most likely to be wrong on a first power-on all look like a blank screen,
 and the boot log is the only place they are told apart.
