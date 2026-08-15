@@ -11,6 +11,7 @@
 #include "ui_kanji.h"
 #include "ui_strings.h"
 #include "user_app.h"
+#include "startup_delivery.h"
 #include "user_config.h"
 #include "provisioning.h"
 #include "net_time.h"
@@ -47,17 +48,7 @@ static void Lvgl_FlushCallback(lv_display_t *drv, const lv_area_t *area, uint8_t
 	lv_disp_flush_ready(drv);
 }
 
-// --- Provisioning status, shown on the study UI's overlay ------------------
-
-static void SetStatus(const char *title, const char *body)
-{
-	if (Lvgl_lock(-1)) {
-		ui_kanji_set_overlay(title, body);
-		Lvgl_unlock();
-	}
-	Lvgl_RenderNow();
-	epd_refresh_full();
-}
+// --- Provisioning status, queued to the sole LVGL/panel owner (UiTask) -----
 
 static void OnProvisioningEvent(prov_event_t event, const char *info, void *user)
 {
@@ -65,22 +56,28 @@ static void OnProvisioningEvent(prov_event_t event, const char *info, void *user
 	char body[192];
 	switch (event) {
 	case PROV_EVENT_STA_CONNECTING:
-		snprintf(body, sizeof(body), "Connecting to\n%s", info ? info : "");
-		SetStatus(S_WIFI_TITLE, body);
+		snprintf(body, sizeof(body), S_WIFI_CONNECTING, info ? info : "");
+		if (!UserApp_SetOverlay(S_WIFI_TITLE, body)) {
+			ESP_LOGE(TAG, "could not queue Wi-Fi connecting overlay");
+		}
 		break;
 	case PROV_EVENT_STA_CONNECTED:
-		snprintf(body, sizeof(body), "Connected\n%s", info ? info : "");
-		SetStatus(S_WIFI_TITLE, body);
+		snprintf(body, sizeof(body), S_WIFI_CONNECTED, info ? info : "");
+		if (!UserApp_SetOverlay(S_WIFI_TITLE, body)) {
+			ESP_LOGE(TAG, "could not queue Wi-Fi connected overlay");
+		}
 		break;
 	case PROV_EVENT_PORTAL_STARTED:
-		snprintf(body, sizeof(body),
-		         "1. Join Wi-Fi:\n%s\n\n2. Stay connected,\nthen open the page it offers",
-		         info ? info : "");
-		SetStatus(S_WIFI_TITLE, body);
+		snprintf(body, sizeof(body), S_WIFI_PORTAL, info ? info : "");
+		if (!UserApp_SetOverlay(S_WIFI_TITLE, body)) {
+			ESP_LOGE(TAG, "could not queue Wi-Fi portal overlay");
+		}
 		break;
 	case PROV_EVENT_CONFIG_SAVED:
-		snprintf(body, sizeof(body), "Saved \"%s\"\n%s", info ? info : "", S_RESTARTING);
-		SetStatus(S_WIFI_TITLE, body);
+		snprintf(body, sizeof(body), S_WIFI_SAVED, info ? info : "", S_RESTARTING);
+		if (!UserApp_SetOverlay(S_WIFI_TITLE, body)) {
+			ESP_LOGE(TAG, "could not queue Wi-Fi saved overlay");
+		}
 		break;
 	}
 }
@@ -124,27 +121,48 @@ extern "C" void app_main(void)
 	provisioning_default_options(&opts);   // AP prefix, 15s timeout
 	opts.event_cb = OnProvisioningEvent;
 
-	prov_config_t cfg;
-	bool connected = provisioning_run(&opts, &cfg);  // blocks (and reboots) until configured
+	// Start the responsive catalog UI before even looking for saved Wi-Fi. A
+	// station attempt may take the full timeout; studying does not wait for it.
+	const int btn_gpios[] = {
+		BTN_KEY0_PIN, BTN_KEY1_PIN, BTN_KEY2_PIN, BTN_BOOT_PIN,
+	};
+	prov_config_t cfg = {};
+	const user_app_init_result_t app_init =
+		UserApp_TaskInit(&cfg, btn_gpios,
+		                 (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
+	if (app_init != USER_APP_INIT_OK) {
+		ESP_LOGE(TAG, "study runtime unavailable (init stage %d); "
+		              "network provisioning and device API disabled",
+		         (int)app_init);
+		return;
+	}
+
+	bool connected = provisioning_run(&opts, &cfg);
 
 	if (connected) {
+		startup_delivery_t startup_delivery = {};
 		ESP_LOGI(TAG, "online — study URL '%s'",
-		         cfg.study_url[0] ? cfg.study_url : "(none: demo card)");
+		         cfg.study_url[0] ? cfg.study_url : "(none: offline catalog)");
+		startup_delivery_record_network(
+			&startup_delivery, UserApp_SetNetworkConfig(&cfg));
 		net_time_sync(10000);
-		if (Lvgl_lock(-1)) {
-			ui_kanji_set_overlay(NULL, NULL);   // dismiss the setup overlay
-			Lvgl_unlock();
-		}
-		// The pinout lives here and nowhere else; user_app takes the buttons
-		// as data for the same reason epd_init takes the panel's pins.
-		const int btn_gpios[] = {
-			BTN_KEY0_PIN, BTN_KEY1_PIN, BTN_KEY2_PIN, BTN_BOOT_PIN,
-		};
-		UserApp_TaskInit(&cfg, btn_gpios, (int)(sizeof(btn_gpios) / sizeof(btn_gpios[0])));
+		startup_delivery_record_overlay_dismiss(
+			&startup_delivery, UserApp_SetOverlay(NULL, NULL));
 
 		// Companion-app control server on the home LAN (HTTP + mDNS
 		// "obsidianboard.local"), reading and driving the app through the
 		// user_app_api bridge.
-		device_api_start();
+		if (startup_delivery_api_eligible(&startup_delivery)) {
+			device_api_start();
+		} else {
+			ESP_LOGE(TAG, "startup commands were not accepted; device API disabled");
+		}
+	} else {
+		// A failed saved join emitted a connecting overlay. Returning offline
+		// must reveal the catalog again; no-config boots never showed one.
+		if (!UserApp_SetOverlay(NULL, NULL)) {
+			ESP_LOGE(TAG, "could not queue offline overlay dismissal");
+		}
+		ESP_LOGI(TAG, "offline — local catalog study remains active");
 	}
 }

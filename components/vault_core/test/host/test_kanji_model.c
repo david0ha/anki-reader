@@ -52,6 +52,57 @@ static void test_copy_is_defensive_about_its_arguments(void)
     CHECK_INT(kanji_str_copy(dst, 0, "x"), 0);
 }
 
+/* Display prose is a single visual paragraph even when the catalog formatted
+ * it across lines. This catches a normalizer that leaves leading/trailing
+ * space, splits words with tabs/newlines, or cuts a CJK glyph in half. */
+static void test_display_prose_collapses_ascii_whitespace(void)
+{
+    char out[64];
+    CHECK_INT(kanji_text_collapse_whitespace(
+                  out, sizeof out, "  글자 \n\t 유래\r\n 입니다  "),
+              strlen("글자 유래 입니다"));
+    CHECK_STR(out, "글자 유래 입니다");
+    CHECK(kanji_text_has_content(out));
+    CHECK(!kanji_text_has_content(" \t\r\n\f\v "));
+    CHECK(!kanji_text_has_content(NULL));
+    CHECK_INT(kanji_text_collapse_whitespace(out, sizeof out, NULL), 0);
+    CHECK_STR(out, "");
+    CHECK_INT(kanji_text_collapse_whitespace(NULL, sizeof out, "text"), 0);
+    CHECK_INT(kanji_text_collapse_whitespace(out, 0, "text"), 0);
+
+    char exact[sizeof "会 う"];
+    CHECK_INT(kanji_text_collapse_whitespace(exact, sizeof exact, "会 \tう"), 7);
+    CHECK_STR(exact, "会 う");
+
+    char short_dst[6] = { 'x', 'x', 'x', 'x', 'x', 'x' };
+    CHECK_INT(kanji_text_collapse_whitespace(short_dst, sizeof short_dst, "会 う"), 3);
+    CHECK_STR(short_dst, "会");
+    CHECK_INT((unsigned char)short_dst[3], '\0');
+
+    char inplace[32] = "  日本語\t한국어  ";
+    CHECK_INT(kanji_text_collapse_whitespace(inplace, sizeof inplace, inplace),
+              strlen("日本語 한국어"));
+    CHECK_STR(inplace, "日本語 한국어");
+
+    /* Leading whitespace shifts a multibyte source glyph left over its own
+     * bytes. These one- and two-byte displacements must be overlap-safe. */
+    char shifted_one[] = "\t会う";
+    CHECK_INT(kanji_text_collapse_whitespace(shifted_one, sizeof shifted_one,
+                                              shifted_one), strlen("会う"));
+    CHECK_STR(shifted_one, "会う");
+
+    char shifted_two[] = " \t한국";
+    CHECK_INT(kanji_text_collapse_whitespace(shifted_two, sizeof shifted_two,
+                                              shifted_two), strlen("한국"));
+    CHECK_STR(shifted_two, "한국");
+
+    char too_small[7] = { 'x', 'x', 'x', 'x', 'x', 'x', 'x' };
+    CHECK_INT(kanji_text_collapse_whitespace(too_small, sizeof too_small,
+                                              "日本語 한국어"), 6);
+    CHECK_STR(too_small, "日本");
+    CHECK_INT((unsigned char)too_small[6], '\0');
+}
+
 /* --- character counting --------------------------------------------------- */
 
 static void test_utf8_len_counts_characters_not_bytes(void)
@@ -154,6 +205,7 @@ static kanji_t sample(void)
 {
     kanji_t k = {0};
     k.valid = true;
+    k.source = KANJI_SOURCE_REMOTE;
     kanji_str_copy(k.session.deck, KANJI_DECK_MAX, "JLPT N5 Vocabulary");
     k.session.streak = 12;
     k.session.track = 35;
@@ -163,12 +215,26 @@ static kanji_t sample(void)
     kanji_str_copy(k.card.id, KANJI_ID_MAX, "f00c539e");
     kanji_str_copy(k.card.front, KANJI_FRONT_MAX, "会う");
     kanji_str_copy(k.card.reading, KANJI_READING_MAX, "あう");
+    kanji_str_copy(k.card.gloss, KANJI_SENSE_MAX, "만날 회");
+    kanji_str_copy(k.card.on_reading, KANJI_READING_MAX, "カイ");
+    kanji_str_copy(k.card.kun_reading, KANJI_READING_MAX, "あう");
+    kanji_str_copy(k.card.composition, KANJI_FORMULA_MAX, "人 + 云 = 会");
     kanji_str_copy(k.card.senses[0], KANJI_SENSE_MAX, "만나다");
     k.card.sense_count = 1;
     kanji_str_copy(k.card.fsrs.state_label, KANJI_LABEL_MAX, "복습");
     k.card.fsrs.reps = 5;
     kanji_str_copy(k.card.preview.span[2], KANJI_LABEL_MAX, "9일 뒤");
     return k;
+}
+
+static void test_full_fidelity_model_limits_are_public(void)
+{
+    CHECK_INT(KANJI_READING_MAX, 144);
+    CHECK_INT(KANJI_SENSE_MAX, 144);
+    CHECK_INT(KANJI_BODY_MAX, 832);
+    CHECK_INT(KANJI_FORMULA_MAX, 96);
+    CHECK_INT(KANJI_SENSES_MAX, 5);
+    CHECK_INT(KANJI_PARTS_MAX, 6);
 }
 
 static void test_hash_is_stable_and_order_independent_of_the_call(void)
@@ -184,7 +250,7 @@ static void test_hash_changes_for_everything_that_reaches_the_glass(void)
     const uint32_t base = kanji_hash(&(kanji_t){0}) + 0; /* silence unused */
     (void)base;
 
-    struct { const char *what; kanji_t k; } cases[8];
+    struct { const char *what; kanji_t k; } cases[13];
     int n = 0;
 
     cases[n].what = "the headword";
@@ -227,6 +293,31 @@ static void test_hash_changes_for_everything_that_reaches_the_glass(void)
     cases[n].k.card.fsrs.reps = 6;
     n++;
 
+    cases[n].what = "the short gloss";
+    cases[n].k = sample();
+    kanji_str_copy(cases[n].k.card.gloss, KANJI_SENSE_MAX, "합할 회");
+    n++;
+
+    cases[n].what = "the on reading";
+    cases[n].k = sample();
+    kanji_str_copy(cases[n].k.card.on_reading, KANJI_READING_MAX, "エ");
+    n++;
+
+    cases[n].what = "the kun reading";
+    cases[n].k = sample();
+    kanji_str_copy(cases[n].k.card.kun_reading, KANJI_READING_MAX, "あえる");
+    n++;
+
+    cases[n].what = "the composition equation";
+    cases[n].k = sample();
+    kanji_str_copy(cases[n].k.card.composition, KANJI_FORMULA_MAX, "人 + 口 = 会");
+    n++;
+
+    cases[n].what = "the card source";
+    cases[n].k = sample();
+    cases[n].k.source = KANJI_SOURCE_CATALOG;
+    n++;
+
     kanji_t base_k = sample();
     const uint32_t h0 = kanji_hash(&base_k);
     for (int i = 0; i < n; i++) {
@@ -251,8 +342,10 @@ static void test_hash_ignores_what_never_reaches_the_glass(void)
 
 int main(void)
 {
+    test_full_fidelity_model_limits_are_public();
     test_copy_truncates_on_a_character_boundary();
     test_copy_is_defensive_about_its_arguments();
+    test_display_prose_collapses_ascii_whitespace();
     test_utf8_len_counts_characters_not_bytes();
     test_one_decoder_decides_where_a_character_starts();
     test_grade_words_match_the_backend_and_the_dock();

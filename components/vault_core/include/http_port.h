@@ -14,16 +14,19 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Call once before any http_get(), from a single thread, before the fetch tasks
- * start. Creates the global TLS-connect gate (device port) so concurrent first
- * handshakes serialize; a no-op where the port needs no gate (simulator). */
-void http_port_init(void);
+/* Call before any http_get(), from a single thread, before the fetch tasks
+ * start. Returns false when the device TLS-connect gate cannot be allocated.
+ * Deinit is only safe after every fetch task has stopped. Both are no-ops for
+ * a port that needs no gate (the simulator). */
+bool http_port_init(void);
+void http_port_deinit(void);
 
 char *http_get(const char *url, int *out_status);
 

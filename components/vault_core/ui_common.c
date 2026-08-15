@@ -38,6 +38,12 @@ lv_obj_t *ui_fill(lv_obj_t *par, int x, int y, int w, int h)
     return o;
 }
 
+lv_obj_t *ui_rule(lv_obj_t *par, int x, int y, int w, int h)
+{
+    if (w != 1 && h != 1) return NULL;
+    return ui_fill(par, x, y, w, h);
+}
+
 lv_obj_t *ui_fill_white(lv_obj_t *par, int x, int y, int w, int h)
 {
     lv_obj_t *o = ui_pane(par, x, y, w, h);
@@ -93,6 +99,83 @@ lv_obj_t *ui_lab_w(lv_obj_t *par, int x, int y, int w,
     lv_obj_set_style_text_align(l, align, 0);
     lv_label_set_text(l, txt ? txt : "");
     return l;
+}
+
+lv_obj_t *ui_lab_r(lv_obj_t *par, kanji_rect_t r,
+                   const lv_font_t *f, lv_text_align_t align, const char *txt)
+{
+    /* r.h is the slot the layout reserves for this row, not the label's box.
+     * Handing it to the label instead of the face's line height is the same
+     * mistake ui_lab_w guards against from the other direction: a box two lines
+     * tall wraps rather than ellipsizing, and the row that was measured to fit
+     * one line quietly becomes two. Every caller that genuinely wants the rect's
+     * height wants wrapping as well, and that call is ui_lab_wrap_r. */
+    return ui_lab_w(par, r.x, r.y, r.w, f, align, txt);
+}
+
+lv_obj_t *ui_lab_wrap_r(lv_obj_t *par, kanji_rect_t r,
+                        const lv_font_t *f, lv_text_align_t align, const char *txt)
+{
+    lv_obj_t *l = label_base(par, r.x, r.y, f);
+    /* Both dimensions come from the layout, so the block cannot grow past the
+     * rectangle the host test measured the page against. Overrun never pushes
+     * the next block down — on a page with no scroll and no reflow, a block
+     * that shoves its neighbour off the glass is a worse failure than a
+     * sentence that stops early.
+     *
+     * DOTS rather than WRAP, and the difference is not cosmetic. Both stop at
+     * r.h; WRAP stops by CLIPPING, which cuts the last line through the middle
+     * of its glyphs and leaves a row of half-height Hangul along the bottom
+     * edge of the block. That does not read as "there is more to this
+     * sentence", it reads as a rendering fault — and the catalog guarantees it
+     * happens, because a 819-byte description and five 143-byte senses both
+     * exceed every prose slot on this panel by design. An ellipsis is the
+     * board admitting it truncated; a clipped line is the board looking
+     * broken. */
+    lv_obj_set_size(l, r.w, r.h);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_set_style_text_align(l, align, 0);
+    lv_label_set_text(l, txt ? txt : "");
+    return l;
+}
+
+void ui_track(lv_obj_t *label, int px)
+{
+    if (!label) return;
+    lv_obj_set_style_text_letter_space(label, px, 0);
+}
+
+lv_obj_t *ui_eyebrow(lv_obj_t *par, kanji_rect_t r, const char *txt)
+{
+    lv_obj_t *l = ui_lab_r(par, r, UI_F_BODY, LV_TEXT_ALIGN_LEFT, txt);
+    /* 2 px, and only here. An eyebrow is two or three cut words with a middot
+     * between them; spaced, they read as a heading rather than as the first
+     * line of the paragraph under them. The same 2 px on the 성립 prose below
+     * would take a Korean sentence apart into loose characters, which is why
+     * ui_track() is not called anywhere else on either face. */
+    ui_track(l, 2);
+    return l;
+}
+
+lv_obj_t *ui_lab_headword(lv_obj_t *par, int x, int y, int w, int h,
+                          const lv_font_t *f, const char *txt)
+{
+    lv_obj_t *l = label_base(par, x, y, f);
+    lv_obj_set_size(l, w, h);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, 0);
+    lv_label_set_text(l, txt ? txt : "");
+    return l;
+}
+
+void ui_apply_headword(lv_obj_t *label, const char *front)
+{
+    if (!label) return;
+    char display[KANJI_FRONT_MAX];
+    kanji_headword_display_text(display, front);
+    lv_obj_set_style_text_font(label, ui_hero_face(display), 0);
+    /* lv_label_set_text() copies `display` before this stack frame returns. */
+    ui_set(label, display);
 }
 
 void ui_lab_wrap(lv_obj_t *label, int height)

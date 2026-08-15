@@ -14,9 +14,18 @@ all three cases. The log is the only place they are distinguishable.
 
 ```bash
 . ~/esp/v5.4.3/esp-idf/export.sh    # once per shell
+idf.py -DKANJI_CATALOG_DB=/absolute/path/to/kanjis-backend.sqlite3 catalog_image
 idf.py build
-./tools/flash.sh                    # finds the port, flashes, opens the monitor
+./tools/flash.sh                    # normal flash writes application + catalog
 ```
+
+The database path is cached as `KANJI_CATALOG_DB`. `KANJI_CATALOG_USER_ID` optionally chooses a
+source user; otherwise coverage chooses one deterministically, and `KANJI_CATALOG_SEED` (default
+`0`) fixes the repeatable card order. `idf.py app-flash` is the firmware-only recovery path: it
+preserves the existing catalog and its usable local progress. A normal `idf.py flash` refreshes the
+catalog while physically leaving `study_state` untouched. That state replays only when its catalog
+ID matches the newly flashed catalog; a changed database, source user, seed, or card content can
+change the ID and deliberately starts fresh progress without erasing the old state bytes.
 
 If `flash.sh` says no port appeared, find out **which** of the two failures it is before touching
 anything, because they have nothing in common:
@@ -98,19 +107,23 @@ without PSRAM. There is no configuration that makes this firmware fit; it needs 
 
 ### `provisioning` — Wi-Fi
 
-First boot has nothing stored:
+First boot has no saved network but the catalog UI is already running:
 
 ```
-I provisioning: no stored network — starting setup portal
-I provisioning: setup portal ready — join Wi-Fi 'Kanjis Board-XXXX' and open http://192.168.4.1
+I user_app: offline catalog ready at ordinal 0
+I provisioning: no stored network — continuing offline
+I app: offline — local catalog study remains active
 ```
 
-The panel should now show the setup overlay with that same SSID on it. **That is the first
-end-to-end confirmation that the display works** — text you chose, rendered by LVGL, binarized, and
-pushed through a full refresh. If the log says the portal is ready and the glass is still blank, the
-fault is in the panel path, not in Wi-Fi.
+The panel should show a real catalog card immediately. If catalog validation fails, the log instead
+says `offline catalog unavailable; using demo fallback`, and the labeled built-in card keeps the
+device operable. Either is an end-to-end display confirmation; the fallback means the catalog image
+or partition needs investigation.
 
-Join that network from a phone or laptop, fill in the form, and expect:
+To configure Wi-Fi, hold KEY2 for five seconds. After the reboot expect
+`user forced setup mode (KEY2 long-press) — starting portal` and
+`setup portal ready — join Wi-Fi 'Kanjis Board-XXXX' and open http://192.168.4.1`. Join that network
+from a phone or laptop, fill in the form, and expect:
 
 ```
 I prov_wifi: got IP 192.168.x.x
@@ -175,34 +188,38 @@ it has been checked, and the question is closed.
 
 This is the acceptance test the simulator cannot run, because it is about time rather than pixels.
 
-1. **The demo card.** With no study URL the board shows 会う badged `DEMO` within a second of boot.
+1. **The offline card.** With no study URL the board restores a catalog card within a second of boot.
    Press KEY0: it reveals. Press KEY0 again three times and watch the grade cursor walk
    보통 → 쉬움 → 다시 → 어려움. **Only the dock strip should flash** — if the whole panel refreshes,
    the dock rectangle and the drawn dock have drifted apart; `test_kanji_layout.c` covers the
    geometry, so look at what `present_dock()` was handed.
 2. **Ghosting.** Keep pressing KEY0. The driver promotes the sixth partial in a row to a full
    refresh (`EPD_PARTIAL_CHAIN_MAX`). If residue is visible before that, lower it.
-3. **A real session.** Start `tools/kanji_server.py` on your machine and give the board its URL —
-   from the portal, or over the network per [app-control.md](app-control.md). The `DEMO` badge goes;
+3. **A remote session.** Start `tools/kanji_server.py` on your machine and give the board its URL —
+   from the portal, or over the network per [app-control.md](app-control.md). The source becomes remote;
    `source.lastResult` in `GET /api/state` becomes `ok`.
 4. **An unchanged poll.** Leave it five minutes. The panel must not move — the log says
    `study: unchanged, panel untouched` at debug level. This is the single most common outcome in the
    device's life and the one that must not cost a refresh.
-5. **A grade.** Press KEY1 on the answer side. The panel stays on the answer you just rated until
-   the next card actually arrives; that is deliberate, not a hang. The next card comes back as the
-   *response* to the grade, so anything drawn sooner would be a guess.
+5. **An offline grade.** Clear the study URL, reveal, and press KEY1. The verified rating record is
+   appended locally before the already-decoded next catalog card is published. Reboot and confirm
+   the position survives. These local outcomes do not upload or compute trusted FSRS due dates;
+   there is no battery-backed wall clock.
 6. **A dead proxy.** Stop `kanji_server.py` and press KEY2. The card stays; the header badge becomes
    오프라인. Nothing blanks. The three failure codes each send you somewhere different —
    [kanji-contract.md](kanji-contract.md#how-it-fails) has them.
 
 ## Buttons
 
-| | 문제 | 정답 | inside a sheet |
-|---|---|---|---|
-| KEY0 | reveal the answer | walk the grade cursor | next page |
-| KEY1 | open 설명 | commit the rating | close the sheet |
-| KEY2 | refresh, from anywhere · **hold 5 s → reboot into Wi-Fi setup** | | |
-| BOOT | open FSRS | open 설명 | next sheet |
+| Button | 문제 | 정답 |
+|---|---|---|
+| KEY0 | reveal the answer | **다시** (again) |
+| KEY1 | reveal the answer | **어려움** (hard) |
+| KEY2 | refresh · **hold 5 s → reboot into Wi-Fi setup** | **보통** (good) · same hold |
+| BOOT | reveal the answer | **쉬움** (easy) |
+
+On the answer face each button commits a rating directly, so a grade is one press and one panel
+event. There is no cursor to walk and no sheet to page.
 
 The KEY2 hold is the escape hatch for a board stuck on a network that no longer exists. It keeps the
 saved config so the portal pre-fills, and only the Wi-Fi needs re-entering. It is caught before the

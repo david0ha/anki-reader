@@ -8,10 +8,11 @@
  * three-byte kanji. None of that may take the board down, and none of it may
  * leave a half-written card on the glass.
  *
- * So: parse into a local, validate and clamp every field, and only copy into
- * the caller's struct on success. A rejected payload leaves the previous card
- * exactly as it was, which is why the header can honestly badge it 오래됨
- * rather than going blank.
+ * So: parse into an explicit workspace, validate and clamp every field, and
+ * only copy into the caller's struct on success. A rejected payload leaves the
+ * previous card exactly as it was, which is why the header can honestly badge
+ * it 오래됨 rather than going blank. Firmware runtimes persist that workspace
+ * in PSRAM; the compatibility entry point allocates one through cJSON's hooks.
  *
  * Portable: cJSON only. test_kanji_parse.c builds this file directly.
  */
@@ -336,11 +337,15 @@ static void parse_card(const cJSON *root, kanji_t *k)
     kanji_str_copy(card->id, sizeof card->id, jstr(c, "id"));
     kanji_str_copy(card->front, sizeof card->front, front);
     kanji_str_copy(card->reading, sizeof card->reading, jstr(c, "reading"));
+    kanji_str_copy(card->gloss, sizeof card->gloss, jstr(c, "gloss"));
+    kanji_str_copy(card->on_reading, sizeof card->on_reading, jstr(c, "on_reading"));
+    kanji_str_copy(card->kun_reading, sizeof card->kun_reading, jstr(c, "kun_reading"));
     kanji_str_copy(card->level, sizeof card->level, jstr(c, "level"));
     kanji_str_copy(card->description, sizeof card->description,
                    jstr(c, "description"));
     kanji_str_copy(card->hook_title, sizeof card->hook_title, jstr(c, "hook_title"));
     kanji_str_copy(card->hook_body, sizeof card->hook_body, jstr(c, "hook_body"));
+    kanji_str_copy(card->composition, sizeof card->composition, jstr(c, "composition"));
 
     parse_senses(c, card);
     parse_examples(c, card);
@@ -354,9 +359,12 @@ static void parse_card(const cJSON *root, kanji_t *k)
 
 /* --- public --------------------------------------------------------------- */
 
-bool kanji_parse(const char *json, size_t len, kanji_t *out)
+bool kanji_parse_with_workspace(const char *json, size_t len, kanji_t *out,
+                                kanji_t *workspace)
 {
-    if (!json || !out || len == 0) return false;
+    if (!json || !out || !workspace || workspace == out || len == 0) {
+        return false;
+    }
     if (!valid_json_utf8(json, len)) return false;
 
     const char *parse_end = NULL;
@@ -372,22 +380,32 @@ bool kanji_parse(const char *json, size_t len, kanji_t *out)
         return false;
     }
 
-    kanji_t k;
-    memset(&k, 0, sizeof k);
+    memset(workspace, 0, sizeof *workspace);
 
     const bool has_session = jobj(root, "session") != NULL;
-    parse_session(root, &k);
-    parse_card(root, &k);
+    parse_session(root, workspace);
+    parse_card(root, workspace);
 
     cJSON_Delete(root);
 
     /* An object carrying neither a session nor a card is an error envelope or
      * a captive-portal login page, not a payload. Refusing it here is what
      * keeps the last good card on the glass. */
-    if (!has_session && !k.card.valid) return false;
+    if (!has_session && !workspace->card.valid) return false;
 
-    k.valid = true;
-    k.demo  = false;
-    *out = k;
+    workspace->valid = true;
+    workspace->demo  = false;
+    workspace->source = KANJI_SOURCE_REMOTE;
+    *out = *workspace;
     return true;
+}
+
+bool kanji_parse(const char *json, size_t len, kanji_t *out)
+{
+    if (!json || !out || len == 0) return false;
+    kanji_t *workspace = cJSON_malloc(sizeof *workspace);
+    if (workspace == NULL) return false;
+    const bool ok = kanji_parse_with_workspace(json, len, out, workspace);
+    cJSON_free(workspace);
+    return ok;
 }

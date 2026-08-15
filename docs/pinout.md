@@ -44,12 +44,12 @@ Three traps, all fatal to the display if ignored:
 
 | Button | GPIO | `user_config.h` | Action |
 |---|---|---|---|
-| KEY0 | 2 | `BTN_KEY0_PIN` | reveal the answer · walk the grade cursor · page a sheet |
-| KEY1 | 3 | `BTN_KEY1_PIN` | open 설명 · commit the rating · close a sheet |
-| KEY2 | 5 | `BTN_KEY2_PIN` | refresh; **held 5 s → reboot into Wi-Fi setup** |
-| BOOT | 0 | `BTN_BOOT_PIN` | open FSRS · open 설명 · next sheet |
+| KEY0 | 2 | `BTN_KEY0_PIN` | 문제: reveal · 정답: **다시** (again) |
+| KEY1 | 3 | `BTN_KEY1_PIN` | 문제: reveal · 정답: **어려움** (hard) |
+| KEY2 | 5 | `BTN_KEY2_PIN` | 문제: refresh · 정답: **보통** (good); **held 5 s → reboot into Wi-Fi setup** |
+| BOOT | 0 | `BTN_BOOT_PIN` | 문제: reveal · 정답: **쉬움** (easy) |
 
-Three of the four do different things on different screens. That mapping is not here and not in the
+All four do different things on the two faces: on 정답 each one IS a rating, which is why a grade costs one press. That mapping is not here and not in the
 button driver — it is a pure state machine in `components/vault_core/kanji_nav.c`, host-tested from
 every button in every reachable state. The driver's whole job is to turn an edge into a
 `button_event_t`; what the press *means* is decided somewhere a laptop can check it.

@@ -1,0 +1,83 @@
+{
+  "v": 1,
+  "session": {
+    "deck": "JLPT N5 Kanji",
+    "level": "N5",
+    "streak": 23,
+    "reviewed_today": 41,
+    "left_new": 5,
+    "left_review": 22,
+    "retry": 1,
+    "track": 42,
+    "track_total": 68,
+    "complete": false
+  },
+  "card": {
+    "id": "sim-kanji-go",
+    "front": "語",
+    "reading": "ゴ",
+    "on_reading": "ゴ",
+    "kun_reading": "かたる · かたらう",
+    "level": "N5",
+    "gloss": "말씀 어 語",
+    "senses": [
+      "단어",
+      "언어"
+    ],
+    "examples": [
+      {
+        "text": "言語",
+        "reading": "ご",
+        "gloss": "언어"
+      },
+      {
+        "text": "日本語",
+        "reading": "にほんご",
+        "gloss": "일본어"
+      },
+      {
+        "text": "外国語",
+        "reading": "がいこくご",
+        "gloss": "외국어"
+      }
+    ],
+    "description": "語 = 言 + 五 + 口。 (의미부) 「言」 는 \"말하다\"라는 뜻입니다. (의미부) 「口」 는 \"입\"을 뜻합니다. (소리부) 「五」 (ゴ)는 여기서는 소리부의 역할만 하고 있습니다. 語는 \"입(口)으로 말하다(言)\" -> \"단어, 언어\"라는 뜻의 글자입니다(五는 소리부).",
+    "hook_title": "형성",
+    "hook_body": "「言」(말)과 「口」(입)가 함께 '입으로 말하다'라는 뜻을 이루고, 「五」는 여기서 소리부(ゴ)로 발음을 제공해 語(단어·언어)의 음과 뜻을 결합한다.",
+    "composition": "言 + 口 + 五 = 語",
+    "parts": [
+      {
+        "glyph": "言",
+        "meaning": "말",
+        "reading": "ゲン / ゴ (on)"
+      },
+      {
+        "glyph": "口",
+        "meaning": "입",
+        "reading": "こう (on)"
+      },
+      {
+        "glyph": "五",
+        "meaning": "다섯",
+        "reading": "ゴ (on)"
+      }
+    ],
+    "comments": [],
+    "comment_total": 0,
+    "fsrs": {
+      "state": "review",
+      "state_label": "복습",
+      "due": "12일 뒤",
+      "reps": 7,
+      "lapses": 2,
+      "stability_days": 12,
+      "difficulty_pct": 38
+    },
+    "preview": {
+      "again": "10분 뒤",
+      "hard": "5일 뒤",
+      "good": "12일 뒤",
+      "easy": "28일 뒤"
+    }
+  }
+}

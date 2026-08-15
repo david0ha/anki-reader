@@ -17,7 +17,8 @@
 
 /* No TLS-connect gate on the host: libcurl opens a fresh easy handle per call and
  * the desktop isn't crypto-starved. Defined so both ports satisfy the seam. */
-void http_port_init(void) { }
+bool http_port_init(void) { return true; }
+void http_port_deinit(void) { }
 
 typedef struct { char *buf; size_t len; } membuf_t;
 

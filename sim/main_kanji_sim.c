@@ -28,6 +28,7 @@
 #include "ui_kanji_layout.h"
 #include "ui_strings.h"
 
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,9 +39,13 @@
 
 static uint8_t  fb[HOR * VER * 2];
 static uint16_t capture[HOR * VER];
+static uint8_t  grade_frame[HOR * VER];
 static uint32_t tick_now;
 static int      failures;
 static char     shot_dir[512] = "shots";
+static lv_obj_t *style_root;
+
+static lv_obj_t *find_visible_label_text(lv_obj_t *obj, const char *text);
 
 #define FAILV(fmt, ...) do { failures++; printf("  FAIL " fmt "\n", __VA_ARGS__); } while (0)
 #define FAIL(msg)       do { failures++; printf("  FAIL %s\n", (msg)); } while (0)
@@ -129,15 +134,6 @@ static void want_paper(const char *name, kanji_rect_t r, int minimum)
     }
 }
 
-static void want_filled(const char *name, kanji_rect_t r, int pct)
-{
-    int found = ink_rect(r);
-    if (found * 100 < r.w * r.h * pct) {
-        FAILV("%s: %d%% filled, wanted at least %d%%",
-              name, found * 100 / (r.w * r.h), pct);
-    }
-}
-
 static void want_mostly_paper(const char *name, kanji_rect_t r, int max_pct)
 {
     int found = ink_rect(r);
@@ -145,6 +141,248 @@ static void want_mostly_paper(const char *name, kanji_rect_t r, int max_pct)
         FAILV("%s: %d%% inked, wanted at most %d%%",
               name, found * 100 / (r.w * r.h), max_pct);
     }
+}
+
+static void want_no_ink(const char *name, kanji_rect_t r)
+{
+    const int found = ink_rect(r);
+    if (found != 0) FAILV("%s: found %d black pixels, wanted none", name, found);
+}
+
+static void report_ink_ceiling(const char *name, kanji_rect_t r, int max_pct)
+{
+    const int ink = ink_rect(r);
+    const int area = r.w * r.h;
+    printf("  ink %-31s %d/%d (%.2f%%, limit %d%%)\n",
+           name, ink, area, area ? 100.0 * ink / area : 0.0, max_pct);
+    want_mostly_paper(name, r, max_pct);
+}
+
+/* RGB565 is deliberately inspected before write_bmp() thresholds it. Generated
+ * 1 bpp faces contribute only the endpoints; LVGL's built-in Montserrat may
+ * contribute neutral edge coverage. Neither is permission for chroma. */
+static void check_raw_neutral_ramp(const char *shot_name)
+{
+    bool seen[32][64] = {{ false }};
+    int levels = 0;
+    int chromatic = 0;
+    int first_x = -1, first_y = -1;
+    uint16_t first_pixel = 0;
+
+    for (int y = 0; y < VER; y++) {
+        for (int x = 0; x < HOR; x++) {
+            const uint16_t p = capture[y * HOR + x];
+            const int r5 = (p >> 11) & 0x1f;
+            const int g6 = (p >> 5) & 0x3f;
+            const int b5 = p & 0x1f;
+            const int neutral_g6 = (r5 * 63 + 15) / 31;
+            if (r5 != b5 || abs(g6 - neutral_g6) > 1) {
+                if (chromatic == 0) {
+                    first_x = x;
+                    first_y = y;
+                    first_pixel = p;
+                }
+                chromatic++;
+            }
+            if (!seen[r5][g6]) {
+                seen[r5][g6] = true;
+                levels++;
+            }
+        }
+    }
+
+    if (chromatic != 0) {
+        FAILV("%s: %d chromatic raw RGB565 pixels; first 0x%04x at (%d,%d)",
+              shot_name, chromatic, first_pixel, first_x, first_y);
+    } else {
+        printf("  palette %-27s %d neutral RGB565 pixels, %d level(s)\n",
+               shot_name, HOR * VER, levels);
+    }
+}
+
+typedef struct {
+    int visible_objects;
+    int violations;
+    const char *first_property;
+    uint32_t first_value;
+    lv_area_t first_area;
+} style_check_t;
+
+static bool token_color(lv_color_t color)
+{
+    return lv_color_eq(color, lv_color_black()) ||
+           lv_color_eq(color, lv_color_white());
+}
+
+static bool binary_opa(lv_opa_t opa)
+{
+    return opa == LV_OPA_TRANSP || opa == LV_OPA_COVER;
+}
+
+static void style_violation(style_check_t *check, lv_obj_t *obj,
+                            const char *property, uint32_t value)
+{
+    if (check->violations == 0) {
+        check->first_property = property;
+        check->first_value = value;
+        lv_obj_get_coords(obj, &check->first_area);
+    }
+    check->violations++;
+}
+
+static void check_authored_color(style_check_t *check, lv_obj_t *obj,
+                                 lv_style_prop_t property,
+                                 const char *property_name)
+{
+    lv_style_value_t value;
+    if (lv_obj_get_local_style_prop(obj, property, &value, LV_PART_MAIN) ==
+            LV_STYLE_RES_FOUND &&
+        !token_color(value.color)) {
+        style_violation(check, obj, property_name, lv_color_to_u32(value.color));
+    }
+}
+
+static void check_authored_opa(style_check_t *check, lv_obj_t *obj,
+                               lv_style_prop_t property,
+                               const char *property_name)
+{
+    lv_style_value_t value;
+    if (lv_obj_get_local_style_prop(obj, property, &value, LV_PART_MAIN) ==
+            LV_STYLE_RES_FOUND &&
+        !binary_opa((lv_opa_t)value.num)) {
+        style_violation(check, obj, property_name, (uint32_t)value.num);
+    }
+}
+
+static void check_visible_style_node(lv_obj_t *obj, style_check_t *check)
+{
+    if (!lv_obj_is_visible(obj)) return;
+    check->visible_objects++;
+
+    const lv_color_t text = lv_obj_get_style_text_color(obj, LV_PART_MAIN);
+    const lv_color_t bg = lv_obj_get_style_bg_color(obj, LV_PART_MAIN);
+    const lv_color_t border = lv_obj_get_style_border_color(obj, LV_PART_MAIN);
+    const lv_color_t line = lv_obj_get_style_line_color(obj, LV_PART_MAIN);
+    const lv_opa_t text_opa = lv_obj_get_style_text_opa(obj, LV_PART_MAIN);
+    const lv_opa_t bg_opa = lv_obj_get_style_bg_opa(obj, LV_PART_MAIN);
+    const lv_opa_t border_opa = lv_obj_get_style_border_opa(obj, LV_PART_MAIN);
+    const lv_opa_t line_opa = lv_obj_get_style_line_opa(obj, LV_PART_MAIN);
+    const lv_opa_t object_opa = lv_obj_get_style_opa(obj, LV_PART_MAIN);
+    const lv_opa_t recursive_opa = lv_obj_get_style_opa_recursive(obj, LV_PART_MAIN);
+    const lv_opa_t layered_opa = lv_obj_get_style_opa_layered(obj, LV_PART_MAIN);
+
+    const bool is_label = lv_obj_check_type(obj, &lv_label_class);
+    const bool has_bg = bg_opa != LV_OPA_TRANSP;
+    const bool has_border = lv_obj_get_style_border_width(obj, LV_PART_MAIN) > 0 &&
+                            border_opa != LV_OPA_TRANSP;
+    const bool has_line = lv_obj_get_style_line_width(obj, LV_PART_MAIN) > 0 &&
+                          line_opa != LV_OPA_TRANSP;
+
+    /* Local values are the authored token declarations. Check them even when
+     * their current opacity/width makes them non-drawing; then separately check
+     * every effective property that can contribute a visible pixel. */
+    check_authored_color(check, obj, LV_STYLE_TEXT_COLOR,
+                         "authored text color");
+    check_authored_color(check, obj, LV_STYLE_BG_COLOR,
+                         "authored background color");
+    check_authored_color(check, obj, LV_STYLE_BORDER_COLOR,
+                         "authored border color");
+    check_authored_color(check, obj, LV_STYLE_LINE_COLOR,
+                         "authored line color");
+    check_authored_opa(check, obj, LV_STYLE_TEXT_OPA,
+                       "authored text opacity");
+    check_authored_opa(check, obj, LV_STYLE_BG_OPA,
+                       "authored background opacity");
+    check_authored_opa(check, obj, LV_STYLE_BORDER_OPA,
+                       "authored border opacity");
+    check_authored_opa(check, obj, LV_STYLE_LINE_OPA,
+                       "authored line opacity");
+    check_authored_opa(check, obj, LV_STYLE_OPA,
+                       "authored object opacity");
+    check_authored_opa(check, obj, LV_STYLE_OPA_LAYERED,
+                       "authored layered opacity");
+
+    if (is_label && !token_color(text))
+        style_violation(check, obj, "text color", lv_color_to_u32(text));
+    if (has_bg && !token_color(bg))
+        style_violation(check, obj, "background color", lv_color_to_u32(bg));
+    if (has_border && !token_color(border))
+        style_violation(check, obj, "border color", lv_color_to_u32(border));
+    if (has_line && !token_color(line))
+        style_violation(check, obj, "line color", lv_color_to_u32(line));
+    if (!binary_opa(text_opa))
+        style_violation(check, obj, "text opacity", text_opa);
+    if (!binary_opa(bg_opa))
+        style_violation(check, obj, "background opacity", bg_opa);
+    if (!binary_opa(border_opa))
+        style_violation(check, obj, "border opacity", border_opa);
+    if (!binary_opa(line_opa))
+        style_violation(check, obj, "line opacity", line_opa);
+    if (!binary_opa(object_opa))
+        style_violation(check, obj, "object opacity", object_opa);
+    if (!binary_opa(recursive_opa))
+        style_violation(check, obj, "recursive object opacity", recursive_opa);
+    if (!binary_opa(layered_opa))
+        style_violation(check, obj, "layered opacity", layered_opa);
+    if (is_label && bg_opa != LV_OPA_TRANSP)
+        style_violation(check, obj, "label background opacity", bg_opa);
+
+    const uint32_t children = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < children; i++) {
+        check_visible_style_node(lv_obj_get_child(obj, (int32_t)i), check);
+    }
+}
+
+static void check_visible_styles(const char *shot_name)
+{
+    style_check_t check = {0};
+    check_visible_style_node(style_root, &check);
+    if (check.violations != 0) {
+        FAILV("%s: %d authored style violation(s); first %s=0x%x at "
+              "x[%d..%d] y[%d..%d]",
+              shot_name, check.violations, check.first_property,
+              (unsigned)check.first_value,
+              check.first_area.x1, check.first_area.x2,
+              check.first_area.y1, check.first_area.y2);
+    } else {
+        printf("  styles  %-27s %d visible objects, black/white + binary opacity\n",
+               shot_name, check.visible_objects);
+    }
+}
+
+static void snapshot_threshold(uint8_t dst[HOR * VER])
+{
+    for (int y = 0; y < VER; y++) {
+        for (int x = 0; x < HOR; x++) dst[y * HOR + x] = (uint8_t)is_black(x, y);
+    }
+}
+
+static void check_dock_diff(const char *transition,
+                            const uint8_t before[HOR * VER])
+{
+    int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
+    ui_kanji_dock_area(&x1, &y1, &x2, &y2);
+    int inside = 0, outside = 0;
+    int min_x = HOR, min_y = VER, max_x = -1, max_y = -1;
+
+    for (int y = 0; y < VER; y++) {
+        for (int x = 0; x < HOR; x++) {
+            if (before[y * HOR + x] == (uint8_t)is_black(x, y)) continue;
+            const bool in = x >= x1 && x < x2 && y >= y1 && y < y2;
+            if (in) inside++;
+            else outside++;
+            if (x < min_x) min_x = x;
+            if (x > max_x) max_x = x;
+            if (y < min_y) min_y = y;
+            if (y > max_y) max_y = y;
+        }
+    }
+
+    printf("  xor %-30s inside=%d outside=%d bounds=x[%d..%d) y[%d..%d)\n",
+           transition, inside, outside, min_x, max_x + 1, min_y, max_y + 1);
+    if (inside == 0) FAILV("%s: no thresholded pixels changed inside the dock", transition);
+    if (outside != 0) FAILV("%s: %d thresholded pixels changed outside the dock",
+                            transition, outside);
 }
 
 /* --- glyph coverage ------------------------------------------------------- */
@@ -173,9 +411,11 @@ static void cover(const lv_font_t *font, const char *field, const char *text)
     }
 }
 
-/* Everything in the snapshot is drawn from a body face, so every body face must
+/* --- font coverage ---------------------------------------------------------
+ * Everything in the snapshot is drawn from a body face, so every body face must
  * carry it. The hero face is checked separately and only against the headword,
  * because that is the only string that ever reaches it. */
+
 static void check_fonts(const kanji_t *k)
 {
     static const lv_font_t *BODY[] = {
@@ -189,6 +429,8 @@ static void check_fonts(const kanji_t *k)
         cover(font, "level", k->session.level);
         cover(font, "front", c->front);
         cover(font, "reading", c->reading);
+        cover(font, "on reading", c->on_reading);
+        cover(font, "kun reading", c->kun_reading);
         for (int i = 0; i < c->sense_count; i++) cover(font, "sense", c->senses[i]);
         for (int i = 0; i < c->example_count; i++) {
             cover(font, "example", c->examples[i].text);
@@ -198,14 +440,11 @@ static void check_fonts(const kanji_t *k)
         cover(font, "description", c->description);
         cover(font, "hook title", c->hook_title);
         cover(font, "hook body", c->hook_body);
+        cover(font, "composition", c->composition);
         for (int i = 0; i < c->part_count; i++) {
             cover(font, "part glyph", c->parts[i].glyph);
             cover(font, "part meaning", c->parts[i].meaning);
             cover(font, "part reading", c->parts[i].reading);
-        }
-        for (int i = 0; i < c->comment_count; i++) {
-            cover(font, "comment author", c->comments[i].author);
-            cover(font, "comment body", c->comments[i].body);
         }
         cover(font, "fsrs state", c->fsrs.state_label);
         cover(font, "fsrs due", c->fsrs.due);
@@ -214,11 +453,26 @@ static void check_fonts(const kanji_t *k)
             cover(font, "grade label", kanji_grade_label((kanji_grade_t)g));
         }
 
-        /* The FSRS sheet's copy is the longest fixed text on the board and the
-         * likeliest to contain a character no other literal does. */
-        cover(font, "fsrs page 1", S_FSRS_P1_BODY);
-        cover(font, "fsrs page 2", S_FSRS_P2_BODY);
-        cover(font, "fsrs page 3", S_FSRS_P3_BODY);
+        /* The eyebrows are the only fixed copy left on the answer face, and
+         * they are the likeliest strings on the board to carry a character no
+         * other literal does: each one pairs Korean with a Japanese word, and
+         * 成り立ち's 成 and 立 reach the face from nowhere else. */
+        cover(font, "eyebrow meaning", S_EB_MEANING);
+        cover(font, "eyebrow build",   S_EB_BUILD);
+        cover(font, "eyebrow example", S_EB_EXAMPLE);
+        cover(font, "eyebrow reading", S_EB_READING);
+        cover(font, "eyebrow parts",   S_EB_PARTS);
+        cover(font, "eyebrow memory",  S_EB_MEMORY);
+        cover(font, "on label",  S_ON_READING);
+        cover(font, "kun label", S_KUN_READING);
+        cover(font, "stat reps",   S_STAT_REPS);
+        cover(font, "stat lapses", S_STAT_LAPSES);
+        cover(font, "stat difficulty", S_STAT_DIFFICULTY);
+        cover(font, "plate state",     S_PLATE_STATE);
+        cover(font, "plate reps",      S_PLATE_REPS);
+        cover(font, "plate stability", S_PLATE_STABILITY);
+        cover(font, "plate lapses",    S_PLATE_LAPSES);
+        cover(font, "hint wait", S_HINT_WAIT);
         cover(font, "composed", S_COMPOSED_CHARS);
         cover(font, "data punctuation", S_DATA_PUNCT);
         cover(font, "reveal prompt", S_TAP_TO_REVEAL);
@@ -232,11 +486,7 @@ static void check_fonts(const kanji_t *k)
     cover(ui_hero_face(c->front), "hero headword", c->front);
 }
 
-/* The shapes the catalog's headwords actually take. Nine thousand of the
- * 9,956 rows route to the hero face on length alone, and 133 of them carry an
- * ASCII character the Japanese-only hero was not built with — which rendered as
- * a tofu box at 56 px, dead centre, until ui_hero_face() started asking the font
- * instead of only counting characters. These are drawn from that set. */
+/* The shapes the catalog's headwords actually take. */
 static void check_hero_face_is_always_drawable(void)
 {
     static const char *HEADWORDS[] = {
@@ -255,10 +505,32 @@ static void check_hero_face_is_always_drawable(void)
     }
 }
 
+static void check_printable_ascii_hero(void)
+{
+    for (int cp = 0x20; cp <= 0x7e; cp++) {
+        lv_font_glyph_dsc_t glyph;
+        if (!lv_font_get_glyph_dsc(&ui_font_jp_56, &glyph, (uint32_t)cp, 0) ||
+            glyph.is_placeholder) {
+            FAILV("the hero face cannot draw printable ASCII 0x%02x", cp);
+        }
+    }
+    if (ui_hero_face("~がたい") != &ui_font_jp_56) {
+        FAIL("a four-character ASCII+kana headword must reach the hero face");
+    }
+}
+
 /* --- shots ---------------------------------------------------------------- */
+
+static bool write_exact(FILE *out, const void *bytes, size_t size)
+{
+    return fwrite(bytes, 1, size, out) == size;
+}
 
 static void write_bmp(const char *name)
 {
+    check_raw_neutral_ramp(name);
+    check_visible_styles(name);
+
     char path[640];
     snprintf(path, sizeof path, "%s/%s.bmp", shot_dir, name);
 
@@ -279,195 +551,544 @@ static void write_bmp(const char *name)
 
     FILE *out = fopen(path, "wb");
     if (!out) { FAILV("cannot open output %s", path); return; }
-    fwrite(header, 1, sizeof header, out);
+    bool write_ok = write_exact(out, header, sizeof header);
     uint8_t *row = calloc(1, (size_t)row_size);
-    if (!row) { fclose(out); FAIL("cannot allocate BMP row"); return; }
-    for (int y = VER - 1; y >= 0; y--) {
+    if (!row) {
+        FAIL("cannot allocate BMP row");
+        if (fclose(out) != 0) FAILV("cannot close output %s", path);
+        return;
+    }
+    for (int y = VER - 1; y >= 0 && write_ok; y--) {
         for (int x = 0; x < HOR; x++) {
             uint8_t value = is_black(x, y) ? 0 : 255;
             row[x * 3] = row[x * 3 + 1] = row[x * 3 + 2] = value;
         }
-        fwrite(row, 1, (size_t)row_size, out);
+        write_ok = write_exact(out, row, (size_t)row_size);
     }
     free(row);
-    fclose(out);
+    if (!write_ok || ferror(out)) FAILV("cannot write complete output %s", path);
+    if (fclose(out) != 0) FAILV("cannot close output %s", path);
 }
 
-/* Render one nav state and leave a shot behind. */
-static void shot(const kanji_t *k, const kanji_nav_t *nav, const char *name)
+static lv_obj_t *find_visible_label_text(lv_obj_t *obj, const char *text)
 {
-    ui_kanji_set_data(k);
-    ui_kanji_set_nav(nav);
-    refresh();
-    write_bmp(name);
+    if (!lv_obj_is_visible(obj)) return NULL;
+    if (lv_obj_check_type(obj, &lv_label_class) &&
+        strcmp(lv_label_get_text(obj), text) == 0) {
+        return obj;
+    }
+    const uint32_t children = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < children; i++) {
+        lv_obj_t *found = find_visible_label_text(
+            lv_obj_get_child(obj, (int32_t)i), text);
+        if (found) return found;
+    }
+    return NULL;
 }
 
-/* --- the chrome, on every screen ------------------------------------------ */
-
-static void check_chrome(const char *screen)
+static void want_visible_text(const char *name, const char *text)
 {
-    const kanji_chrome_t *c = kanji_chrome_layout();
-    char label[128];
-
-    /* The header is a full-bleed fill with white text punched out of it. Both
-     * halves matter: a header that stopped filling would still show its text,
-     * and a header whose text stopped rendering would still look like a band. */
-    snprintf(label, sizeof label, "%s: header band", screen);
-    want_filled(label, c->header, 70);
-    snprintf(label, sizeof label, "%s: header text", screen);
-    want_paper(label, c->header, 400);
-
-    snprintf(label, sizeof label, "%s: footer legend", screen);
-    want_ink(label, c->footer, 300);
-
-    /* All four key hints, so a legend that lost one is caught. */
-    for (int i = 0; i < 4; i++) {
-        snprintf(label, sizeof label, "%s: key hint %d", screen, i);
-        want_ink(label, c->key[i], 60);
+    if (!find_visible_label_text(style_root, text)) {
+        FAILV("%s: exact visible label is missing: %s", name, text);
     }
 }
 
-/* --- per-screen pixel checks ---------------------------------------------- */
-
-static void check_question(void)
+/* Some labels are composed — the reveal prompt is the hint plus an arrow — so an exact match
+ * would be asserting the composition rather than that the word reached the glass. */
+static bool label_contains(lv_obj_t *obj, const char *needle)
 {
-    const kanji_question_layout_t *q = kanji_question_layout();
+    if (!lv_obj_is_visible(obj)) return false;
+    if (lv_obj_check_type(obj, &lv_label_class) &&
+        strstr(lv_label_get_text(obj), needle)) {
+        return true;
+    }
+    const uint32_t children = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < children; i++) {
+        if (label_contains(lv_obj_get_child(obj, (int32_t)i), needle)) return true;
+    }
+    return false;
+}
 
-    check_chrome("question");
-    want_filled("question: the player is inverted", q->player, 60);
-    want_paper("question: the headword", q->hero, 600);
-    want_paper("question: the reveal prompt", q->prompt, 120);
-    want_paper("question: the deck caption", q->caption, 120);
-    want_paper("question: the queue counters", q->queue, 100);
-    want_paper("question: the action rail", q->rail, 2000);
-
-    /* The scrubber is a partial bar: the demo card is 35 of 60, so the left
-     * third must be white and the right end must not be. */
-    kanji_rect_t left = { 8, q->scrubber.y, 40, q->scrubber.h };
-    kanji_rect_t right = { HOR - 48, q->scrubber.y, 40, q->scrubber.h };
-    want_paper("question: the scrubber's filled head", left, 100);
-    if (paper_count(right) > 60) {
-        FAIL("question: the scrubber is filled past the card's position");
+static void want_text_somewhere(const char *name, const char *needle)
+{
+    if (!label_contains(style_root, needle)) {
+        FAILV("%s: no visible label contains: %s", name, needle);
     }
 }
 
-static void check_answer(kanji_grade_t cursor)
+/* --- the assertions this redesign exists for -------------------------------
+ *
+ * The five-screen UI this replaced passed every assertion it had while inking
+ * 2.55% of the panel. That is the failure these checks are for: a page can be
+ * correct in every rectangle it draws and still be mostly empty paper, and no
+ * per-widget assertion notices. */
+
+static int whole_screen_ink(void)
 {
-    const kanji_answer_layout_t *a = kanji_answer_layout();
+    return ink_count(0, 0, HOR, VER);
+}
 
-    check_chrome("answer");
-    want_filled("answer: the headword band is inverted", a->band, 55);
-    want_paper("answer: the headword", a->hero, 600);
-    want_paper("answer: the reading", a->reading, 90);
-    want_paper("answer: the JLPT chip", a->level, 40);
+/* OCCUPANCY, not ink mass.
+ *
+ * The obvious metric — what fraction of the panel is black — is the wrong one,
+ * and measuring it was itself a mistake worth recording. 1-bit CJK type at
+ * 16 px is thin: a page that is completely full of text still only blackens
+ * five or six percent of its pixels, and the shipped five-screen design inked
+ * 2.55% while looking half empty. Ink mass cannot tell those apart, so a floor
+ * set on it either passes everything or fails everything.
+ *
+ * What "the page does not use the space" actually means is that large regions
+ * of it contain NOTHING. So divide the content area into a grid of 16 px cells
+ * — one line of body type — and count the cells that contain at least one black
+ * pixel. That is a direct measure of how much of the page is doing work, it is
+ * insensitive to how heavy a face is, and it is the number that separates this
+ * design from the one it replaced. */
+#define OCC_CELL 16
 
-    want_mostly_paper("answer: the meaning is on white", a->meaning, 30);
-    want_ink("answer: the meaning", a->meaning, 300);
-    want_ink("answer: the examples", a->examples, 300);
+static int occupancy_pct(void)
+{
+    const int x0 = KANJI_CONTENT_X, x1 = KANJI_CONTENT_R;
+    const int y0 = 8, y1 = VER - 8;
+    int cells = 0, used = 0;
+    for (int y = y0; y + OCC_CELL <= y1; y += OCC_CELL) {
+        for (int x = x0; x + OCC_CELL <= x1; x += OCC_CELL) {
+            cells++;
+            if (ink_count(x, y, x + OCC_CELL, y + OCC_CELL) > 0) used++;
+        }
+    }
+    return cells ? (used * 100) / cells : 0;
+}
 
-    /* Exactly one cell is filled, and it is the cursor's. This is the check a
-     * screenshot cannot make: a dock with two black cells and a dock with one
-     * are equally plausible until the pixels are counted. */
-    int filled = 0;
-    for (int i = 0; i < KANJI_GRADE_COUNT; i++) {
-        const bool is_cursor = (i + 1) == (int)cursor;
-        const int ink = ink_rect(a->cell[i]);
-        const int area = a->cell[i].w * a->cell[i].h;
-        if (ink * 100 > area * 50) {
-            filled++;
-            if (!is_cursor) {
-                FAILV("answer: cell %d is filled but the cursor is on %d",
-                      i + 1, (int)cursor);
+/* CALIBRATING THE FLOOR.
+ *
+ * A floor picked to sit just under whatever the code happens to score is not a test, it is a
+ * thermometer. These two are picked instead from what they have to CATCH — the loss of a whole
+ * block, which is the regression this redesign is guarding against, because it is exactly what
+ * the five-screen design did by putting three blocks behind buttons.
+ *
+ *   answer face, measured 56%. Its six blocks are the senses, 성립, 예문, 읽기, 구성 and 기억.
+ *   The right rail is 184 of the 600 content columns and is the densest third of the page;
+ *   deleting it drops occupancy to roughly 38%. A floor of 45% therefore fails if ANY of the
+ *   three rail blocks stops rendering, and fails if either prose block does.
+ *
+ *   question face, measured 30%. It is deliberately quiet — the brief for it was an art print,
+ *   not a dashboard — so its floor is only there to catch the plate or the pull-quote vanishing.
+ *   The plate is 144 px of a 464 px page; without it the face scores about 18%. Floor 23%.
+ *
+ * Both are recorded here rather than in a constant so that raising one later requires reading
+ * the argument for the current value first. */
+static void check_page_budget(const char *name, int min_occ, int max_ink_pct)
+{
+    const int total = HOR * VER;
+    const int ink = whole_screen_ink();
+    const int ink10 = (ink * 1000) / total;
+    const int occ = occupancy_pct();
+    printf("  page %-25s occupancy %3d%% (floor %d%%)   ink %d.%d%%\n",
+           name, occ, min_occ, ink10 / 10, ink10 % 10);
+    if (occ < min_occ) {
+        FAILV("%s: only %d%% of the content grid carries anything, below the "
+              "%d%% floor — the page is not using the panel", name, occ, min_occ);
+    }
+    if (ink * 100 > total * max_ink_pct) {
+        FAILV("%s: inks %d.%d%% of the panel, above the %d%% ceiling",
+              name, ink10 / 10, ink10 % 10, max_ink_pct);
+    }
+}
+
+/* Every visible, non-blank label on the screen, with its real coordinates. */
+#define MAX_LABELS 128
+typedef struct {
+    lv_obj_t   *obj;
+    lv_area_t   area;
+    const char *text;
+} label_box_t;
+
+static void collect_labels(lv_obj_t *obj, label_box_t *out, int *n)
+{
+    if (!lv_obj_is_visible(obj)) return;
+    if (lv_obj_check_type(obj, &lv_label_class)) {
+        const char *t = lv_label_get_text(obj);
+        if (t && t[0] && *n < MAX_LABELS) {
+            lv_area_t a;
+            lv_obj_get_coords(obj, &a);
+            out[*n].obj = obj;
+            out[*n].area = a;
+            out[*n].text = t;
+            (*n)++;
+        }
+    }
+    const uint32_t children = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < children; i++) {
+        collect_labels(lv_obj_get_child(obj, (int32_t)i), out, n);
+    }
+}
+
+static bool areas_overlap(const lv_area_t *a, const lv_area_t *b)
+{
+    return a->x1 <= b->x2 && b->x1 <= a->x2 && a->y1 <= b->y2 && b->y1 <= a->y2;
+}
+
+/* No two labels may share paper.
+ *
+ * Pixels cannot catch this. Black text drawn over black text is still black,
+ * so a screenshot of two overlapping labels looks like one slightly bold
+ * label — which is exactly what a fourteen-block two-column page produces the
+ * first time one block grows a line. */
+static void check_no_label_overlap(const char *name)
+{
+    label_box_t boxes[MAX_LABELS];
+    int n = 0;
+    collect_labels(style_root, boxes, &n);
+    if (n >= MAX_LABELS) {
+        FAILV("%s: more than %d visible labels; the overlap walk is truncated "
+              "and is no longer proving anything", name, MAX_LABELS);
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            if (areas_overlap(&boxes[i].area, &boxes[j].area)) {
+                FAILV("%s: labels overlap: \"%s\" (%d,%d..%d,%d) and \"%s\" "
+                      "(%d,%d..%d,%d)", name,
+                      boxes[i].text, boxes[i].area.x1, boxes[i].area.y1,
+                      boxes[i].area.x2, boxes[i].area.y2,
+                      boxes[j].text, boxes[j].area.x1, boxes[j].area.y1,
+                      boxes[j].area.x2, boxes[j].area.y2);
             }
-            /* The label and the span must survive the inversion. */
-            char label[96];
-            snprintf(label, sizeof label, "answer: selected label %d", i + 1);
-            want_paper(label, a->cell_label[i], 60);
-            snprintf(label, sizeof label, "answer: selected span %d", i + 1);
-            want_paper(label, a->cell_span[i], 40);
-        } else if (is_cursor) {
-            FAILV("answer: the cursor is on %d but that cell is not filled",
-                  (int)cursor);
-        } else {
-            char label[96];
-            snprintf(label, sizeof label, "answer: unselected label %d", i + 1);
-            want_ink(label, a->cell_label[i], 60);
-            snprintf(label, sizeof label, "answer: unselected span %d", i + 1);
-            want_ink(label, a->cell_span[i], 40);
         }
     }
-    if (filled != 1) FAILV("answer: %d dock cells are filled, wanted 1", filled);
 }
 
-static void check_sheet(const char *name, bool with_stats)
+/* Nothing in the left column may cross the gutter rule, and nothing in the
+ * right rail may cross the margin. Asserted against the widgets' OWN
+ * coordinates rather than against the layout constants, because the fault
+ * being hunted is a renderer that ignored the rectangle it was handed. */
+static void check_columns_contained(const char *name)
 {
-    const kanji_sheet_layout_t *l = kanji_sheet_layout(with_stats);
-    char label[128];
+    label_box_t boxes[MAX_LABELS];
+    int n = 0;
+    collect_labels(style_root, boxes, &n);
+    const kanji_back_layout_t *b = kanji_back_layout();
+    const int top = b->col_rule.y;
+    const int bot = b->col_rule.y + b->col_rule.h;
 
-    check_chrome(name);
-    snprintf(label, sizeof label, "%s: the band is inverted", name);
-    want_filled(label, l->band, 55);
-    snprintf(label, sizeof label, "%s: the band names the card", name);
-    want_paper(label, l->band_word, 150);
-    snprintf(label, sizeof label, "%s: the band names the sheet", name);
-    want_paper(label, l->band_title, 60);
-
-    snprintf(label, sizeof label, "%s: the body is on white", name);
-    want_mostly_paper(label, l->body, 35);
-    snprintf(label, sizeof label, "%s: the body has text", name);
-    want_ink(label, l->body, 1500);
-
-    if (with_stats) {
-        snprintf(label, sizeof label, "%s: the card's own numbers", name);
-        want_ink(label, l->stats, 600);
-        for (int i = 0; i < KANJI_STAT_CELLS; i++) {
-            snprintf(label, sizeof label, "%s: stat cell %d", name, i);
-            want_ink(label, l->stat[i], 60);
+    for (int i = 0; i < n; i++) {
+        const lv_area_t *a = &boxes[i].area;
+        if (a->y1 < top || a->y2 >= bot) continue;      /* masthead or dock */
+        const bool left = a->x1 < KANJI_COL_RULE_X;
+        if (left && a->x2 >= KANJI_COL_RULE_X) {
+            FAILV("%s: \"%s\" crosses the gutter rule at x=%d (%d..%d)",
+                  name, boxes[i].text, KANJI_COL_RULE_X, a->x1, a->x2);
+        }
+        if (!left && a->x2 >= KANJI_CONTENT_R) {
+            FAILV("%s: \"%s\" crosses the right margin at x=%d (%d..%d)",
+                  name, boxes[i].text, KANJI_CONTENT_R, a->x1, a->x2);
+        }
+        if (a->x1 < KANJI_CONTENT_X) {
+            FAILV("%s: \"%s\" crosses the left margin at x=%d (x1=%d)",
+                  name, boxes[i].text, KANJI_CONTENT_X, a->x1);
         }
     }
 }
 
-/* --- the states worth a shot ---------------------------------------------- */
+/* THE SPOILER ASSERTION.
+ *
+ * The question face may print only Japanese and the learner's own history.
+ * senses[], parts[].meaning and examples[].gloss are all Korean and all of them
+ * ARE the answer. examples[].gloss is the one that gets shipped by accident: it
+ * reads as harmless context right up until it prints 우연히 만나다 under 会う,
+ * at which point the card is worthless and nothing in the build says so. */
+static void check_front_hides_the_answer(const kanji_t *k)
+{
+    label_box_t boxes[MAX_LABELS];
+    int n = 0;
+    collect_labels(style_root, boxes, &n);
 
-static kanji_nav_t nav_question(void)
+    const char *secrets[KANJI_SENSES_MAX + KANJI_PARTS_MAX + KANJI_EXAMPLES_MAX];
+    const char *kinds[KANJI_SENSES_MAX + KANJI_PARTS_MAX + KANJI_EXAMPLES_MAX];
+    int s = 0;
+    for (int i = 0; i < k->card.sense_count; i++) {
+        if (k->card.senses[i][0]) { secrets[s] = k->card.senses[i]; kinds[s++] = "sense"; }
+    }
+    for (int i = 0; i < k->card.part_count; i++) {
+        if (k->card.parts[i].meaning[0]) {
+            secrets[s] = k->card.parts[i].meaning; kinds[s++] = "part meaning";
+        }
+    }
+    for (int i = 0; i < k->card.example_count; i++) {
+        if (k->card.examples[i].gloss[0]) {
+            secrets[s] = k->card.examples[i].gloss; kinds[s++] = "example gloss";
+        }
+    }
+    if (s == 0) {
+        FAIL("the spoiler check ran against a card with nothing to spoil; it "
+             "would pass for any renderer and is proving nothing");
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < s; j++) {
+            if (strstr(boxes[i].text, secrets[j])) {
+                FAILV("문제 leaks the answer: label \"%s\" contains the %s "
+                      "\"%s\"", boxes[i].text, kinds[j], secrets[j]);
+            }
+        }
+    }
+}
+
+/* --- the dock -------------------------------------------------------------- */
+
+static void check_dock(const kanji_t *k, const kanji_nav_t *nav)
+{
+    const kanji_back_layout_t *b = kanji_back_layout();
+    int filled = 0;
+
+    for (int i = 0; i < KANJI_GRADE_COUNT; i++) {
+        const kanji_grade_t g = kanji_button_grade((kanji_button_t)i);
+        const bool want_filled = nav->committed && nav->grade == g;
+        const kanji_rect_t cell = b->cell[i];
+        const int ink = ink_rect(cell);
+        const int area = cell.w * cell.h;
+        const bool is_filled = ink * 100 > area * 50;
+
+        if (is_filled) filled++;
+        if (is_filled != want_filled) {
+            FAILV("dock cell %d (grade %d) is %s but should be %s",
+                  i, (int)g, is_filled ? "filled" : "plain",
+                  want_filled ? "filled" : "plain");
+        }
+
+        char nm[96];
+        snprintf(nm, sizeof nm, "dock cell %d name", i);
+        if (want_filled) {
+            /* White on black: the labels have to survive the inversion, which
+             * is measured as PAPER inside a cell that is otherwise solid. */
+            want_paper(nm, b->cell_name[i], 40);
+        } else {
+            want_ink(nm, b->cell_name[i], 40);
+        }
+        want_visible_text(nm, kanji_grade_label(g));
+    }
+
+    if (filled != (nav->committed ? 1 : 0)) {
+        FAILV("%d dock cells are filled, wanted %d",
+              filled, nav->committed ? 1 : 0);
+    }
+
+    /* The four cells must tile the dock exactly. A one-pixel crack between two
+     * cells is a white stripe down a ruled row. */
+    for (int i = 1; i < KANJI_GRADE_COUNT; i++) {
+        if (b->cell[i].x != b->cell[i - 1].x + b->cell[i - 1].w) {
+            FAILV("dock cells %d and %d do not abut (%d+%d != %d)",
+                  i - 1, i, b->cell[i - 1].x, b->cell[i - 1].w, b->cell[i].x);
+        }
+    }
+    (void)k;
+}
+
+static void check_public_dock_bounds(void)
+{
+    int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    ui_kanji_dock_area(&x1, &y1, &x2, &y2);
+    const kanji_rect_t d = kanji_back_layout()->dock;
+    if (x1 != d.x || y1 != d.y || x2 != d.x + d.w || y2 != d.y + d.h) {
+        FAILV("dock accessor returned (%d,%d,%d,%d), wanted (%d,%d,%d,%d)",
+              x1, y1, x2, y2, d.x, d.y, d.x + d.w, d.y + d.h);
+    }
+    if (x1 % KANJI_BYTE_ALIGN || x2 % KANJI_BYTE_ALIGN) {
+        FAILV("the dock's x bounds (%d,%d) are not whole framebuffer bytes; a "
+              "partial refresh would miss the thing that changed", x1, x2);
+    }
+}
+
+/* --- fixtures -------------------------------------------------------------- */
+
+static void set_str(char *dst, size_t cap, const char *src)
+{
+    kanji_str_copy(dst, cap, src);
+}
+
+/* A real kanji card, taken from the backend row for 語 (JLPT N3 Kanji):
+ * 형성 principle, three components — exactly the number the rail holds — and an
+ * 85-character build story, which is longer than the three-line slot and so
+ * proves the ellipsis rather than assuming it never happens. The demo card is a
+ * VOCAB card and is honest in having no on-yomi, no principle and one
+ * component, but it therefore exercises almost none of the answer face. */
+static kanji_t kanji_card_fixture(void)
+{
+    kanji_t k;
+    memset(&k, 0, sizeof k);
+    k.valid = true;
+    k.source = KANJI_SOURCE_CATALOG;
+
+    set_str(k.session.deck, sizeof k.session.deck, "JLPT N3 Kanji");
+    set_str(k.session.level, sizeof k.session.level, "N3");
+    k.session.streak = 23;
+    k.session.reviewed_today = 41;
+    k.session.left_new = 5;
+    k.session.left_review = 22;
+    k.session.retry = 1;
+    k.session.track = 42;
+    k.session.track_total = 68;
+
+    kanji_card_t *c = &k.card;
+    c->valid = true;
+    set_str(c->id, sizeof c->id, "sim-kanji-go");
+    set_str(c->front, sizeof c->front, "語");
+    set_str(c->reading, sizeof c->reading, "ゴ");
+    set_str(c->on_reading, sizeof c->on_reading, "ゴ");
+    set_str(c->kun_reading, sizeof c->kun_reading, "かたる · かたらう");
+    set_str(c->level, sizeof c->level, "N3");
+    set_str(c->senses[0], sizeof c->senses[0], "단어");
+    set_str(c->senses[1], sizeof c->senses[1], "언어");
+    c->sense_count = 2;
+
+    set_str(c->examples[0].text, sizeof c->examples[0].text, "国語");
+    set_str(c->examples[0].reading, sizeof c->examples[0].reading, "こくご");
+    set_str(c->examples[0].gloss, sizeof c->examples[0].gloss, "국어");
+    set_str(c->examples[1].text, sizeof c->examples[1].text, "物語");
+    set_str(c->examples[1].reading, sizeof c->examples[1].reading, "ものがたり");
+    set_str(c->examples[1].gloss, sizeof c->examples[1].gloss, "이야기");
+    set_str(c->examples[2].text, sizeof c->examples[2].text, "語る");
+    set_str(c->examples[2].reading, sizeof c->examples[2].reading, "かたる");
+    set_str(c->examples[2].gloss, sizeof c->examples[2].gloss, "말하다");
+    c->example_count = 3;
+
+    set_str(c->description, sizeof c->description,
+            "語는 말을 뜻하는 言과 소리를 나타내는 吾가 합쳐진 형성자입니다.");
+    set_str(c->hook_title, sizeof c->hook_title, "형성");
+    set_str(c->hook_body, sizeof c->hook_body,
+            "「言」(말)과 「口」(입)가 함께 '입으로 말하다'라는 뜻을 이루고, "
+            "「五」는 여기서 소리부(ゴ)로 발음을 제공해 語의 음과 뜻을 결합한다.");
+
+    set_str(c->parts[0].glyph, sizeof c->parts[0].glyph, "言");
+    set_str(c->parts[0].meaning, sizeof c->parts[0].meaning, "말");
+    set_str(c->parts[1].glyph, sizeof c->parts[1].glyph, "口");
+    set_str(c->parts[1].meaning, sizeof c->parts[1].meaning, "입");
+    set_str(c->parts[2].glyph, sizeof c->parts[2].glyph, "五");
+    set_str(c->parts[2].meaning, sizeof c->parts[2].meaning, "다섯");
+    c->part_count = 3;
+
+    set_str(c->fsrs.state, sizeof c->fsrs.state, "review");
+    set_str(c->fsrs.state_label, sizeof c->fsrs.state_label, "복습");
+    set_str(c->fsrs.due, sizeof c->fsrs.due, "12일 뒤");
+    c->fsrs.reps = 7;
+    c->fsrs.lapses = 2;
+    c->fsrs.stability_days = 12;
+    c->fsrs.difficulty_pct = 38;
+    set_str(c->preview.span[0], sizeof c->preview.span[0], "10분 뒤");
+    set_str(c->preview.span[1], sizeof c->preview.span[1], "5일 뒤");
+    set_str(c->preview.span[2], sizeof c->preview.span[2], "12일 뒤");
+    set_str(c->preview.span[3], sizeof c->preview.span[3], "28일 뒤");
+    return k;
+}
+
+static size_t fill_repeated(char *dst, size_t capacity, char glyph)
+{
+    if (!dst || capacity == 0) return 0;
+    for (size_t i = 0; i + 1 < capacity; i++) dst[i] = glyph;
+    dst[capacity - 1] = '\0';
+    return capacity - 1;
+}
+
+static char widest_body_ascii(void)
+{
+    char widest = '\0';
+    uint16_t widest_advance = 0;
+    for (int cp = 1; cp <= 0x7f; cp++) {
+        if (isspace((unsigned char)cp)) continue;
+        lv_font_glyph_dsc_t glyph;
+        if (!lv_font_get_glyph_dsc(&ui_font_kr_16, &glyph, (uint32_t)cp, 0) ||
+            glyph.is_placeholder) {
+            continue;
+        }
+        if (glyph.adv_w > widest_advance) {
+            widest = (char)cp;
+            widest_advance = glyph.adv_w;
+        }
+    }
+    if (widest == '\0') FAIL("no drawable single-byte glyph in ui_font_kr_16");
+    return widest;
+}
+
+/* Every field at its model maximum, in the widest glyph the body face has.
+ * The point is not that all of it is readable — the design says outright that
+ * an 819-byte explanation cannot be — but that none of it escapes its
+ * rectangle or crosses a column. */
+static kanji_t worst_case_fixture(const kanji_t *base)
+{
+    kanji_t k = *base;
+    const char g = widest_body_ascii();
+    char raw[KANJI_BODY_MAX];
+    fill_repeated(raw, sizeof raw, g);
+
+    kanji_text_collapse_whitespace(k.card.description,
+                                   sizeof k.card.description, raw);
+    kanji_text_collapse_whitespace(k.card.hook_body,
+                                   sizeof k.card.hook_body, raw);
+    fill_repeated(k.card.front, sizeof k.card.front, g);
+    fill_repeated(k.card.reading, sizeof k.card.reading, g);
+    fill_repeated(k.card.on_reading, sizeof k.card.on_reading, g);
+    fill_repeated(k.card.kun_reading, sizeof k.card.kun_reading, g);
+
+    k.card.sense_count = KANJI_SENSES_MAX;
+    for (int i = 0; i < KANJI_SENSES_MAX; i++) {
+        fill_repeated(k.card.senses[i], sizeof k.card.senses[i], g);
+    }
+    k.card.part_count = KANJI_PARTS_MAX;
+    for (int i = 0; i < KANJI_PARTS_MAX; i++) {
+        fill_repeated(k.card.parts[i].glyph, sizeof k.card.parts[i].glyph, g);
+        fill_repeated(k.card.parts[i].meaning, sizeof k.card.parts[i].meaning, g);
+        fill_repeated(k.card.parts[i].reading, sizeof k.card.parts[i].reading, g);
+    }
+    k.card.example_count = KANJI_EXAMPLES_MAX;
+    for (int i = 0; i < KANJI_EXAMPLES_MAX; i++) {
+        fill_repeated(k.card.examples[i].text, sizeof k.card.examples[i].text, g);
+        fill_repeated(k.card.examples[i].reading,
+                      sizeof k.card.examples[i].reading, g);
+        fill_repeated(k.card.examples[i].gloss,
+                      sizeof k.card.examples[i].gloss, g);
+    }
+    fill_repeated(k.card.hook_title, sizeof k.card.hook_title, g);
+    return k;
+}
+
+static kanji_nav_t nav_front(void)
 {
     kanji_nav_t n;
     kanji_nav_reset(&n);
     return n;
 }
 
-static kanji_nav_t nav_answer(kanji_grade_t g)
+static kanji_nav_t nav_back(void)
 {
-    kanji_nav_t n = nav_question();
+    kanji_nav_t n;
+    kanji_nav_reset(&n);
     n.revealed = true;
-    n.grade = g;
     return n;
 }
 
-static kanji_nav_t nav_sheet(kanji_sheet_t sheet, int page, bool revealed)
+/* Committed states are reached through a real press so the shot proves the
+ * production path rather than a struct the test filled in itself. */
+static kanji_nav_t nav_committed(kanji_button_t btn, const kanji_t *k)
 {
-    kanji_nav_t n = nav_question();
-    n.revealed = revealed;
-    n.sheet = sheet;
-    n.sheet_page = page;
+    kanji_nav_t n = nav_back();
+    kanji_nav_press(&n, btn, k);
     return n;
 }
 
-/* A three-comment card, so the comments sheet has a second page to render. The
- * demo card carries two on purpose — it is the docs' specimen — so paging is
- * exercised from a variant rather than by making the specimen unrepresentative. */
-static kanji_t with_three_comments(const kanji_t *base)
+/* --- shots ----------------------------------------------------------------- */
+
+static const ui_status_t ONLINE = { true, false, false, 0 };
+
+static void shot(const kanji_t *k, const kanji_nav_t *nav,
+                 const ui_status_t *st, const char *name)
 {
-    kanji_t k = *base;
-    k.card.comment_count = 3;
-    kanji_str_copy(k.card.comments[2].author, KANJI_AUTHOR_MAX, "하루");
-    kanji_str_copy(k.card.comments[2].body, KANJI_COMMENT_MAX,
-                   "「会」는 모임이라는 뜻으로도 자주 쓰입니다. 会社, 会議 모두 "
-                   "같은 글자예요.");
-    k.card.comments[2].likes = 3;
-    if (k.card.comment_total < 3) k.card.comment_total = 3;
-    return k;
+    ui_kanji_set_data(k);
+    ui_kanji_set_nav(nav);
+    ui_kanji_set_status(st ? st : &ONLINE);
+    refresh();
+    write_bmp(name);
 }
+
+/* --- main ------------------------------------------------------------------ */
 
 int main(int argc, char **argv)
 {
@@ -476,178 +1097,161 @@ int main(int argc, char **argv)
     lv_init();
     lv_tick_set_cb(tick_cb);
     lv_display_t *display = lv_display_create(HOR, VER);
+    lv_display_set_buffers(display, fb, NULL, sizeof fb,
+                           LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(display, flush_cb);
-    lv_display_set_buffers(display, fb, NULL, sizeof fb, LV_DISPLAY_RENDER_MODE_FULL);
 
-    lv_obj_t *screen = lv_obj_create(NULL);
-    lv_screen_load(screen);
+    lv_obj_t *screen = lv_display_get_screen_active(display);
     ui_kanji_create(screen);
+    style_root = lv_obj_get_child(screen, 0);
 
-    kanji_t card;
-    const char *url = getenv("KANJI_URL");
-    if (url && *url) {
-        kanji_fetch_result_t result = kanji_service_fetch(url, &card);
-        if (result != KANJI_FETCH_OK) {
-            fprintf(stderr, "FAILED — KANJI_URL could not be rendered: %s\n",
-                    kanji_fetch_result_name(result));
-            return 2;
-        }
-        printf("fetched a card from %s\n", url);
-    } else {
-        kanji_mock(&card);
-        printf("using the built-in demo card\n");
-    }
+    kanji_t demo;
+    kanji_mock(&demo);
+    const kanji_t go = kanji_card_fixture();
 
-    check_fonts(&card);
     check_hero_face_is_always_drawable();
+    check_printable_ascii_hero();
+    check_public_dock_bounds();
+    check_fonts(&demo);
+    check_fonts(&go);
 
-    const ui_status_t online = { true, false, true, 78 };
-    ui_kanji_set_status(&online);
+    const kanji_nav_t front = nav_front();
+    const kanji_nav_t back  = nav_back();
 
-    /* The five screens, in the order a learner meets them. */
-    kanji_nav_t nav = nav_question();
-    shot(&card, &nav, "01-question");
-    check_question();
+    /* 01 — the demo card's front, which is what a board with no URL shows. */
+    shot(&demo, &front, NULL, "01-front");
+    check_page_budget("01-front", 23, 40);
+    check_no_label_overlap("01-front");
+    check_front_hides_the_answer(&demo);
+    want_text_somewhere("01-front", S_HINT_REVEAL);
 
-    nav = nav_answer(KANJI_GRADE_GOOD);
-    shot(&card, &nav, "02-answer");
-    check_answer(KANJI_GRADE_GOOD);
+    /* 02 — the demo card's back. */
+    shot(&demo, &back, NULL, "02-back");
+    check_page_budget("02-back", 45, 40);
+    check_no_label_overlap("02-back");
+    check_columns_contained("02-back");
+    check_dock(&demo, &back);
+    want_visible_text("02-back", S_EB_MEANING);
+    want_visible_text("02-back", S_EB_BUILD);
+    want_visible_text("02-back", S_EB_EXAMPLE);
+    want_visible_text("02-back", S_EB_READING);
+    want_visible_text("02-back", S_EB_PARTS);
+    want_visible_text("02-back", S_EB_MEMORY);
 
-    /* KEY0 walks the cursor; the dock is the only thing that may change. */
-    nav = nav_answer(KANJI_GRADE_EASY);
-    shot(&card, &nav, "03-answer-easy");
-    check_answer(KANJI_GRADE_EASY);
+    /* 03/04 — a real kanji card, which is where 성립 and 구성 do their work. */
+    shot(&go, &front, NULL, "03-front-kanji");
+    check_page_budget("03-front-kanji", 23, 40);
+    check_no_label_overlap("03-front-kanji");
+    check_front_hides_the_answer(&go);
 
-    nav = nav_answer(KANJI_GRADE_AGAIN);
-    shot(&card, &nav, "04-answer-again");
-    check_answer(KANJI_GRADE_AGAIN);
+    shot(&go, &back, NULL, "04-back-kanji");
+    check_page_budget("04-back-kanji", 45, 40);
+    check_no_label_overlap("04-back-kanji");
+    check_columns_contained("04-back-kanji");
+    check_dock(&go, &back);
+    want_visible_text("04-back-kanji", "형성");
 
-    /* The full-height case. The demo card carries two examples, so a third row
-     * colliding with the rating prompt below it renders invisibly on every
-     * other shot — which is exactly how it got in. */
+    /* 05/06 — a grade committed. Exactly one cell inverts, and the transition
+     * from 04 touches only the dock. */
     {
-        kanji_t full = card;
-        full.card.example_count = 3;
-        kanji_str_copy(full.card.examples[2].text, KANJI_FRONT_MAX, "会わせる");
-        kanji_str_copy(full.card.examples[2].reading, KANJI_READING_MAX, "あわせる");
-        kanji_str_copy(full.card.examples[2].gloss, KANJI_SENSE_MAX, "만나게 하다");
+        uint8_t before[HOR * VER];
+        shot(&go, &back, NULL, "04-back-kanji");
+        snapshot_threshold(before);
 
-        nav = nav_answer(KANJI_GRADE_HARD);
-        shot(&full, &nav, "04b-answer-three-examples");
-        check_answer(KANJI_GRADE_HARD);
-        check_fonts(&full);
+        const kanji_nav_t again = nav_committed(KANJI_BTN_KEY0, &go);
+        if (!kanji_nav_is_dock_only_transition(&back, &again)) {
+            FAIL("uncommitted -> committed is not a dock-only transition");
+        }
+        ui_kanji_set_nav(&again);          /* set_nav ONLY: the production path */
+        refresh();
+        write_bmp("05-back-again");
+        check_dock_diff("uncommitted -> 다시", before);
+        check_dock(&go, &again);
+        check_no_label_overlap("05-back-again");
 
-        const kanji_answer_layout_t *a = kanji_answer_layout();
-        kanji_rect_t third = { a->examples.x,
-                               a->examples.y + 2 * a->example_step,
-                               a->examples.w, a->example_step };
-        want_ink("answer: the third example row", third, 150);
-        want_ink("answer: the rating prompt", a->prompt, 150);
+        const kanji_nav_t easy = nav_committed(KANJI_BTN_BOOT, &go);
+        shot(&go, &easy, NULL, "06-back-easy");
+        check_dock(&go, &easy);
     }
 
-    nav = nav_sheet(KANJI_SHEET_DESCRIPTION, 0, false);
-    shot(&card, &nav, "05-description");
-    check_sheet("description", false);
-
-    nav = nav_sheet(KANJI_SHEET_COMMENTS, 0, true);
-    shot(&card, &nav, "06-comments");
-    check_sheet("comments", false);
-
-    kanji_t three = with_three_comments(&card);
-    nav = nav_sheet(KANJI_SHEET_COMMENTS, 1, true);
-    shot(&three, &nav, "07-comments-page2");
-    check_sheet("comments page 2", false);
-
-    for (int page = 0; page < 3; page++) {
-        char name[32];
-        snprintf(name, sizeof name, "%02d-fsrs-%d", 8 + page, page + 1);
-        nav = nav_sheet(KANJI_SHEET_FSRS, page, true);
-        shot(&card, &nav, name);
-        check_sheet("fsrs", true);
-    }
-
-    /* The states a learner meets on a bad day, and the one they meet at the
-     * end of a good one. */
-    kanji_t done = card;
-    done.card.valid = false;
-    done.session.complete = true;
-    nav = nav_question();
-    shot(&done, &nav, "11-session-complete");
-    check_chrome("session complete");
-    want_paper("session complete: the message", kanji_question_layout()->prompt, 200);
-
-    /* A ten-character headword: the longest the catalog holds, and the case
-     * kanji_hero_is_large() exists for. It must still fit the hero box. */
-    kanji_t longword = card;
-    kanji_str_copy(longword.card.front, KANJI_FRONT_MAX, "取り替えるつもり");
-    nav = nav_question();
-    shot(&longword, &nav, "12-long-headword");
+    /* 07 — a new card: no history, so the plate prints one row instead of four
+     * rows of zeroes. */
     {
-        const kanji_question_layout_t *q = kanji_question_layout();
-        want_paper("long headword: still drawn", q->hero, 600);
-
-        /* The hero box is the boundary, and the layout test cannot check it:
-         * it knows the box is 464 px but not how wide a string renders in a
-         * given face. Ask LVGL, at both faces, for the two lengths that bound
-         * the catalog — five characters is the most the 56 px face takes, ten
-         * is the longest headword the catalog holds. */
-        lv_point_t size;
-        lv_text_get_size(&size, "取り替える", &ui_font_jp_56, 0, 0,
-                         LV_COORD_MAX, LV_TEXT_FLAG_EXPAND);
-        if (size.x > q->hero.w) {
-            FAILV("a 5-character headword needs %d px, the hero box has %d",
-                  size.x, q->hero.w);
-        }
-        lv_text_get_size(&size, "取り替えるつもりです", &ui_font_kr_28, 0, 0,
-                         LV_COORD_MAX, LV_TEXT_FLAG_EXPAND);
-        if (size.x > q->hero.w) {
-            FAILV("a 10-character headword needs %d px, the hero box has %d",
-                  size.x, q->hero.w);
-        }
-
-        /* And the pixel proof: the headword is centred, so a word that ran past
-         * its box would leave ink in the player's LEFT margin, which is the one
-         * strip of the question screen nothing else draws in. */
-        kanji_rect_t left_margin = { 0, q->hero.y, q->hero.x, q->hero.h };
-        if (paper_count(left_margin) > 40) {
-            FAIL("long headword: the hero overflowed its box");
-        }
+        kanji_t fresh = go;
+        fresh.card.fsrs.state_label[0] = '\0';
+        fresh.card.fsrs.due[0] = '\0';
+        fresh.card.fsrs.reps = 0;
+        fresh.card.fsrs.lapses = 0;
+        fresh.card.fsrs.stability_days = -1;
+        fresh.card.fsrs.difficulty_pct = -1;
+        for (int i = 0; i < KANJI_GRADE_COUNT; i++) fresh.card.preview.span[i][0] = '\0';
+        shot(&fresh, &front, NULL, "07-front-new-card");
+        check_no_label_overlap("07-front-new-card");
+        shot(&fresh, &back, NULL, "08-back-new-card");
+        check_no_label_overlap("08-back-new-card");
+        check_columns_contained("08-back-new-card");
     }
 
-    /* A headword the Japanese-only hero face cannot draw. 106 of the catalog's
-     * 9,956 fronts carry a `~`, and until ui_hero_face() started asking the
-     * font rather than only counting characters this rendered as a tofu box at
-     * 56 px, dead centre. It must come out as readable text at the smaller
-     * face, which is what the shot is here to show. */
-    kanji_t tilde = card;
-    kanji_str_copy(tilde.card.front, KANJI_FRONT_MAX, "~がたい");
-    kanji_str_copy(tilde.card.reading, KANJI_READING_MAX, "がたい");
-    nav = nav_question();
-    shot(&tilde, &nav, "12b-ascii-headword");
-    check_fonts(&tilde);
-    want_paper("ascii headword: drawn, not tofu", kanji_question_layout()->hero, 500);
+    /* 09 — no examples at all: the pull-quote and its ornament go together. */
+    {
+        kanji_t bare = go;
+        bare.card.example_count = 0;
+        shot(&bare, &front, NULL, "09-front-no-examples");
+        check_no_label_overlap("09-front-no-examples");
+    }
 
-    const ui_status_t offline = { false, true, false, 0 };
-    ui_kanji_set_status(&offline);
-    nav = nav_question();
-    shot(&card, &nav, "13-offline");
-    check_chrome("offline");
-    ui_kanji_set_status(&online);
+    /* 10 — the worst case the model permits, on the denser face. */
+    {
+        const kanji_t worst = worst_case_fixture(&go);
+        shot(&worst, &back, NULL, "10-back-worst-case");
+        check_no_label_overlap("10-back-worst-case");
+        check_columns_contained("10-back-worst-case");
+        check_page_budget("10-back-worst-case", 45, 60);
+        shot(&worst, &front, NULL, "11-front-worst-case");
+        check_no_label_overlap("11-front-worst-case");
+    }
 
-    ui_kanji_set_overlay(S_WIFI_TITLE,
-                         "\"Obsidian Board\" 에 접속한 뒤\n"
-                         "브라우저에서 Wi-Fi 와 서버 주소를 입력하세요.");
+    /* 12/13 — the badges. */
+    {
+        const ui_status_t offline = { false, false, false, 0 };
+        shot(&go, &front, &offline, "12-front-offline");
+        want_visible_text("12-front-offline", S_BADGE_OFFLINE);
+
+        const ui_status_t stale = { true, true, false, 0 };
+        shot(&go, &back, &stale, "13-back-stale");
+        want_visible_text("13-back-stale", S_BADGE_STALE);
+    }
+
+    /* 14 — the session is over. */
+    {
+        kanji_t done = go;
+        done.card.valid = false;
+        done.session.complete = true;
+        shot(&done, &front, NULL, "14-session-complete");
+        check_no_label_overlap("14-session-complete");
+    }
+
+    /* 15 — a long headword, which falls back from the hero face by length. */
+    {
+        kanji_t longw = go;
+        set_str(longw.card.front, sizeof longw.card.front, "取り替えるつもり");
+        shot(&longw, &front, NULL, "15-front-long-headword");
+        check_no_label_overlap("15-front-long-headword");
+        shot(&longw, &back, NULL, "16-back-long-headword");
+        check_no_label_overlap("16-back-long-headword");
+        check_columns_contained("16-back-long-headword");
+    }
+
+    /* 17 — the Wi-Fi overlay, and 18 — no snapshot at all. */
+    ui_kanji_set_overlay(S_WIFI_TITLE, S_WIFI_CONNECTING);
     refresh();
-    write_bmp("14-setup");
-    {
-        kanji_rect_t whole = { 0, 0, HOR, VER };
-        want_ink("setup overlay: the message", whole, 3000);
-        want_mostly_paper("setup overlay: is on white", whole, 25);
-    }
+    write_bmp("17-setup");
     ui_kanji_set_overlay(NULL, NULL);
-    refresh();
 
-    printf("%s — %d problem(s); shots in %s/\n",
-           failures ? "FAILED" : "ok", failures, shot_dir);
+    shot(NULL, &front, NULL, "18-no-data");
+
+    printf(failures ? "FAILED — %d problem(s); shots in %s\n"
+                    : "OK — %d problem(s); shots in %s\n",
+           failures, shot_dir);
     return failures ? 1 : 0;
 }

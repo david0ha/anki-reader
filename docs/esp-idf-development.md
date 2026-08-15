@@ -90,6 +90,37 @@ Not menuconfig (which fixes one checkout and not the next one), and never the ge
 
 ## 5. Build / flash / monitor
 
+### Offline catalog inputs and flash scope
+
+The catalog generator opens the SQLite source read-only. Configure a non-default source path at
+configure time; the optional user id overrides deterministic maximum-coverage selection, and the
+seed fixes deterministic per-deck SHA-256 ordering:
+
+```bash
+idf.py -DKANJI_CATALOG_DB=/absolute/path/to/kanjis-backend.sqlite3 \
+       -DKANJI_CATALOG_USER_ID=<optional-user-uuid> \
+       -DKANJI_CATALOG_SEED=0 catalog_image
+```
+
+Omit the user-id definition to select automatically. `idf.py catalog_image` writes only the local
+build artifact `build/kanji-catalog.bin`; it does not touch hardware. A normal `idf.py flash`
+generates and writes the application plus `catalog`. `idf.py catalog-flash` writes only `catalog`,
+while `idf.py app-flash` writes only the application and therefore preserves the existing catalog
+and its usable local progress. No command generates a state image, so normal and catalog-only
+flashing physically preserve the `study_state` bytes. Those records replay only when the state
+catalog ID matches the active catalog; changing the database content, selected user, seed, or
+projected card content can produce a new ID and intentionally starts fresh progress. `idf.py
+erase-flash` is intentionally different: it erases the entire device, including local ratings.
+
+Generated catalog images contain source card content, are untracked local artifacts, and must not
+be committed or redistributed without a separate rights review.
+
+The two-bank state journal normally programs one verified 20-byte record without erasing. A torn
+tail is ignored on replay, but that partially programmed NOR slot cannot be reused; the next grade
+recovers by compacting current summaries into the inactive bank. Repeated power cuts at that point
+can therefore cause earlier compactions and extra erase wear without ever making a torn record
+authoritative. The complete wear/power-loss policy is in [board-hardware.md](board-hardware.md#offline-catalog-and-rating-flash).
+
 ```bash
 idf.py build
 ./tools/flash.sh                 # or, by hand:
@@ -160,7 +191,10 @@ an I2C device means finding two free pins first — see [pinout.md](pinout.md).
 idf.py set-target esp32s3        # target
 idf.py menuconfig                # configuration
 idf.py build                     # build
+idf.py catalog_image             # generate/verify the offline catalog artifact
+idf.py catalog-flash             # update only the catalog partition
 idf.py -p <PORT> flash monitor   # flash + monitor
+idf.py app-flash                 # firmware only; preserve catalog + usable progress
 idf.py fullclean                 # clean the build cache
 idf.py size                      # memory usage
 idf.py add-dependency "<comp>"   # add a component

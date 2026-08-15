@@ -92,3 +92,42 @@ Setting it widens every glyph descriptor in the build from 8 bytes to 16, which 
 faces about 213 KB between them. It fails loudly — `lv_font_conv` writes an `#error` into the
 generated file — but only if your `sdkconfig` was regenerated after the option landed in
 `sdkconfig.defaults`; see [esp-idf-development.md](esp-idf-development.md#sdkconfigdefaults-is-read-once-and-only-once).
+
+## Offline catalog and rating flash
+
+The 16 MiB flash ends with two raw 4 KiB-aligned partitions after the 8 MiB
+factory application: the read-only `catalog` partition occupies `0x810000`–
+`0xF7FFFF` (7.44 MiB), and writable `study_state` occupies `0xF80000`–
+`0xFFFFFF` (512 KiB). The catalog is block-compressed and decoded through
+PSRAM workspaces with a normal-heap fallback; only one compressed block, one
+96 KiB raw block, and the compact per-card rating summaries are resident.
+
+Configure the catalog source when the sibling backend is not at the default
+path, then generate or flash it with ESP-IDF 5.4.3:
+
+```sh
+idf.py -DKANJI_CATALOG_DB=/absolute/path/to/kanjis-backend.sqlite3 catalog_image
+idf.py catalog-flash
+```
+
+`KANJI_CATALOG_USER_ID` optionally selects a source user and
+`KANJI_CATALOG_SEED` defaults to `0`. A normal `idf.py flash` depends on the
+same deterministic generator and registers the resulting image only for the
+`catalog` partition. `idf.py app-flash` updates firmware without updating the
+catalog. There is deliberately no generated or registered `study_state`
+image, so ordinary firmware/catalog flashing physically leaves those bytes
+untouched. App-only flashing also preserves the catalog and therefore its
+usable progress. After a catalog update, records replay only when the stored
+catalog ID matches the active catalog; an ID change starts fresh progress
+without erasing the old state bytes. `idf.py erase-flash` still erases the
+entire device.
+
+Rating persistence uses two 256 KiB append-journal banks. A normal grade
+programs one verified 20-byte record without an erase. A torn tail is ignored
+on replay; because partially programmed NOR bytes cannot be reused, the next
+grade compacts the latest summary for each reviewed card into the inactive
+bank. Ordinary compaction happens when a bank fills, commits the replacement
+bank before the old bank is erased, and therefore trades an occasional full
+bank erase/write for power-loss recovery. Repeated power cuts during record
+writes can trigger earlier compactions and additional erase wear, but never
+make a torn record authoritative.

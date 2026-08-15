@@ -1,0 +1,109 @@
+{
+  "decks": [
+    {
+      "id": "deck-n2-kanji",
+      "name": "JLPT N2 Kanji",
+      "level": "N2",
+      "deck_type": "kanji",
+      "cards": [
+        {
+          "id": "wealth",
+          "front": "財",
+          "back": {
+            "kanji": "財",
+            "meaning": {"gloss": "재물 재", "senses": ["재물", "재산"]},
+            "on_yomi": [{"reading": "ザイ"}, {"reading": "サイ"}],
+            "kun_yomi": [],
+            "shape_explanation": "조개 패(貝)는 값진 물건을, 재주 재(才)는 재능을 뜻한다. 두 모양이 합쳐져 재물과 자산이라는 뜻이 되었다."
+          },
+          "hint": {
+            "principle": "형성",
+            "reason": "조개처럼 모은 재물과 타고난 재능을 함께 떠올리면 財를 오래 기억할 수 있다.",
+            "shapes": [
+              {"kanji": "財", "meaning": "재물", "reading": "ザイ"},
+              {"kanji": "貝", "meaning": "조개·재물", "reading": "カイ"},
+              {"kanji": "才", "meaning": "재능", "reading": "サイ"}
+            ]
+          },
+          "tags": ["N2"],
+          "image_url": "https://example.invalid/wealth.png",
+          "comments": [{"body": "excluded"}],
+          "session": {"due": 1}
+        },
+        {
+          "id": "study",
+          "front": "勉強",
+          "back": {
+            "kanji": "勉強",
+            "meaning": {"gloss": "공부", "senses": ["공부", "학습"]},
+            "on_yomi": [{"reading": "べんきょう"}],
+            "kun_yomi": [],
+            "shape_explanation": "勉과 強이 만나 힘써 배우는 일을 나타낸다."
+          },
+          "hint": {
+            "reason": "힘을 내어 배우는 모습을 기억한다.",
+            "shapes": [
+              {"kanji": "勉", "meaning": "힘쓰다", "reading": "ベン"},
+              {"kanji": "免", "meaning": "면하다", "reading": "メン"},
+              {"kanji": "強", "meaning": "강하다", "reading": "キョウ"}
+            ]
+          },
+          "tags": ["N2"]
+        },
+        {
+          "id": "punish",
+          "front": "懲らしめる",
+          "back": {
+            "kanji": "懲",
+            "meaning": {"gloss": "징계하다", "senses": ["혼내다"]},
+            "on_yomi": [],
+            "kun_yomi": [{"reading": "こらしめる"}],
+            "shape_explanation": "徴와 心이 합쳐져 마음을 바로잡도록 혼낸다는 뜻을 이룬다."
+          },
+          "hint": {
+            "reason": "마음을 다잡게 하는 장면을 떠올린다.",
+            "shapes": [
+              {"kanji": "徴", "meaning": "부르다", "reading": "チョウ"},
+              {"kanji": "心", "meaning": "마음", "reading": "シン"}
+            ]
+          },
+          "tags": ["N2"]
+        }
+      ]
+    },
+    {
+      "id": "deck-n5-vocab",
+      "name": "JLPT N5 Vocabulary",
+      "level": "N5",
+      "deck_type": "vocab",
+      "cards": [
+        {
+          "id": "mountain",
+          "front": "山",
+          "back": {
+            "kanji": "山",
+            "meaning": {"gloss": "산", "senses": ["산"]},
+            "on_yomi": [{"reading": "サン"}],
+            "kun_yomi": [{"reading": "やま"}],
+            "shape_explanation": "봉우리 셋이 솟은 산의 모습을 본떴다."
+          },
+          "hint": {"principle": "상형", "reason": "세 봉우리를 본다.", "shapes": []},
+          "tags": ["N5"]
+        },
+        {
+          "id": "river",
+          "front": "川",
+          "back": {
+            "kanji": "川",
+            "meaning": {"gloss": "내", "senses": ["강", "내"]},
+            "on_yomi": [{"reading": "セン"}],
+            "kun_yomi": [{"reading": "かわ"}],
+            "shape_explanation": "물이 세 갈래로 흐르는 모습을 본떴다."
+          },
+          "hint": {"principle": "상형", "reason": "흐르는 세 물줄기를 본다.", "shapes": []},
+          "tags": ["N5"]
+        }
+      ]
+    }
+  ]
+}

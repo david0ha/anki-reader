@@ -23,6 +23,8 @@
 #define S_BADGE_DEMO       "DEMO"
 #define S_BADGE_STALE      "오래됨"
 #define S_BADGE_OFFLINE    "오프라인"
+#define S_RAIL_COMPLETE    "완료"
+#define S_RAIL_EMPTY       "없음"
 #define S_NO_DATA          "데이터 없음"
 #define S_WAITING          "불러오는 중..."
 
@@ -30,43 +32,59 @@
 #define S_STREAK           "연속"
 #define S_REVIEWED_TODAY   "오늘"
 #define S_TRACK            "TRK"
+#define S_BATTERY          "배터리"
 
-/* --- the footer key legend ------------------------------------------------
- * The three labels are supplied by kanji_nav.c per screen — a fixed legend on
- * a board whose KEY0 means 정답 on one screen and 등급 on the next is a lie
- * printed in 16 px. These are the fixed parts around them. */
+/* --- the key legend --------------------------------------------------------
+ * There is no footer legend strip any more: the answer face's dock IS the
+ * legend, because each of its four cells prints the button that commits it. The
+ * key caps name the physical controls as 1 / 2 / 3 / i. */
 
-#define S_KEY0             "KEY0"
-#define S_KEY1             "KEY1"
-#define S_KEY2             "KEY2"
-#define S_BOOT             "BOOT"
+#define S_KEY0             "1"
+#define S_KEY1             "2"
+#define S_KEY2             "3"
+#define S_BOOT             "i"
 #define S_KEY_REFRESH      "새로고침"
 #define S_KEY_WIFI         "길게 Wi-Fi"
 
-/* kanji_nav.c's per-screen legend, and the screen names beside them. */
-#define S_HINT_REVEAL      "정답"
-#define S_HINT_DESC        "설명"
-#define S_HINT_FSRS        "FSRS"
-#define S_HINT_GRADE       "등급"
-#define S_HINT_COMMIT      "확정"
-#define S_HINT_PAGE        "다음 쪽"
-#define S_HINT_CLOSE       "닫기"
-#define S_HINT_TAB         "다음 탭"
+/* kanji_nav.c's per-face legend. The four ratings a press commits are not here:
+ * the dock reads them through kanji_button_grade() from kanji_model.c's own
+ * table, so the glass and the state machine cannot drift apart. */
+#define S_HINT_REVEAL      "정답 보기"
+
+/* What the legend says between a grade being pressed and the next card arriving. Grading is an
+ * HTTP round trip to a laptop that may be asleep, so this state is measured in seconds and the
+ * board has to say something honest during it rather than appear to have ignored the press. */
+#define S_HINT_WAIT        "채점 중"
 
 #define S_SCREEN_QUESTION  "문제"
 #define S_SCREEN_ANSWER    "정답"
-#define S_SCREEN_DESC      "설명"
-#define S_SCREEN_COMMENTS  "댓글"
-#define S_SCREEN_FSRS      "FSRS"
 
 /* --- the question screen -------------------------------------------------- */
 
-#define S_TAP_TO_REVEAL    "KEY0 을 눌러 정답 보기"
+#define S_TAP_TO_REVEAL    "정답 보기"
+#define S_NO_DATA_SUB      "새로고침으로 다시 확인해 주세요."
 #define S_NEW_CARD         "새 카드"
-#define S_LEFT_NEW         "새로 배울"
-#define S_LEFT_REVIEW      "복습할"
-#define S_RETRY            "다시 볼"
+#define S_LEFT_NEW         "새"
+#define S_LEFT_REVIEW      "복습"
+#define S_RETRY            "다시"
 #define S_UNIT_CARDS       "장"
+
+/* --- the eyebrows ----------------------------------------------------------
+ * Every block on the answer face opens with one of these over a hairline, and it is the single
+ * device that does most of the work of making a dense page read as designed rather than dumped.
+ *
+ * They are bilingual on purpose, and Korean·Japanese rather than Korean·English: the reader is
+ * a Korean speaker studying Japanese, so the second half of each label is itself a word worth
+ * having seen. 成り立ち is the word a Japanese dictionary uses for exactly this section, which
+ * is the kind of thing this board exists to teach incidentally.
+ *
+ * Set in the 16 px face with 2 px of tracking — see ui_eyebrow(). */
+#define S_EB_MEANING       "뜻 · いみ"
+#define S_EB_BUILD         "성립 · 成り立ち"
+#define S_EB_EXAMPLE       "예문 · れいぶん"
+#define S_EB_READING       "읽기 · よみ"
+#define S_EB_PARTS         "구성 · つくり"
+#define S_EB_MEMORY        "기억 · きおく"
 
 /* --- the answer screen ---------------------------------------------------- */
 
@@ -75,6 +93,23 @@
 #define S_EXAMPLE          "예문"
 #define S_GRADE_PROMPT     "이 카드, 얼마나 기억났나요?"
 
+#define S_ON_READING       "음독"
+#define S_KUN_READING      "훈독"
+
+/* The right rail's three figures. 안정 is deliberately not among them: at the backend's 0.9
+ * desired retention an FSRS interval is within a percent of the stability it came from, so the
+ * masthead's due span already prints that number and a rail row would print it twice. */
+#define S_STAT_REPS        "반복"
+#define S_STAT_LAPSES      "실패"
+#define S_STAT_DIFFICULTY  "난이도"
+
+/* The front's plate — the learner's own record with this card, which is the only thing besides
+ * Japanese that the question face is allowed to show. */
+#define S_PLATE_STATE      "단계"
+#define S_PLATE_REPS       "반복"
+#define S_PLATE_STABILITY  "안정"
+#define S_PLATE_LAPSES     "실패"
+
 /* The four FSRS ratings. kanji_model.c is the single table these belong to;
  * they are repeated here only so gen_fonts.py sees them. */
 #define S_GRADE_AGAIN      "다시"
@@ -82,62 +117,12 @@
 #define S_GRADE_GOOD       "보통"
 #define S_GRADE_EASY       "쉬움"
 
-/* --- the 설명 sheet -------------------------------------------------------- */
-
-#define S_SHEET_DESC       "설명"
-#define S_SHAPE            "글자의 유래"
-#define S_HOOK_DEFAULT     "기억 힌트"
-#define S_PARTS            "구성 요소"
-#define S_NO_DESC          "이 카드에는 설명이 없습니다."
-
-/* --- the 댓글 sheet -------------------------------------------------------- */
-
-#define S_SHEET_COMMENTS   "댓글"
-#define S_LIKES            "좋아요"
-#define S_NO_COMMENTS      "아직 댓글이 없습니다."
-#define S_COMMENT_MORE     "외"
-
-/* --- the FSRS sheet -------------------------------------------------------
- * Three pages the learner can actually read on a 648x480 panel. The board is
- * the only place this scheduler is ever explained — the web app shows the
- * numbers but never says what they mean — so the copy is deliberately plain and
- * deliberately about THIS card, not about the algorithm in the abstract. */
-
-#define S_SHEET_FSRS       "FSRS 복습 일정"
-
-#define S_FSRS_P1_TITLE    "FSRS 가 뭔가요?"
-#define S_FSRS_P1_BODY \
-    "카드를 언제 다시 보여줄지 정하는 알고리즘입니다. 지금까지의 복습 " \
-    "기록에서 이 카드의 기억 강도와 어려움을 추정하고, 기억할 확률이 " \
-    "목표치(기본 90%)까지 떨어지는 날에 다시 꺼내 줍니다.\n\n" \
-    "그래서 잘 외운 카드는 점점 뜸하게, 자꾸 틀리는 카드는 자주 " \
-    "나옵니다. 매일 전부 보는 것보다 훨씬 적게 보고도 더 오래 남습니다."
-
-#define S_FSRS_P2_TITLE    "세 가지 숫자"
-#define S_FSRS_P2_BODY \
-    "안정성 - 기억이 목표 확률까지 떨어지는 데 걸리는 날수. 맞힐수록 " \
-    "길어집니다.\n\n" \
-    "난이도 - 이 카드가 나에게 얼마나 까다로운지. 높을수록 간격이 " \
-    "천천히 늘어납니다.\n\n" \
-    "상태 - 새 카드에서 학습 중을 거쳐 복습으로 올라갑니다. 복습 중에 " \
-    "다시를 누르면 다시 학습으로 내려갑니다."
-
-#define S_FSRS_P3_TITLE    "어떤 평가를 고를까"
-#define S_FSRS_P3_BODY \
-    "다시 - 못 떠올렸다. 오늘 안에 또 나옵니다.\n" \
-    "어려움 - 겨우 떠올렸다. 간격이 조금만 늘어납니다.\n" \
-    "보통 - 떠올렸다. 기본값입니다.\n" \
-    "쉬움 - 바로 떠올렸다. 간격이 크게 늘어납니다.\n\n" \
-    "버튼 옆의 시간이, 그 평가를 골랐을 때 이 카드를 다시 보게 될 " \
-    "시점입니다. 고민하지 말고 방금의 느낌대로 고르세요."
-
-#define S_FSRS_THIS_CARD   "이 카드"
-#define S_FSRS_STATE       "상태"
-#define S_FSRS_STABILITY   "안정성"
-#define S_FSRS_DIFFICULTY  "난이도"
-#define S_FSRS_REPS        "복습"
-#define S_FSRS_LAPSES      "실수"
-#define S_FSRS_DUE         "다음"
+/* --- the units the figures are composed with -------------------------------
+ * The rail's 반복 5회 and the plate's 안정 9일 are built with snprintf, so the
+ * unit is a string here rather than a literal at the call site — and the em dash
+ * is the whole of what an unknown figure prints. A row that vanished when the
+ * proxy sent no number would leave the plate a different height on every card;
+ * one that printed 0 would be a lie. */
 #define S_UNIT_DAYS        "일"
 #define S_UNIT_TIMES       "회"
 #define S_VALUE_UNKNOWN    "—"
@@ -160,6 +145,10 @@
 
 #define S_WIFI_TITLE       "Wi-Fi 설정"
 #define S_RESTARTING       "재시작 중..."
+#define S_WIFI_CONNECTING  "Wi-Fi 연결 중\n%s"
+#define S_WIFI_CONNECTED   "Wi-Fi 연결됨\n%s"
+#define S_WIFI_PORTAL      "1. Wi-Fi에 연결하세요:\n%s\n\n2. 연결을 유지한 뒤 안내된 페이지를 여세요."
+#define S_WIFI_SAVED       "\"%s\" 저장됨\n%s"
 
 /* Every character that only ever appears in a runtime-composed string —
  * snprintf'd digits, separators, units. gen_fonts.py folds this into the face

@@ -111,7 +111,8 @@ DEFAULT_API_BASE = "https://api.kanjis.ai/api/v1"
 # (6,169 of them a shortened shape explanation, 1,772 a shortened memory hook).
 _BUFFERS = ("KANJI_FRONT_MAX", "KANJI_READING_MAX", "KANJI_SENSE_MAX",
             "KANJI_LABEL_MAX", "KANJI_DECK_MAX", "KANJI_ID_MAX",
-            "KANJI_BODY_MAX", "KANJI_AUTHOR_MAX", "KANJI_COMMENT_MAX")
+            "KANJI_BODY_MAX", "KANJI_FORMULA_MAX", "KANJI_AUTHOR_MAX",
+            "KANJI_COMMENT_MAX")
 _COUNTS = ("KANJI_SENSES_MAX", "KANJI_EXAMPLES_MAX", "KANJI_PARTS_MAX",
            "KANJI_COMMENTS_MAX")
 
@@ -148,6 +149,7 @@ LABEL_MAX = CAPS["KANJI_LABEL_MAX"] - 1
 DECK_MAX = CAPS["KANJI_DECK_MAX"] - 1
 ID_MAX = CAPS["KANJI_ID_MAX"] - 1
 BODY_MAX = CAPS["KANJI_BODY_MAX"] - 1
+FORMULA_MAX = CAPS["KANJI_FORMULA_MAX"] - 1
 AUTHOR_MAX = CAPS["KANJI_AUTHOR_MAX"] - 1
 COMMENT_MAX = CAPS["KANJI_COMMENT_MAX"] - 1
 
@@ -175,10 +177,6 @@ STATE_LABELS = {
     "review": "복습",
     "relearning": "다시 학습",
 }
-
-# hint.principle is often absent; S_HOOK_DEFAULT is what the panel shows then,
-# and kanjis-front's toMemoryHook() uses the same string for the same reason.
-HOOK_DEFAULT = "기억 힌트"
 
 # The level chip when no JLPT filter is active.
 LEVEL_ALL = "전체"
@@ -425,12 +423,12 @@ def card_senses(back, limit=SENSES_MAX):
     return [clip(s, SENSE_MAX) for s in senses[:limit]]
 
 
-def card_parts(hint, limit=PARTS_MAX):
-    """`hint.shapes[]` as the panel's 구성 요소 rows.
+def raw_card_parts(hint):
+    """Every usable source component without display clipping.
 
     `reading` is canonically required and missing on a few thousand rows
     (the backend's own audit calls it legacy_shape_without_reading), so it is
-    treated as optional here exactly as cardHintSchema treats it.
+    kept as an empty field rather than fabricated or dropped.
     """
     shapes = hint.get("shapes")
     if not isinstance(shapes, list):
@@ -443,13 +441,92 @@ def card_parts(hint, limit=PARTS_MAX):
         if not isinstance(glyph, str) or not glyph:
             continue
         out.append({
-            "glyph": clip(glyph, FRONT_MAX),
-            "meaning": clip(shape.get("meaning") or "", SENSE_MAX),
-            "reading": clip(shape.get("reading") or "", READING_MAX),
+            "glyph": glyph,
+            "meaning": shape.get("meaning") if isinstance(shape.get("meaning"), str) else "",
+            "reading": shape.get("reading") if isinstance(shape.get("reading"), str) else "",
         })
-        if len(out) >= limit:
-            break
     return out
+
+
+def card_parts(hint, limit=PARTS_MAX):
+    """`hint.shapes[]` as the panel's bounded 구성 요소 rows."""
+    return [{
+        "glyph": clip(part["glyph"], FRONT_MAX),
+        "meaning": clip(part["meaning"], SENSE_MAX),
+        "reading": clip(part["reading"], READING_MAX),
+    } for part in raw_card_parts(hint)[:limit]]
+
+
+def safe_composition(front, composition_kanji, parts):
+    """Return a structural equation and its displayed component rows.
+
+    A single-kanji source often repeats itself in `hint.shapes`; that row is
+    not a constituent. A compound source can list every sub-radical, so only
+    its top-level headword characters remain. No semantic role is guessed.
+    """
+    target = composition_kanji if isinstance(composition_kanji, str) else ""
+    if not target:
+        target = front if isinstance(front, str) else ""
+    if not target:
+        return "", []
+    clean = [part for part in parts if isinstance(part, dict) and
+             isinstance(part.get("glyph"), str) and part["glyph"]]
+    if len(target) == 1:
+        selected = [part for part in clean if part["glyph"] != target]
+    else:
+        selected = [part for part in clean if part["glyph"] in target]
+    equation = " + ".join(part["glyph"] for part in selected)
+    return (f"{equation} = {target}" if equation else ""), selected
+
+
+def _project_card_content(card, back, hint):
+    """Project one card after its two JSON columns have been decoded."""
+    on = _readings(back, "on_yomi")
+    kun = _readings(back, "kun_yomi")
+    meaning = back.get("meaning") if isinstance(back.get("meaning"), dict) else {}
+    kanji = back.get("kanji") if isinstance(back.get("kanji"), str) else ""
+    front = card.get("front") if isinstance(card.get("front"), str) else ""
+    front = front or kanji
+    raw_parts = raw_card_parts(hint)
+    composition, _ = safe_composition(front, kanji or front, raw_parts)
+    raw_gloss = meaning.get("gloss")
+    gloss = raw_gloss.strip() if isinstance(raw_gloss, str) else ""
+    raw_senses = meaning.get("senses") if isinstance(meaning.get("senses"), list) else []
+    senses = [sense.strip() for sense in raw_senses
+              if isinstance(sense, str) and sense.strip()]
+    if not senses and gloss:
+        senses = [gloss]
+    if not gloss and senses:
+        gloss = senses[0]
+    on_reading = primary_reading(on, [])
+    kun_reading = primary_reading(kun, [])
+    principle = hint.get("principle") if isinstance(hint.get("principle"), str) else ""
+    reason = hint.get("reason") if isinstance(hint.get("reason"), str) else ""
+    description = back.get("shape_explanation") if isinstance(back.get("shape_explanation"), str) else ""
+    tags = card.get("tags") if isinstance(card.get("tags"), list) else []
+    level = next((tag for tag in tags if isinstance(tag, str) and JLPT_TAG.match(tag)), "")
+    return {
+        "id": card.get("id") if isinstance(card.get("id"), str) else "",
+        "front": front,
+        "reading": primary_reading(on, kun),
+        "on_reading": on_reading,
+        "kun_reading": kun_reading,
+        "level": level,
+        "gloss": gloss,
+        "senses": senses,
+        "description": description,
+        "hook_title": principle,
+        "hook_body": reason,
+        "composition": composition,
+        "parts": raw_parts,
+    }
+
+
+def project_card_content(card):
+    """The complete card-only catalog record, parsed once and never clipped."""
+    card = card if isinstance(card, dict) else {}
+    return _project_card_content(card, parse_json_column(card.get("back")),
+                                 parse_json_column(card.get("hint")))
 
 
 def jlpt_level(tags):
@@ -562,31 +639,29 @@ def flatten_card(card, rating_preview=None, comments=(), comment_total=None, now
     card = card if isinstance(card, dict) else {}
     back = parse_json_column(card.get("back"))
     hint = parse_json_column(card.get("hint"))
+    content = _project_card_content(card, back, hint)
     on = _readings(back, "on_yomi")
     kun = _readings(back, "kun_yomi")
 
-    principle = hint.get("principle")
-    principle = principle.strip() if isinstance(principle, str) else ""
-    reason = hint.get("reason")
-    reason = reason.strip() if isinstance(reason, str) else ""
-
-    kanji = back.get("kanji")
-    front = card.get("front") or (kanji if isinstance(kanji, str) else "") or ""
-
     return {
-        "id": clip(card.get("id") or "", ID_MAX),
-        "front": clip(front, FRONT_MAX),
-        "reading": clip(primary_reading(on, kun), READING_MAX),
-        "level": jlpt_level(card.get("tags")),
-        "senses": card_senses(back),
+        "id": clip(content["id"], ID_MAX),
+        "front": clip(content["front"], FRONT_MAX),
+        "reading": clip(content["reading"], READING_MAX),
+        "on_reading": clip(content["on_reading"], READING_MAX),
+        "kun_reading": clip(content["kun_reading"], READING_MAX),
+        "level": clip(content["level"], LABEL_MAX),
+        "gloss": clip(content["gloss"], SENSE_MAX),
+        "senses": [clip(sense, SENSE_MAX) for sense in content["senses"][:SENSES_MAX]],
         "examples": card_examples(on, kun),
-        "description": clip(back.get("shape_explanation") or "", BODY_MAX),
-        # toMemoryHook() drops the hook entirely when there is no reason; the
-        # panel keeps the heading, because the 설명 sheet's third block is a
-        # fixed row and an empty title there is a hole rather than an absence.
-        "hook_title": clip(principle or HOOK_DEFAULT, LABEL_MAX),
-        "hook_body": clip(reason, BODY_MAX),
-        "parts": card_parts(hint),
+        "description": clip(content["description"], BODY_MAX),
+        "hook_title": clip(content["hook_title"], LABEL_MAX),
+        "hook_body": clip(content["hook_body"], BODY_MAX),
+        "composition": clip(content["composition"], FORMULA_MAX),
+        "parts": [{
+            "glyph": clip(part["glyph"], FRONT_MAX),
+            "meaning": clip(part["meaning"], SENSE_MAX),
+            "reading": clip(part["reading"], READING_MAX),
+        } for part in content["parts"][:PARTS_MAX]],
         "comments": list(comments),
         "comment_total": clamp(len(comments) if comment_total is None else comment_total,
                                0, REPS_MAX),

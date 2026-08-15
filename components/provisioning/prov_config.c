@@ -25,7 +25,7 @@ prov_cred_result_t prov_validate_credentials(const char *ssid, const char *passw
 bool prov_validate_study_url(const char *url)
 {
     if (url == NULL || url[0] == '\0') {
-        return true;                      // empty == run on the demo snapshot
+        return true;                      // empty == offline catalog (demo only if unavailable)
     }
     if (strlen(url) > PROV_URL_MAX_LEN) {
         return false;

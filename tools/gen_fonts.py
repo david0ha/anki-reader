@@ -31,15 +31,15 @@ blocks. Those are curated in ui_strings.h's S_DATA_RADICALS, which this reads
 along with the rest of that file — see the comment there for what is in it, what
 is deliberately not, and why.
 
-Why two source fonts
---------------------
-Neither Noto face can do this alone. Noto Sans KR is missing 289 of the 2965
-JIS level 1 kanji and 631 of the 3390 level 2 kanji — the 新字体 forms with no
-Korean-hanja counterpart (唖, 圧, 営, 鴎 ...). Noto Sans JP has every one of them
-and not a single Hangul syllable. So each face is converted from both, with the
-symbol set split into two disjoint groups: Hangul, ASCII and Latin typography
-come from Noto Sans KR, and everything that is Japanese script — kana, kanji and
-the JIS punctuation row — comes from Noto Sans JP.
+Why the source fonts are split
+------------------------------
+Neither Sans body source can do this alone. Noto Sans KR is missing 289 of the
+2965 JIS level 1 kanji and 631 of the 3390 level 2 kanji — the 新字体 forms with
+no Korean-hanja counterpart (唖, 圧, 営, 鴎 ...). Noto Sans JP has every one of
+them and not a single Hangul syllable. So each face is converted from both, with
+the symbol set split into two disjoint groups: Hangul, ASCII and Latin
+typography come from Noto Sans KR, and everything that is Japanese script —
+kana, kanji and the JIS punctuation row — comes from Noto Sans JP.
 
 The split is a partition on purpose, and this is the part worth knowing about
 lv_font_conv: when two `--font` groups claim the same codepoint, **the last one
@@ -67,25 +67,26 @@ Sizes
 four times the flash to produce pixels that are then thresholded straight back to
 black and white.
 
-Measured with xtensa-esp32s3-elf-size on the objects the IDF build produces, the
-four faces are 395, 541 and 874 KiB and 2.16 MiB of .rodata — 3.93 MiB of the
-8 MiB factory partition. The hero is why the build needs LV_FONT_FMT_TXT_LARGE:
-LVGL otherwise packs a glyph's bitmap offset into 20 bits, which caps one face at
-1 MB of bitmap, and the hero's is 2.13 MB. Without the option the compiler stops
-on an #error lv_font_conv writes into the file, so this is a loud requirement,
-not a trap.
+The hero is why the build needs LV_FONT_FMT_TXT_LARGE: LVGL otherwise packs a
+glyph's bitmap offset into 20 bits, which caps one face at 1 MB of bitmap, and
+the hero's bitmap is over 2 MiB. Without the option the compiler stops on an
+#error lv_font_conv writes into the file, so this is a loud requirement, not a
+trap.
 
-`ui_font_jp_56` is Japanese script and ASCII, no Hangul: 완성형 at 56 px would be
-another 790 KB of flash for glyphs a Japanese headword cannot contain, where the
-95 ASCII it does carry cost 16 KiB and 133 real cards.
+`ui_font_jp_56` is Japanese script and ASCII from Noto Serif JP SemiBold, no
+Hangul: 완성형 at 56 px would be another 790 KB of flash for glyphs a Japanese
+headword cannot contain, where the 95 ASCII it does carry cost 16 KiB and 133
+real cards. The serif is reserved for this display face; the 16 px body stays
+Sans because thin serif strokes disappear when the panel binarizes them.
 
 Usage
 -----
-    python3 tools/gen_fonts.py --download        # fetch all four Noto weights
+    python3 tools/gen_fonts.py --download        # fetch all five Noto sources
     python3 tools/gen_fonts.py --kr-regular /path/NotoSansKR-Regular.otf \\
                                --kr-medium  /path/NotoSansKR-Medium.otf \\
                                --jp-regular /path/NotoSansJP-Regular.otf \\
-                               --jp-medium  /path/NotoSansJP-Medium.otf
+                               --jp-medium  /path/NotoSansJP-Medium.otf \\
+                               --jp-serif-semibold /path/NotoSerifJP-SemiBold.otf
     python3 tools/gen_fonts.py --dry-run         # report the symbol set only
 
 Needs node/npx (it shells out to lv_font_conv). The generated .c files are
@@ -106,16 +107,16 @@ CORE = os.path.join(ROOT, "components", "vault_core")
 FONTDIR = os.path.join(CORE, "fonts")
 STRINGS_H = os.path.join(CORE, "include", "ui_strings.h")
 
-# Noto Sans KR / JP — SIL Open Font License 1.1, so the generated bitmaps are
-# redistributable with this repo. Sans faces on purpose: this panel is 1-bit,
-# and at 16 px after binarization a serif's thin strokes drop out. The two
-# families are cuts of the same Source Han Sans design, so a line of Korean and
-# a line of Japanese sit on the same baseline with the same colour.
+# Noto Sans KR / JP and Noto Serif JP — SIL Open Font License 1.1, so the
+# generated bitmaps are redistributable with this repo. Body faces stay Sans:
+# this panel is 1-bit, and at 16 px after binarization a serif's thin strokes
+# drop out. The hero alone uses the Serif SemiBold display face at 56 px.
 FONT_URLS = {
     "kr-regular": "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/KR/NotoSansKR-Regular.otf",
     "kr-medium":  "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/KR/NotoSansKR-Medium.otf",
     "jp-regular": "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf",
     "jp-medium":  "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/JP/NotoSansJP-Medium.otf",
+    "jp-serif-semibold": "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/SubsetOTF/JP/NotoSerifJP-SemiBold.otf",
 }
 LICENSE_URL = "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/LICENSE"
 LV_FONT_CONV_VERSION = "1.5.3"
@@ -274,18 +275,16 @@ def symbol_set():
 
 
 # name -> (size, sources, symbols). The three body faces are merged from both
-# families; the hero is one family, because everything it draws is Japanese.
+# Sans families; the hero is one Serif family, because everything it draws is
+# Japanese.
 #
 # Weights follow the existing hierarchy — Regular for reading text, Medium for
-# headings — except the hero, which stays Regular despite being the largest
-# thing on the panel: rendered at 56 px 1 bpp, Medium closes a counter shut on 7
-# of a 377-glyph level-2 sample (逑, 敲, 癲 ...) where Regular closes none, and
-# the hero's one job is a single large legible glyph.
+# headings, and Serif SemiBold for the display-sized hero.
 FACES = {
     "ui_font_kr_16": (16, ("kr-regular", "jp-regular"), symbol_set),
     "ui_font_kr_20": (20, ("kr-medium",  "jp-medium"),  symbol_set),
     "ui_font_kr_28": (28, ("kr-medium",  "jp-medium"),  symbol_set),
-    "ui_font_jp_56": (56, ("jp-regular",),              hero_set),
+    "ui_font_jp_56": (56, ("jp-serif-semibold",),      hero_set),
 }
 
 
@@ -474,8 +473,10 @@ def main():
     ap.add_argument("--kr-medium", help="path to NotoSansKR-Medium.otf")
     ap.add_argument("--jp-regular", help="path to NotoSansJP-Regular.otf")
     ap.add_argument("--jp-medium", help="path to NotoSansJP-Medium.otf")
+    ap.add_argument("--jp-serif-semibold",
+                    help="path to NotoSerifJP-SemiBold.otf")
     ap.add_argument("--download", action="store_true",
-                    help="fetch the four Noto Sans KR/JP weights into a temp dir")
+                    help="fetch the five Noto Sans/Serif sources into a temp dir")
     ap.add_argument("--dry-run", action="store_true",
                     help="report the symbol set and stop")
     args = ap.parse_args()
@@ -503,6 +504,7 @@ def main():
         "kr-medium": args.kr_medium,
         "jp-regular": args.jp_regular,
         "jp-medium": args.jp_medium,
+        "jp-serif-semibold": args.jp_serif_semibold,
     }
     missing = [k for k, p in sources.items() if not p]
     if missing:

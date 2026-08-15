@@ -23,7 +23,7 @@ this LAN".
 | GET | `/api/state` | — | the whole board summary |
 | POST | `/api/refresh` | — | poll the study source now |
 | POST | `/api/screen` | `{"screen":0..4}` | put the board on one of the five screens |
-| POST | `/api/study` | `{"url":"http://..."}` | change the study URL (persisted, live) |
+| POST | `/api/study` | `{"url":"http://..."}` or `{"url":""}` | select a remote source or restore the offline catalog (persisted, live) |
 | POST | `/api/display/test` | — | run the e-Paper self-test sweep |
 
 Writes reply `{"ok":true}`, or `{"ok":false,"error":"<code>"}` with a 400. Error codes:
@@ -131,7 +131,7 @@ is revealed and `문제` if it is not.
 | Field | Type | Notes |
 |---|---|---|
 | `valid` | bool | `false` = the session served no card. The board shows the completion screen; it does not blank. |
-| `demo` | bool | This is `kanji_mock.c`'s built-in card, because no study URL is configured. |
+| `demo` | bool | This is `kanji_mock.c`'s built-in fallback because the offline catalog is missing or corrupt. An empty URL normally selects the catalog, not this card. |
 | `front` | string | The headword. |
 | `reading` | string | The かな reading. |
 | `meaning` | string | The **first** sense only. The panel shows up to three. |
@@ -163,7 +163,7 @@ than a timestamp. Do not try to parse it into a date — there is no instant beh
 
 | Field | Type | Notes |
 |---|---|---|
-| `url` | string | What the board polls. `""` = the built-in demo card. |
+| `url` | string | What the board polls. `""` = no remote polling; study from the offline catalog, with the demo only as its corrupt/missing fallback. |
 | `lastResult` | string | `ok`, `no_url`, `transport`, `http_status`, `bad_payload`. |
 | `pollSeconds` | int | The poll interval — 300 unless `CONFIG_OBSIDIAN_POLL_SECONDS` says otherwise. |
 | `ageSeconds` | int | Since the last **successful** fetch. **`-1` = never.** |
@@ -227,8 +227,9 @@ assuming the POST took — the board reports what it did, not what it was asked.
 {"url": "http://mymac.local:8123/kanji.json"}
 ```
 
-Validated, saved to NVS and applied live — no reboot. `""` switches the board back to the built-in
-demo card immediately rather than at the next poll, because with no URL there is no next poll.
+Validated, saved to NVS and applied live — no reboot. `""` switches the board back to its restored
+offline catalog card immediately rather than at the next poll, because with no URL there is no next
+poll. Only an unavailable or invalid catalog makes that transition land on the demo fallback.
 
 Any fetch already in flight against the old URL is discarded when it lands, so a slow response to
 the previous proxy cannot overwrite the first card from the new one.
@@ -255,7 +256,7 @@ curl -X POST http://obsidianboard.local/api/refresh
 curl -X POST http://obsidianboard.local/api/study \
      -d '{"url":"http://mymac.local:8123/kanji.json"}'
 
-# back to the built-in demo card (also stops polling after a reboot)
+# back to the persistent offline catalog (also stops polling after a reboot)
 curl -X POST http://obsidianboard.local/api/study -d '{"url":""}'
 
 # how long a refresh actually takes on this board
@@ -270,6 +271,12 @@ curl -s http://obsidianboard.local/api/state | jq '.session | "\(.track)/\(.trac
 Separate, and only up in AP mode — see
 [`components/provisioning/README.md`](../components/provisioning/README.md). The captive portal
 collects the Wi-Fi credentials and the study URL, saves them to NVS, and reboots.
+
+The board does not open that portal automatically. It boots and responds to buttons from the
+offline catalog even without credentials or after a failed saved-network join; hold KEY2 for five
+seconds to request setup. Offline grades are appended to `study_state`, but this v1 path neither
+uploads them nor computes wall-clock FSRS due dates. The HTTP API itself is available only after a
+successful Wi-Fi connection.
 
 ## Clients
 

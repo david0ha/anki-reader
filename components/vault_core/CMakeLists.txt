@@ -11,17 +11,18 @@ idf_component_register(
     SRCS
         "kanji_model.c"
         "kanji_parse.c"
+        "kanji_catalog.c"
+        "kanji_state.c"
         "kanji_mock.c"
         "kanji_service.c"
         "kanji_nav.c"
+        "kanji_clock.c"
+        "kanji_fsrs.c"
         "device_api_json.c"
         "ui_kanji.c"
         "ui_kanji_layout.c"
-        "ui_card_question.c"
-        "ui_card_answer.c"
-        "ui_sheet_desc.c"
-        "ui_sheet_comments.c"
-        "ui_sheet_fsrs.c"
+        "ui_card_front.c"
+        "ui_card_back.c"
         "ui_common.c"
         "ui_icons.c"
         "fonts/ui_font_kr_16.c"
@@ -42,3 +43,9 @@ idf_component_register(
 # this the generated faces in fonts/ are the only files in the project that
 # fail to compile.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
+
+# Card models are intentionally full-fidelity and therefore much larger than a
+# firmware task may keep by value.  Make every production translation unit
+# prove that future parser/UI changes do not put one back on an 8 KiB stack.
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Wframe-larger-than=2048 -Werror=frame-larger-than=2048 -fstack-usage)

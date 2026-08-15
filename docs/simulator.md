@@ -23,24 +23,24 @@ the glass. Without it, it renders `kanji_mock.c`.
 
 ## What it renders
 
-Sixteen shots, one per state the board can be in:
+Eighteen shots, one per state the board can be in:
 
 | | |
 |---|---|
-| `01-question` | the headword alone on the filled player |
-| `02-answer`, `03-answer-easy`, `04-answer-again` | the answer side with the grade cursor on three of its four ratings |
-| `04b-answer-three-examples` | the same side at full height — three 예문 rows AND the rating prompt, which is where they collided |
-| `05-description` | 설명 — the shape story, the memory hook, the components |
-| `06-comments`, `07-comments-page2` | 댓글, both pages |
-| `08-fsrs-1` … `10-fsrs-3` | the three fixed FSRS pages, each carrying the card's own numbers |
-| `11-session-complete` | 오늘 학습 완료 — no card, session counters intact |
-| `12-long-headword` | a headword too long for the 56 px hero, dropped to 28 px |
-| `12b-ascii-headword` | `~がたい` — a headword the Japanese-only hero face cannot draw, dropped to 28 px rather than rendered as tofu |
-| `13-offline` | the last card, badged 오프라인 |
-| `14-setup` | the Wi-Fi setup overlay |
+| `01-front`, `02-back` | the demo card, both faces |
+| `03-front-kanji`, `04-back-kanji` | a real kanji card (語), where 성립 and 구성 do their work — the demo card is a VOCAB card and honestly has no on-yomi, no principle and one component |
+| `05-back-again`, `06-back-easy` | a grade committed, reached through a real `kanji_nav_press()` |
+| `07-front-new-card`, `08-back-new-card` | a card with no history: the plate collapses to 새 카드 |
+| `09-front-no-examples` | the pull-quote and its ornament go together, or not at all |
+| `10-back-worst-case`, `11-front-worst-case` | every field at its model maximum in the widest glyph the body face has |
+| `12-front-offline`, `13-back-stale` | the two failure badges |
+| `14-session-complete` | 오늘 학습 완료 — no card, session counters intact |
+| `15-front-long-headword`, `16-back-long-headword` | too long for the 56 px hero, dropped to 28 px |
+| `17-setup` | the Wi-Fi setup overlay |
+| `18-no-data` | no snapshot at all |
 
-The last four are the ones worth looking at after a layout change. Three of them are failure states,
-and a failure state is exactly the screen nobody renders by hand before shipping.
+The worst case and the failure states are the ones worth looking at after a layout change: a failure
+state is exactly the screen nobody renders by hand before shipping.
 
 ## What it asserts
 
@@ -54,17 +54,36 @@ inverted, the hero has ink, the reveal prompt and the deck caption and the queue
 present, the action rail is drawn. The scrubber is checked at both ends: the demo card is 35 of 60,
 so the left third must be filled and the right end must not be.
 
-**The grade dock has exactly one filled cell, and it is the cursor's.** This is the check a
-screenshot cannot make. A dock with two black cells and a dock with one look equally plausible until
-the pixels are counted, and "the cursor did not move" and "the cursor moved and the old one did not
-clear" produce images a human eye reads as the same picture. The selected cell's label and span must
-survive the inversion (white on black); the unselected ones must not (black on white).
+**The page uses the panel.** The content area is divided into 16 px cells — one line of body type —
+and the cells carrying any ink at all are counted. This is deliberately NOT a measure of how black
+the page is, and the difference is the whole point: one-bit CJK type is thin, and the design this
+replaced was simultaneously *blacker* and *emptier* than the one that replaced it (7.9% ink at 39%
+occupancy, against 5.0% at 51%), because its dock filled a whole cell solid to show a cursor. Ink
+mass cannot tell a full page from a sparse one. The floors are calibrated to what they must catch:
+45% on the answer face fails if any one of its six blocks stops rendering.
+
+**No two visible labels share paper.** Pixels cannot catch this — black text over black text is
+still black, so two overlapping labels read as one slightly bold label. On a fourteen-block
+two-column page that is what happens the first time a block grows a line.
+
+**Nothing crosses a column.** Asserted against the widgets' own coordinates rather than the layout
+constants, because the fault being hunted is a renderer that ignored the rectangle it was given.
+
+**The question face does not leak the answer.** Every visible label on 문제 is searched for the
+card's `senses[]`, `parts[].meaning` and `examples[].gloss`. The last is the one that ships by
+accident: it reads as harmless context right up until it prints 우연히 만나다 under 会う.
+
+**The dock has exactly as many filled cells as there are grades in flight — one, or none.** A dock
+with two black cells and a dock with one look equally plausible until the pixels are counted. The
+filled cell's labels must survive the inversion (white on black); the others must not. The
+acknowledgement refresh is then XORed against the previous frame: pixels must change inside the dock
+rectangle and *zero* may change outside it.
 
 **Every string is drawable.** Every field of the snapshot — headword, reading, senses, examples,
-description, hook, parts, comment authors and bodies, FSRS labels, rating previews — is walked
-codepoint by codepoint against all three body faces. The three pages of FSRS copy from
-`ui_strings.h` go through the same check, because they are the longest fixed text on the board and
-the likeliest to contain a character no other literal does.
+description, hook, parts, FSRS labels, rating previews — is walked codepoint by codepoint against
+all three body faces. The bilingual eyebrows from `ui_strings.h` go through the same check, because
+they are the only fixed copy left on the answer face and the likeliest strings on the board to carry
+a character no other literal does: 成り立ち's 成 and 立 reach the face from nowhere else.
 
 The hero face gets its own pass. `kanji_hero_is_large()` picks it by *length*, so a headword the
 Japanese-only 56 px face cannot draw would otherwise be silently chosen for it — the coverage check,

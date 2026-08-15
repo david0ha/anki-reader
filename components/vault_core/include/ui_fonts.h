@@ -1,14 +1,14 @@
 /*
  * ui_fonts.h — the faces this board draws with.
  *
- * Source: Noto Sans KR and Noto Sans JP, Regular and Medium (SIL Open Font
- * License 1.1 — fonts/OFL.txt). Two families because the board draws two
- * scripts in one line: a Japanese headword with a Korean gloss under it. They
- * are cuts of the same Source Han Sans design, so the two halves of that line
- * share a baseline, a stroke weight and a colour. Sans and 1 bpp because the
- * panel binarizes everything: a serif's thin strokes drop out at 16 px, and
- * anti-aliasing would cost four times the flash to produce pixels that are then
- * thresholded straight back to black and white.
+ * Source: Noto Sans KR and Noto Sans JP, Regular and Medium, plus Noto Serif JP
+ * SemiBold for the hero (SIL Open Font License 1.1 — fonts/OFL.txt). The body
+ * families are cuts of the same Source Han Sans design, so Korean and Japanese
+ * text share a baseline, a stroke weight and a colour. Body text stays Sans
+ * because a serif's thin strokes drop out at 16 px after binarization; the
+ * Serif face is reserved for the 56 px display-sized headword. Every generated
+ * face remains 1 bpp because anti-aliasing would cost four times the flash for
+ * pixels the panel thresholds straight back to black and white.
  *
  * ## The body faces carry both scripts whole, on purpose
  *
@@ -44,8 +44,8 @@
  * ## The hero needs LV_FONT_FMT_TXT_LARGE
  *
  * LVGL packs a glyph's bitmap offset into 20 bits unless LV_FONT_FMT_TXT_LARGE
- * is set, which caps one face at 1 MB of bitmap. ui_font_jp_56 is 2.13 MB of
- * bitmap, so the build needs
+ * is set, which caps one face at 1 MB of bitmap. ui_font_jp_56 has over 2 MiB
+ * of bitmap data, so the build needs
  *
  *     CONFIG_LV_FONT_FMT_TXT_LARGE=y     (sdkconfig.defaults, for the firmware)
  *     #define LV_FONT_FMT_TXT_LARGE 1    (sim/lv_conf.h, for the simulator)
@@ -85,8 +85,8 @@ extern const lv_font_t ui_font_kr_20;
  * what makes falling back to it a real answer rather than a smaller tofu. */
 extern const lv_font_t ui_font_kr_28;
 
-/* The hero: the headword on the question and answer screens, at the size that
- * makes a card readable from across a room.
+/* The hero: the Noto Serif JP SemiBold headword on the question and answer
+ * screens, at the size that makes a card readable from across a room.
  *
  * Japanese script — kana, both kanji levels, the JIS punctuation row — plus the
  * whole printable ASCII range. ASCII because the catalog writes its bound forms

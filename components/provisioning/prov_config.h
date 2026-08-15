@@ -17,9 +17,9 @@ typedef struct {
     // this is a link between two machines on the user's own LAN, and requiring
     // a certificate for it would mean requiring a certificate authority.
     //
-    // Empty is supported: the board renders an explicitly labeled built-in
-    // demo card, so it is a finished object with no PC running. It cannot
-    // record what the learner answered, which is what the source is for.
+    // Empty selects the persistent offline catalog. The explicitly labeled
+    // built-in demo is only the final fallback when that catalog is missing
+    // or corrupt, so the board remains usable without a PC or network.
     char study_url[PROV_URL_MAX_LEN + 1];
 } prov_config_t;
 
@@ -41,8 +41,9 @@ typedef enum {
 // empty. An empty password is allowed (open networks); only an empty SSID is rejected.
 prov_cred_result_t prov_validate_credentials(const char *ssid, const char *password);
 
-// True if `url` is something the device can actually fetch: empty (meaning "use the demo
-// snapshot"), or an http:// or https:// URL with a host, within PROV_URL_MAX_LEN.
+// True if `url` is something the device can actually fetch: empty (meaning "use the offline
+// catalog, with the demo only as its corrupt/missing fallback"), or an http:// or https:// URL
+// with a host, within PROV_URL_MAX_LEN.
 //
 // Deliberately permissive about the rest — a hostname, an IP, a port, a path, a query string
 // are all fine. The point is to catch the two mistakes people actually make, which are pasting

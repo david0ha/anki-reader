@@ -64,6 +64,7 @@ void kanji_mock(kanji_t *k)
     memset(k, 0, sizeof *k);
     k->valid = true;
     k->demo  = true;
+    k->source = KANJI_SOURCE_DEMO;
 
     CP(k->session.deck, "JLPT N5 Vocabulary");
     CP(k->session.level, "N5");

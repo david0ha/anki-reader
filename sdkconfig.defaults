@@ -12,9 +12,9 @@ CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FREERTOS_HZ=1000
 
 # LVGL built-in Montserrat sizes. These cover every Latin glyph on screen: the
-# four headline counters (44), the header clock (28), and the small numerals in
-# the activity chart (14). Korean — including every note title that arrives over
-# the network — comes from the full 완성형 faces in components/vault_core/fonts/
+# utility labels and counters (18). Korean — including every note title that
+# arrives over the network — comes from the full 완성형 faces in
+# components/vault_core/fonts/
 # (see ui_fonts.h).
 # ui_font_jp_56 carries every kana and both JIS X 0208 kanji levels at 56 px.
 # Its bitmap table is past the 16-bit offset LVGL's compact glyph format can
@@ -24,10 +24,19 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_LV_FONT_FMT_TXT_LARGE=y
 
 # CONFIG_LV_FONT_MONTSERRAT_12 is not set
-CONFIG_LV_FONT_MONTSERRAT_14=y
+# CONFIG_LV_FONT_MONTSERRAT_14 is not set
+CONFIG_LV_FONT_MONTSERRAT_18=y
 # CONFIG_LV_FONT_MONTSERRAT_20 is not set
 # CONFIG_LV_FONT_MONTSERRAT_28 is not set
 # CONFIG_LV_FONT_MONTSERRAT_44 is not set
+CONFIG_LV_FONT_DEFAULT_MONTSERRAT_18=y
+
+# This firmware uses its own UI and no upstream LVGL example/demo entry point.
+# LVGL 9.5 enables both source sets by default in a non-minimal configuration;
+# compiling them needlessly also makes example_style_21 require Montserrat 14,
+# which the application deliberately does not ship.
+# CONFIG_LV_BUILD_EXAMPLES is not set
+# CONFIG_LV_BUILD_DEMOS is not set
 
 # The vault snapshot normally comes from a machine on the same LAN over plain
 # HTTP, so no certificate is involved at all. An https:// URL still works and

@@ -53,7 +53,7 @@ from kanji_server import (  # noqa: E402
     check_glyphs, clip, difficulty_pct, flatten_card, flatten_comments,
     flatten_session, jlpt_level, js_round, load_credentials, normalize_text,
     parse_grade, parse_json_column, primary_reading, relative_due,
-    substitute_missing,
+    project_card_content, raw_card_parts, safe_composition, substitute_missing,
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -88,6 +88,7 @@ LABEL_MAX = CAP["KANJI_LABEL_MAX"] - 1
 DECK_MAX = CAP["KANJI_DECK_MAX"] - 1
 ID_MAX = CAP["KANJI_ID_MAX"] - 1
 BODY_MAX = CAP["KANJI_BODY_MAX"] - 1
+FORMULA_MAX = CAP["KANJI_FORMULA_MAX"] - 1
 AUTHOR_MAX = CAP["KANJI_AUTHOR_MAX"] - 1
 COMMENT_MAX = CAP["KANJI_COMMENT_MAX"] - 1
 
@@ -100,7 +101,16 @@ FAILURES = []
 CHECKS = [0]
 
 # A fixed instant, so every span in this file is arithmetic rather than a race.
-NOW = datetime(2026, 8, 14, 12, 0, 0, tzinfo=timezone.utc)
+# The clock every fixture timestamp is measured from.
+#
+# It has to be the REAL current time, not a frozen literal, and that is a fix rather than a
+# convenience. Every relative_due() test below passes NOW in explicitly, so those are equally
+# deterministic either way. But answer_response()'s next_rating_preview goes through the PROXY,
+# and the proxy words a span against datetime.now() — so a frozen NOW makes the gap between the
+# fixture and the wall clock widen by one day per day. Pinned to 2026-08-14 the suite passed on
+# the day it was written and began failing the next morning, asserting "9일 뒤" against a card
+# the proxy could correctly see was eight days out.
+NOW = datetime.now(timezone.utc)
 
 
 def check(cond, label, got=None, want=None):
@@ -322,6 +332,119 @@ def test_card_parts_tolerate_a_missing_reading():
        "components stop at the three rows the sheet has")
 
 
+def test_safe_composition_filters_only_structural_self_references():
+    raw_parts = [
+        {"glyph": "財", "meaning": "wealth", "reading": "ザイ"},
+        {"glyph": "貝", "meaning": "money", "reading": "カイ"},
+        {"glyph": "才", "meaning": "talent", "reading": "サイ"},
+    ]
+    compound_parts = [
+        {"glyph": "勉", "meaning": "exert", "reading": "ベン"},
+        {"glyph": "免", "meaning": "excuse", "reading": "メン"},
+        {"glyph": "力", "meaning": "power", "reading": "リョク"},
+        {"glyph": "強", "meaning": "strong", "reading": "キョウ"},
+        {"glyph": "弓", "meaning": "bow", "reading": "キュウ"},
+        {"glyph": "虫", "meaning": "insect", "reading": "チュウ"},
+    ]
+    okurigana_parts = [
+        {"glyph": "懲", "meaning": "punish", "reading": "チョウ"},
+        {"glyph": "徴", "meaning": "sign", "reading": "チョウ"},
+        {"glyph": "心", "meaning": "heart", "reading": "シン"},
+    ]
+    eq(safe_composition("財", "財", raw_parts),
+       ("貝 + 才 = 財", [raw_parts[1], raw_parts[2]]),
+       "single-kanji self reference is removed")
+    eq(safe_composition("勉強", "勉強", compound_parts)[0],
+       "勉 + 強 = 勉強", "compound sub-radicals are removed")
+    eq(safe_composition("懲らしめる", "懲", okurigana_parts)[0],
+       "徴 + 心 = 懲", "okurigana result is the constituent kanji")
+
+
+def test_project_card_content_retains_the_full_catalog_record():
+    description = "d" * 819
+    mnemonic = "m" * 615
+    source = {
+        "id": "wealth", "front": "財", "tags": ["N2"],
+        "back": json.dumps({
+            "kanji": "財", "meaning": {"gloss": "재물 재",
+                                       "senses": ["재물", "재산", "부", "자산", "보물"]},
+            "on_yomi": [{"reading": "ザイ・サイ"}],
+            "kun_yomi": [{"reading": "たから"}],
+            "shape_explanation": description,
+            "image": "never-project.png",
+            "examples": [{"text": "never project"}],
+        }, ensure_ascii=False),
+        "hint": json.dumps({
+            "principle": "형성", "reason": mnemonic,
+            "shapes": [
+                {"kanji": "財", "meaning": "wealth", "reading": "ザイ"},
+                {"kanji": "貝", "meaning": "money", "reading": "カイ"},
+                {"kanji": "才", "meaning": "talent", "reading": "サイ"},
+                {"kanji": "王", "meaning": "king", "reading": "オウ"},
+                {"kanji": "口", "meaning": "mouth", "reading": "コウ"},
+                {"kanji": "力", "meaning": "power"},
+            ],
+            "comment": "never project", "fsrs": {"state": "review"},
+        }, ensure_ascii=False),
+        "comments": [{"body": "never project"}], "session": {"id": "never"},
+        "state": {"state": "review"},
+    }
+    content = project_card_content(source)
+    eq(len(content["description"].encode("utf-8")), 819,
+       "full shape explanation is not display-clipped")
+    eq(len(content["hook_body"].encode("utf-8")), 615,
+       "full mnemonic is not display-clipped")
+    eq(content["senses"], ["재물", "재산", "부", "자산", "보물"],
+       "all five source senses survive")
+    eq(len(content["parts"]), 6, "all six source components survive")
+    eq(content["parts"][-1]["reading"], "", "missing component reading stays empty")
+    eq(content["gloss"], "재물 재", "the source gloss is separate from senses")
+    eq(content["on_reading"], "ザイ・サイ", "structured on reading survives")
+    eq(content["kun_reading"], "たから", "structured kun reading survives")
+    eq(content["hook_title"], "형성", "source principle is preserved")
+    eq(content["composition"], "貝 + 才 + 王 + 口 + 力 = 財",
+       "the shared projection supplies the safe equation")
+    for key in ("image", "comment", "comments", "examples", "session", "fsrs", "state"):
+        check(key not in content, f"projection excludes {key}")
+    eq(project_card_content(dict(source, hint=json.dumps({})))["hook_title"], "",
+       "a missing principle remains empty")
+
+
+def test_project_card_content_falls_back_to_the_first_valid_sense():
+    source = {
+        "id": "missing-gloss", "front": "会", "tags": ["N5"],
+        "back": json.dumps({
+            "kanji": "会",
+            "meaning": {
+                "gloss": None,
+                "senses": [None, "", "   ", "  만나다  ", "대면하다"],
+            },
+        }, ensure_ascii=False),
+        "hint": json.dumps({}, ensure_ascii=False),
+    }
+
+    content = project_card_content(source)
+
+    eq(content["gloss"], "만나다",
+       "a missing short gloss uses the first nonempty normalized sense")
+
+    whitespace_gloss = dict(source, back=json.dumps({
+        "kanji": "会",
+        "meaning": {"gloss": " \t ", "senses": ["  만나다  ", "대면하다"]},
+    }, ensure_ascii=False))
+    eq(project_card_content(whitespace_gloss)["gloss"], "만나다",
+       "a whitespace-only gloss is empty and falls back to a normalized sense")
+    eq(project_card_content(whitespace_gloss)["senses"], ["만나다", "대면하다"],
+       "the projected sense list drops empty rows and surrounding whitespace")
+
+    explicit_gloss = dict(source, back=json.dumps({
+        "kanji": "会",
+        "meaning": {"gloss": "  모일 회\n", "senses": ["만나다"]},
+    }, ensure_ascii=False))
+    eq(project_card_content(explicit_gloss)["gloss"], "모일 회",
+       "a nonempty explicit gloss wins after surrounding whitespace is removed")
+
+
 def test_flatten_card_is_the_whole_projection():
     card = flatten_card(STUDY_CARD, now=NOW)
     eq(card["id"], STUDY_CARD["id"], "the id rides along for routing")
@@ -347,8 +470,8 @@ def test_flatten_card_is_the_whole_projection():
     card = flatten_card(broken, now=NOW)
     eq(card["front"], "会", "a card with unparseable content keeps its headword")
     eq(card["senses"], [], "and simply has no senses")
-    eq(card["hook_title"], "기억 힌트",
-       "a card with no hint still labels its hook, because the row is fixed")
+    eq(card["hook_title"], "",
+       "a card with no hint keeps the absent principle empty")
     eq(card["hook_body"], "", "with nothing under it")
 
 
@@ -519,7 +642,7 @@ def test_every_cap_is_the_one_the_header_declares():
     table used to be hand-copied, and a hand-copied table drifts silently — the
     device is happy either way, since a short field is a legal field.
     """
-    for name in ("FRONT", "READING", "SENSE", "LABEL", "DECK", "ID", "BODY",
+    for name in ("FRONT", "READING", "SENSE", "LABEL", "DECK", "ID", "BODY", "FORMULA",
                  "AUTHOR", "COMMENT"):
         eq(getattr(kanji_server, f"{name}_MAX"), CAP[f"KANJI_{name}_MAX"] - 1,
            f"{name}_MAX is KANJI_{name}_MAX with the NUL taken off")
@@ -888,10 +1011,14 @@ def field_caps(card):
     yield card["id"], ID_MAX, "id"
     yield card["front"], FRONT_MAX, "front"
     yield card["reading"], READING_MAX, "reading"
+    yield card["on_reading"], READING_MAX, "on_reading"
+    yield card["kun_reading"], READING_MAX, "kun_reading"
     yield card["level"], LABEL_MAX, "level"
+    yield card["gloss"], SENSE_MAX, "gloss"
     yield card["description"], BODY_MAX, "description"
     yield card["hook_title"], LABEL_MAX, "hook_title"
     yield card["hook_body"], BODY_MAX, "hook_body"
+    yield card["composition"], FORMULA_MAX, "composition"
     for sense in card["senses"]:
         yield sense, SENSE_MAX, "sense"
     for example in card["examples"]:
@@ -1020,9 +1147,9 @@ def test_payload_matches_the_wire_contract():
         "reviewed_today", "streak", "track", "track_total"],
        "the session block has exactly its wire fields")
     eq(sorted(payload["card"]),
-       ["comment_total", "comments", "description", "examples", "front", "fsrs",
-        "hook_body", "hook_title", "id", "level", "parts", "preview", "reading",
-        "senses"],
+       ["comment_total", "comments", "composition", "description", "examples", "front",
+        "fsrs", "gloss", "hook_body", "hook_title", "id", "kun_reading", "level",
+        "on_reading", "parts", "preview", "reading", "senses"],
        "the card has exactly its wire fields")
     eq(sorted(payload["card"]["fsrs"]),
        ["difficulty_pct", "due", "lapses", "reps", "stability_days", "state",
@@ -1053,6 +1180,9 @@ def main():
     test_card_examples_walk_on_then_kun()
     test_card_senses_and_level()
     test_card_parts_tolerate_a_missing_reading()
+    test_safe_composition_filters_only_structural_self_references()
+    test_project_card_content_retains_the_full_catalog_record()
+    test_project_card_content_falls_back_to_the_first_valid_sense()
     test_flatten_card_is_the_whole_projection()
     test_fsrs_unscheduled_is_minus_one_not_zero()
     test_preview_is_four_rendered_spans()

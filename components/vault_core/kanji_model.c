@@ -50,6 +50,59 @@ size_t kanji_str_copy(char *dst, size_t dst_size, const char *src)
     return out;
 }
 
+static bool ascii_display_whitespace(unsigned char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+           c == '\f' || c == '\v';
+}
+
+bool kanji_text_has_content(const char *text)
+{
+    if (!text) return false;
+    for (; *text; text++) {
+        if (!ascii_display_whitespace((unsigned char)*text)) return true;
+    }
+    return false;
+}
+
+size_t kanji_text_collapse_whitespace(char *dst, size_t dst_size,
+                                      const char *src)
+{
+    if (!dst || dst_size == 0) return 0;
+    if (!src) { dst[0] = '\0'; return 0; }
+
+    size_t out = 0;
+    size_t i = 0;
+    bool pending_space = false;
+    for (;;) {
+        const unsigned char c = (unsigned char)src[i];
+        if (c == '\0') break;
+        if (ascii_display_whitespace(c)) {
+            pending_space = out != 0;
+            i++;
+            continue;
+        }
+
+        size_t n = kanji_utf8_seq_len(c);
+        for (size_t k = 1; k < n; k++) {
+            if (src[i + k] == '\0') { n = 0; break; }
+        }
+        if (n == 0) break;
+
+        const size_t separator = pending_space ? 1 : 0;
+        if (out + separator + n >= dst_size) break;
+        if (pending_space) dst[out++] = ' ';
+        /* Normalization can shift a UTF-8 sequence left after stripped or
+         * collapsed whitespace, so its source and destination may overlap. */
+        memmove(dst + out, src + i, n);
+        out += n;
+        i += n;
+        pending_space = false;
+    }
+    dst[out] = '\0';
+    return out;
+}
+
 int kanji_utf8_len(const char *s)
 {
     if (!s) return 0;
@@ -150,6 +203,9 @@ static void h_card(uint32_t *h, const kanji_card_t *c)
      * re-served under a new study_card_id must not flash the panel. */
     h_str(h, c->front);
     h_str(h, c->reading);
+    h_str(h, c->gloss);
+    h_str(h, c->on_reading);
+    h_str(h, c->kun_reading);
     h_str(h, c->level);
 
     h_int(h, c->sense_count);
@@ -165,6 +221,7 @@ static void h_card(uint32_t *h, const kanji_card_t *c)
     h_str(h, c->description);
     h_str(h, c->hook_title);
     h_str(h, c->hook_body);
+    h_str(h, c->composition);
 
     h_int(h, c->part_count);
     for (int i = 0; i < c->part_count; i++) {
@@ -199,6 +256,7 @@ uint32_t kanji_hash(const kanji_t *k)
     uint32_t h = FNV_OFFSET;
     h_int(&h, k->valid);
     h_int(&h, k->demo);
+    h_int(&h, k->source);
 
     h_str(&h, k->session.deck);
     h_str(&h, k->session.level);

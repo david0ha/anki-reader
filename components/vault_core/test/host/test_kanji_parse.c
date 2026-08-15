@@ -137,6 +137,82 @@ static void test_a_full_payload_lands_field_for_field(void)
     CHECK_STR(kanji_preview_span(&k, KANJI_GRADE_EASY), "21일 뒤");
 }
 
+static void test_explicit_workspace_is_required_separate_and_atomic(void)
+{
+    kanji_t out;
+    kanji_t workspace;
+    memset(&out, 0x5A, sizeof out);
+    CHECK(kanji_parse_with_workspace(GOOD, strlen(GOOD), &out, &workspace));
+    CHECK(out.valid);
+    CHECK_STR(out.card.front, "会う");
+
+    memset(&out, 0xA5, sizeof out);
+    kanji_t sentinel = out;
+    CHECK(!kanji_parse_with_workspace(GOOD, strlen(GOOD), &out, NULL));
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+
+    CHECK(!kanji_parse_with_workspace(GOOD, strlen(GOOD), &out, &out));
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+
+    CHECK(!kanji_parse_with_workspace("{\"card\":", 8, &out, &workspace));
+    CHECK(memcmp(&out, &sentinel, sizeof out) == 0);
+}
+
+static void test_a_card_only_full_fidelity_envelope_preserves_every_field(void)
+{
+    static const char *CARD_ONLY =
+        "{\"v\":1,\"card\":{\"id\":\"wealth\",\"front\":\"財\","
+        "\"reading\":\"ザイ・サイ\",\"on_reading\":\"ザイ・サイ\","
+        "\"kun_reading\":\"\",\"level\":\"N2\",\"gloss\":\"재물 재\","
+        "\"senses\":[\"재물\",\"재산\"],\"description\":\"財 = 貝 + 才\","
+        "\"hook_title\":\"형성\",\"hook_body\":\"재물과 재능을 함께 기억한다\","
+        "\"composition\":\"貝 + 才 = 財\",\"parts\":[{\"glyph\":\"貝\","
+        "\"meaning\":\"재물\",\"reading\":\"カイ\"},{\"glyph\":\"才\","
+        "\"meaning\":\"재능\",\"reading\":\"サイ\"}]}}";
+    kanji_t k;
+    memset(&k, 0xAA, sizeof k);
+    CHECK(parse(CARD_ONLY, &k));
+    CHECK_INT(k.source, KANJI_SOURCE_REMOTE);
+    CHECK_STR(k.card.gloss, "재물 재");
+    CHECK_STR(k.card.on_reading, "ザイ・サイ");
+    CHECK_STR(k.card.kun_reading, "");
+    CHECK_STR(k.card.composition, "貝 + 才 = 財");
+    CHECK_INT(k.card.sense_count, 2);
+    CHECK_INT(k.card.part_count, 2);
+
+    kanji_t sentinel;
+    memset(&sentinel, 0x5A, sizeof sentinel);
+    kanji_t before = sentinel;
+    CHECK(!parse("{\"card\":", &sentinel));
+    CHECK(memcmp(&sentinel, &before, sizeof sentinel) == 0);
+}
+
+static void test_a_full_measured_card_reaches_the_model_without_truncation(void)
+{
+    char description[820];
+    char mnemonic[616];
+    memset(description, 'd', sizeof description - 1);
+    description[sizeof description - 1] = '\0';
+    memset(mnemonic, 'm', sizeof mnemonic - 1);
+    mnemonic[sizeof mnemonic - 1] = '\0';
+
+    char json[4096];
+    int written = snprintf(json, sizeof json,
+        "{\"card\":{\"front\":\"財\",\"description\":\"%s\","
+        "\"hook_body\":\"%s\",\"senses\":[\"one\",\"two\",\"three\",\"four\",\"five\"],"
+        "\"parts\":[{\"glyph\":\"1\"},{\"glyph\":\"2\"},{\"glyph\":\"3\"},"
+        "{\"glyph\":\"4\"},{\"glyph\":\"5\"},{\"glyph\":\"6\"}]}}",
+        description, mnemonic);
+    CHECK(written > 0 && (size_t)written < sizeof json);
+
+    kanji_t k;
+    CHECK(parse(json, &k));
+    CHECK_INT(strlen(k.card.description), 819);
+    CHECK_INT(strlen(k.card.hook_body), 615);
+    CHECK_INT(k.card.sense_count, 5);
+    CHECK_INT(k.card.part_count, 6);
+}
+
 /* --- refusal leaves the glass alone --------------------------------------- */
 
 static void test_a_rejected_payload_does_not_touch_the_caller(void)
@@ -233,16 +309,16 @@ static void test_arrays_take_their_first_n_and_drop_the_rest(void)
 {
     kanji_t k;
     CHECK(parse("{\"session\":{\"deck\":\"d\"},\"card\":{\"front\":\"会\","
-                "\"senses\":[\"1\",\"2\",\"3\",\"4\",\"5\"],"
+                "\"senses\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\"],"
                 "\"examples\":[{\"text\":\"a\"},{\"text\":\"b\"},{\"text\":\"c\"},"
                 "{\"text\":\"d\"}],"
                 "\"parts\":[{\"glyph\":\"1\"},{\"glyph\":\"2\"},{\"glyph\":\"3\"},"
-                "{\"glyph\":\"4\"}],"
+                "{\"glyph\":\"4\"},{\"glyph\":\"5\"},{\"glyph\":\"6\"},{\"glyph\":\"7\"}],"
                 "\"comments\":[{\"body\":\"a\"},{\"body\":\"b\"},{\"body\":\"c\"},"
                 "{\"body\":\"d\"}]}}", &k));
 
     CHECK_INT(k.card.sense_count, KANJI_SENSES_MAX);
-    CHECK_STR(k.card.senses[KANJI_SENSES_MAX - 1], "3");
+    CHECK_STR(k.card.senses[KANJI_SENSES_MAX - 1], "5");
     CHECK_INT(k.card.example_count, KANJI_EXAMPLES_MAX);
     CHECK_STR(k.card.examples[KANJI_EXAMPLES_MAX - 1].text, "c");
     CHECK_INT(k.card.part_count, KANJI_PARTS_MAX);
@@ -406,6 +482,9 @@ static void test_the_committed_fixture_parses(void)
 int main(void)
 {
     test_a_full_payload_lands_field_for_field();
+    test_explicit_workspace_is_required_separate_and_atomic();
+    test_a_card_only_full_fidelity_envelope_preserves_every_field();
+    test_a_full_measured_card_reaches_the_model_without_truncation();
     test_a_rejected_payload_does_not_touch_the_caller();
     test_a_truncated_multibyte_tail_is_refused_not_half_copied();
     test_a_finished_session_parses_without_a_card();

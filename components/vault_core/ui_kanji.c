@@ -1,238 +1,75 @@
-/*
- * ui_kanji.c — the chrome, the router and the overlay.
+/* The router, and the only thing on the board that is neither of the two faces: the Wi-Fi
+ * setup overlay.
  *
- * The chrome is the inverted band at the top and the key legend at the bottom;
- * everything between them belongs to whichever screen the nav state names. The
- * router's whole job is to keep exactly one of those panes visible and to hand
- * it the snapshot — it never draws content itself, because a router that knows
- * what a card looks like is a router that has to change when a card does.
+ * This file used to build a rail, a masthead and a footer legend as well, and route five
+ * screens between them. All three are gone. The rail was 80 px of the panel's 648 spent on a
+ * badge and the string 35/60; the masthead and the legend were chrome drawn around a card
+ * rather than part of one. The front now carries its own header and footer rectangles and the
+ * back's dock IS its legend — each cell prints the button that commits it — so both faces are
+ * whole pages and this file has nothing left to draw around them.
  *
- * The footer legend is rebuilt on every nav change rather than fixed at boot.
- * That is deliberate: KEY0 means 정답 on one screen and 등급 on the next, and a
- * legend that does not follow is a lie printed in 16 px.
- */
+ * What is left is the part that genuinely does not belong to either face: which of the two is
+ * on the glass, and the sheet that covers both while the board is being put on a network. */
 #include "ui_kanji.h"
 
-#include <stdio.h>
-
-#include "ui_icons.h"
 #include "ui_internal.h"
 
 typedef struct {
-    /* chrome */
-    lv_obj_t *header;
-    lv_obj_t *chips;
-    lv_obj_t *track;
-    lv_obj_t *badge;          /* DEMO / 오래됨 / 오프라인, or hidden */
-    lv_obj_t *battery;
-    lv_obj_t *key[4];
-
-    /* the screens, indexed by kanji_screen_t */
-    lv_obj_t *screen[KANJI_SCREEN_COUNT];
-
-    /* overlay */
-    lv_obj_t *overlay;
-    lv_obj_t *overlay_title;
-    lv_obj_t *overlay_body;
-
-    /* the last thing pushed in, so a nav change can redraw the screen it
-     * switches to without the caller having to re-send the card */
-    kanji_t       data;
-    bool          has_data;
-    kanji_nav_t   nav;
-    ui_status_t   status;
+    lv_obj_t   *screen[KANJI_SCREEN_COUNT];
+    lv_obj_t   *overlay;
+    lv_obj_t   *overlay_title;
+    lv_obj_t   *overlay_body;
+    kanji_t     data;
+    bool        has_data;
+    kanji_nav_t nav;
+    ui_status_t status;
 } kanji_ui_t;
 
 static kanji_ui_t s;
 
-/* --- the header ----------------------------------------------------------- */
-
-/* The wordmark is drawn, not written: "Kanjis.ai" in the web app puts a red
- * play badge before the word, and red is the one thing this panel cannot say.
- * A filled triangle in a filled square carries the same shape at 1 bit. */
-static void brand_draw_cb(lv_event_t *e)
-{
-    lv_obj_t *o = lv_event_get_target(e);
-    lv_layer_t *L = lv_event_get_layer(e);
-    if (!L) return;
-
-    lv_area_t a;
-    lv_obj_get_coords(o, &a);
-    const int x = a.x1, y = a.y1;
-    const int h = a.y2 - a.y1 + 1;
-
-    /* A white rounded-off badge on the inverted header, with a black play
-     * triangle punched out of it. */
-    ui_draw_rect_abs(L, x, y + 2, x + 20, y + h - 3, true, 0, true);
-    for (int i = 0; i < 8; i++) {
-        ui_draw_line_abs(L, x + 6 + i, y + 6 + i, x + 6 + i, y + h - 7 - i, 1, false);
-    }
-}
-
-static void build_header(lv_obj_t *par)
-{
-    const kanji_chrome_t *c = kanji_chrome_layout();
-
-    s.header = ui_fill(par, c->header.x, c->header.y, c->header.w, c->header.h);
-    ui_fill(par, 0, c->rule_top, UI_W, UI_RULE);
-
-    lv_obj_t *mark = ui_pane(s.header, 0, 0, 22, c->header.h);
-    lv_obj_add_event_cb(mark, brand_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
-    lv_obj_set_pos(mark, c->brand.x, 0);
-
-    ui_lab_inv(s.header, c->brand.x + 26, c->brand.y + 2, c->brand.w - 26,
-               UI_F_HEAD, LV_TEXT_ALIGN_LEFT, S_BRAND);
-
-    /* The two stat chips are one label, not two: 연속 and 오늘 always appear
-     * together and always in that order, and one label cannot half-update. */
-    s.chips = ui_lab_inv(s.header, c->chips.x, c->chips.y, c->chips.w,
-                         UI_F_BODY, LV_TEXT_ALIGN_RIGHT, "");
-
-    s.track = ui_lab_inv(s.header, c->track.x, c->track.y, c->track.w,
-                         UI_F_NUM_SM, LV_TEXT_ALIGN_RIGHT, "");
-
-    /* The badge and the battery share the header's left half with the brand,
-     * below it — there is no room beside it and a 44 px band has two rows. */
-    s.badge = ui_lab_inv(s.header, c->brand.x + 26 + 96, c->brand.y + 5, 96,
-                         UI_F_BODY, LV_TEXT_ALIGN_LEFT, "");
-    s.battery = ui_icon(s.header, ICON_PLUG, 18, 0);
-    lv_obj_set_pos(s.battery, c->chips.x - 30, c->chips.y);
-}
-
-/* --- the footer ----------------------------------------------------------- */
-
-static void build_footer(lv_obj_t *par)
-{
-    const kanji_chrome_t *c = kanji_chrome_layout();
-
-    ui_fill(par, 0, c->rule_bottom, UI_W, UI_RULE);
-    for (int i = 0; i < 4; i++) {
-        s.key[i] = ui_lab_w(par, c->key[i].x, c->key[i].y, c->key[i].w,
-                            UI_F_BODY, LV_TEXT_ALIGN_LEFT, "");
-    }
-}
-
-static void update_footer(void)
-{
-    /* KEY2 is the only button whose meaning never changes, so it is the only
-     * one written from a constant. */
-    ui_setf(s.key[0], "%s %s", S_KEY0, kanji_nav_hint_key0(&s.nav));
-    ui_setf(s.key[1], "%s %s", S_KEY1, kanji_nav_hint_key1(&s.nav));
-    ui_setf(s.key[2], "%s %s", S_KEY2, S_KEY_REFRESH);
-    ui_setf(s.key[3], "%s %s", S_BOOT, kanji_nav_hint_boot(&s.nav));
-}
-
-/* --- the header's live values --------------------------------------------- */
-
-static void update_header(void)
-{
-    const kanji_session_t *ss = &s.data.session;
-
-    if (s.has_data) {
-        ui_setf(s.chips, "%s %d  ·  %s %d",
-                S_STREAK, ss->streak, S_REVIEWED_TODAY, ss->reviewed_today);
-        if (ss->track_total > 0) {
-            ui_setf(s.track, "%s %d/%d", S_TRACK, ss->track, ss->track_total);
-        } else {
-            ui_set(s.track, "");
-        }
-    } else {
-        ui_set(s.chips, "");
-        ui_set(s.track, "");
-    }
-
-    /* One badge, and the order is the point.
-     *
-     * OFFLINE first: a board that cannot reach its proxy is offline whatever
-     * else is also true of it, and that is the one state the learner has to act
-     * on. DEMO before STALE because 오래됨 measures how long ago a fetch
-     * succeeded, and the built-in card was never fetched — badging it stale
-     * would put an age on something that does not have one. (Today the two
-     * cannot both be true: push_status_to_ui() only reports online when a fetch
-     * succeeded, which always replaced the demo card, or when no URL is set,
-     * which forces stale false. The order is written to survive that changing.)
-     */
-    if (!s.status.online)      ui_set(s.badge, S_BADGE_OFFLINE);
-    else if (s.data.demo)      ui_set(s.badge, S_BADGE_DEMO);
-    else if (s.status.stale)   ui_set(s.badge, S_BADGE_STALE);
-    else                       ui_set(s.badge, "");
-
-    ui_icon_set(s.battery,
-                s.status.battery_present ? ICON_BATTERY : ICON_PLUG,
-                s.status.battery_pct);
-}
-
-/* --- the sheets' shared strip --------------------------------------------- */
-
-void ui_sheet_band_create(lv_obj_t *par, ui_sheet_band_t *out, const char *title)
-{
-    const kanji_sheet_layout_t *l = kanji_sheet_layout(false);
-    const int y = LOCAL_Y(l->band.y);                             /* pane-local */
-
-    ui_fill(par, l->band.x, y, l->band.w, l->band.h);
-    out->word = ui_lab_inv(par, l->band_word.x,
-                           y + (l->band_word.y - l->band.y), l->band_word.w,
-                           UI_F_TITLE, LV_TEXT_ALIGN_LEFT, "");
-    out->title = ui_lab_inv(par, l->band_title.x,
-                            y + (l->band_title.y - l->band.y), l->band_title.w,
-                            UI_F_HEAD, LV_TEXT_ALIGN_RIGHT, title);
-}
-
-void ui_sheet_band_update(const ui_sheet_band_t *band, const kanji_t *k)
-{
-    if (!band) return;
-    const bool have = k && k->card.valid;
-    ui_setf(band->word, "%s%s%s",
-            have ? k->card.front : "",
-            have && k->card.reading[0] ? "  " : "",
-            have ? k->card.reading : "");
-}
-
-void ui_pager_set(lv_obj_t *pager, int page, int pages)
-{
-    if (!pager) return;
-    /* A pager that always says 1/1 trains the eye to ignore it, and then the
-     * one time it says 2/3 nobody sees it. */
-    if (pages <= 1) {
-        ui_set(pager, "");
-        return;
-    }
-    ui_setf(pager, "%d/%d", page + 1, pages);
-}
-
-/* --- the overlay ---------------------------------------------------------- */
-
+/* --- the setup overlay -----------------------------------------------------------------------
+ * A full-panel white sheet over whichever face is up, for provisioning and fatal states.
+ *
+ * It is not a card, so ui_kanji_layout.h has no rectangles of its own for it — and inventing
+ * coordinates here is exactly what the pure-integer layout exists to keep out of a screen file.
+ * So it borrows the front's masthead rhythm instead: the same hairline at the same y, and the
+ * title where the headword goes. A learner who looks up mid-setup then sees the board they
+ * already know with something else written on it, rather than a second design.
+ *
+ * The body is the paper between the bottom of the hero slot and the footer rule, composed from
+ * those two named edges. Every number in this function is a field of kanji_front_layout_t;
+ * there is no constant here that can drift away from one. */
 static void build_overlay(lv_obj_t *par)
 {
-    /* Opaque, not transparent: the overlay's job is to hide the card behind it
-     * completely, and a see-through provisioning message over a half-drawn
-     * study screen is unreadable at 1 bit. */
-    s.overlay = ui_fill_white(par, 0, 0, UI_W, UI_H);
+    const kanji_front_layout_t *l = kanji_front_layout();
+    const kanji_rect_t body = {
+        .x = l->hero.x,
+        .y = l->hero.y + l->hero.h,
+        .w = l->hero.w,
+        .h = l->foot_rule.y - (l->hero.y + l->hero.h),
+    };
 
-    ui_fill(s.overlay, 0, 0, UI_W, 6);
-    s.overlay_title = ui_lab_w(s.overlay, UI_PAD, 120, UI_W - 2 * UI_PAD,
-                               UI_F_TITLE, LV_TEXT_ALIGN_CENTER, "");
-    s.overlay_body = ui_lab_w(s.overlay, UI_PAD, 176, UI_W - 2 * UI_PAD,
-                              UI_F_HEAD, LV_TEXT_ALIGN_CENTER, "");
-    /* The overlay's body is the one place on this board that wraps rather than
-     * ellipsizes: it carries an AP name and the instructions for joining it,
-     * and an ellipsis in the middle of either is useless. */
-    ui_lab_wrap(s.overlay_body, 180);
+    s.overlay = ui_fill_white(par, 0, 0, UI_W, UI_H);
+    ui_rule(s.overlay, l->head_rule.x, l->head_rule.y, l->head_rule.w, l->head_rule.h);
+    s.overlay_title = ui_lab_r(s.overlay, l->hero, UI_F_TITLE, LV_TEXT_ALIGN_LEFT, "");
+    /* The portal instructions are four short lines with the SSID interpolated into them, so
+     * this block wraps rather than ellipsizing: a network name cut off at "..." is a name
+     * nobody can type into a phone. */
+    s.overlay_body = ui_lab_wrap_r(s.overlay, body, UI_F_HEAD, LV_TEXT_ALIGN_LEFT, "");
     ui_show(s.overlay, false);
 }
 
 void ui_kanji_set_overlay(const char *title, const char *body)
 {
     if (!s.overlay) return;
-    const bool on = title != NULL;
-    if (on) {
+    if (title) {
         ui_set(s.overlay_title, title);
         ui_set(s.overlay_body, body ? body : "");
     }
-    ui_show(s.overlay, on);
+    ui_show(s.overlay, title != NULL);
 }
 
-/* --- the router ----------------------------------------------------------- */
+/* --- the router ----------------------------------------------------------------------------- */
 
 static void show_only(kanji_screen_t which)
 {
@@ -241,57 +78,42 @@ static void show_only(kanji_screen_t which)
     }
 }
 
-/* Repaint whichever screen is on glass. Called on both a data change and a nav
- * change, because a sheet that was built for the previous card and merely
- * un-hidden would show it. */
+/* Only the face that is up is rewritten. The other one is hidden, and its widgets are rewritten
+ * the moment the router turns it over — redrawing both would double the LVGL work on every poll
+ * for pixels nobody can see.
+ *
+ * Both faces get the board status as well as the card, because 오프라인 / 오래됨 / DEMO belongs
+ * on whichever one is showing: a frame that admits its staleness on the answer and hides it on
+ * the question is a frame that lies half the time. */
 static void refresh_current(void)
 {
     const kanji_t *k = s.has_data ? &s.data : NULL;
 
-    switch (kanji_nav_screen(&s.nav)) {
-    case KANJI_SCREEN_ANSWER:
-        ui_card_answer_update(k, s.nav.grade);
-        break;
-    case KANJI_SCREEN_DESCRIPTION:
-        ui_sheet_desc_update(k);
-        break;
-    case KANJI_SCREEN_COMMENTS:
-        ui_sheet_comments_update(k, s.nav.sheet_page);
-        break;
-    case KANJI_SCREEN_FSRS:
-        ui_sheet_fsrs_update(k, s.nav.sheet_page);
-        break;
-    case KANJI_SCREEN_QUESTION:
-    default:
-        ui_card_question_update(k);
-        break;
+    if (kanji_nav_screen(&s.nav) == KANJI_SCREEN_ANSWER) {
+        ui_card_back_update(k, &s.nav, &s.status);
+    } else {
+        ui_card_front_update(k, &s.status);
     }
 }
 
 void ui_kanji_create(lv_obj_t *parent)
 {
+    /* Opaque white under both faces. Each face's own root is opaque too, but this one is what
+     * the overlay is lifted off and what covers the panel before the first snapshot arrives. */
     lv_obj_t *root = ui_fill_white(parent, 0, 0, UI_W, UI_H);
 
-    build_header(root);
-    build_footer(root);
+    /* Neither create() is positioned here. A face builds a pane the full size of the panel and
+     * places every widget at the layout's own panel coordinates, so a lv_obj_set_pos() in this
+     * file would be a second, silent origin for a grid that has exactly one. */
+    s.screen[KANJI_SCREEN_QUESTION] = ui_card_front_create(root);
+    s.screen[KANJI_SCREEN_ANSWER]   = ui_card_back_create(root);
 
-    const kanji_chrome_t *c = kanji_chrome_layout();
-    s.screen[KANJI_SCREEN_QUESTION]    = ui_card_question_create(root);
-    s.screen[KANJI_SCREEN_ANSWER]      = ui_card_answer_create(root);
-    s.screen[KANJI_SCREEN_DESCRIPTION] = ui_sheet_desc_create(root);
-    s.screen[KANJI_SCREEN_COMMENTS]    = ui_sheet_comments_create(root);
-    s.screen[KANJI_SCREEN_FSRS]        = ui_sheet_fsrs_create(root);
-    for (int i = 0; i < KANJI_SCREEN_COUNT; i++) {
-        lv_obj_set_pos(s.screen[i], c->content.x, c->content.y);
-    }
-
+    /* Last, so it is the top child and covers whichever face is under it. */
     build_overlay(root);
 
     kanji_nav_reset(&s.nav);
     s.status.online = true;
     show_only(KANJI_SCREEN_QUESTION);
-    update_footer();
-    update_header();
     refresh_current();
 }
 
@@ -303,16 +125,25 @@ void ui_kanji_set_data(const kanji_t *k)
     } else {
         s.has_data = false;
     }
-    update_header();
     refresh_current();
 }
 
 void ui_kanji_set_nav(const kanji_nav_t *nav)
 {
     if (!nav) return;
+
+    /* A grade being committed changes exactly one thing on the glass: one dock cell inverts to
+     * acknowledge the press. Everything else on the spread is the answer the learner is still
+     * reading, and it stays there until the next card actually arrives — so this transition
+     * redraws the dock alone and the caller refreshes only its rectangle. */
+    const bool dock_only = kanji_nav_is_dock_only_transition(&s.nav, nav);
     s.nav = *nav;
+    if (dock_only) {
+        ui_card_back_dock(s.has_data ? &s.data : NULL, &s.nav);
+        return;
+    }
+
     show_only(kanji_nav_screen(&s.nav));
-    update_footer();
     refresh_current();
 }
 
@@ -320,14 +151,13 @@ void ui_kanji_set_status(const ui_status_t *st)
 {
     if (!st) return;
     s.status = *st;
-    update_header();
+    /* The badges moved onto the faces with the rail, so a status change is a face redraw. It is
+     * still cheap: nothing here touches the panel, and KanjiTask's fingerprint decides whether a
+     * refresh happens at all. */
+    refresh_current();
 }
 
 void ui_kanji_dock_area(int *x1, int *y1, int *x2, int *y2)
 {
-    const kanji_answer_layout_t *a = kanji_answer_layout();
-    if (x1) *x1 = a->dock.x;
-    if (y1) *y1 = a->dock.y;
-    if (x2) *x2 = a->dock.x + a->dock.w - 1;
-    if (y2) *y2 = a->dock.y + a->dock.h - 1;
+    kanji_rect_to_half_open(&kanji_back_layout()->dock, x1, y1, x2, y2);
 }
