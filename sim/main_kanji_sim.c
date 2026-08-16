@@ -671,9 +671,15 @@ static int occupancy_pct(void)
  *   deleting it drops occupancy to roughly 38%. A floor of 45% therefore fails if ANY of the
  *   three rail blocks stops rendering, and fails if either prose block does.
  *
- *   question face, measured 30%. It is deliberately quiet — the brief for it was an art print,
- *   not a dashboard — so its floor is only there to catch the plate or the pull-quote vanishing.
- *   The plate is 144 px of a 464 px page; without it the face scores about 18%. Floor 23%.
+ *   question face, measured 23% (24% on the demo card, 36% on the worst case). It is
+ *   deliberately quiet — the brief for it was an art print, not a dashboard — and quieter still
+ *   since the pull-quote came off it, so the only block left for this floor to catch is the
+ *   plate. Suppressing the plate's rows in a rendered shot and re-running this grid scores 17%
+ *   on the kanji card and 19% on the demo card, so 21% is the only floor that both fails when
+ *   the plate goes and passes on every front shot. That is a two-point margin either side, which
+ *   is thin — thin enough that it is NOT the real guard any more. check_front_blocks() below
+ *   asserts ink in each of the front's rectangles by name, which is the specific test this
+ *   percentage used to stand in for; the floor is kept as the coarse net underneath it.
  *
  * Both are recorded here rather than in a constant so that raising one later requires reading
  * the argument for the current value first. */
@@ -831,6 +837,49 @@ static void check_front_hides_the_answer(const kanji_t *k)
             }
         }
     }
+}
+
+/* Every block the question face is supposed to be carrying, asserted by name.
+ *
+ * occupancy_pct() answers "is this page using the panel" as one number, and one number cannot say
+ * WHICH block went missing — nor notice at all when the block that went missing is small. That
+ * was tolerable when the face had a pull-quote to lose as well; with the face down to a headword,
+ * an ornament and a plate, the percentage's whole margin is the plate, and it is two points wide.
+ * So each rectangle is checked for ink directly. The minimums are floors on "did this render",
+ * not measurements: the hero is 56 px of kanji, the ornament's diamond is exactly 41 px by
+ * construction, and a hairline inks its own length.
+ *
+ * Only valid for a card WITH history — 07-front-new-card collapses the four rows into 새 카드,
+ * and 14/18 have no card at all, so those states are covered by check_no_label_overlap() and by
+ * their shots instead. */
+static void check_front_blocks(const char *name)
+{
+    const kanji_front_layout_t *f = kanji_front_layout();
+    char label[96];
+
+    snprintf(label, sizeof label, "%s: the headword", name);
+    want_ink(label, f->hero, 200);
+
+    snprintf(label, sizeof label, "%s: the ornament's left rule", name);
+    want_ink(label, f->orn_left, 100);
+    snprintf(label, sizeof label, "%s: the ornament's mark", name);
+    want_ink(label, f->orn_mark, 30);
+    snprintf(label, sizeof label, "%s: the ornament's right rule", name);
+    want_ink(label, f->orn_right, 100);
+
+    for (int i = 0; i < KANJI_PLATE_ROWS; i++) {
+        snprintf(label, sizeof label, "%s: plate row %d's label", name, i);
+        want_ink(label, f->plate_label[i], 30);
+        snprintf(label, sizeof label, "%s: plate row %d's value", name, i);
+        want_ink(label, f->plate_value[i], 30);
+    }
+    snprintf(label, sizeof label, "%s: the plate's hairline", name);
+    want_ink(label, f->plate_rule, 100);
+
+    snprintf(label, sizeof label, "%s: the queue counters", name);
+    want_ink(label, f->queue, 40);
+    snprintf(label, sizeof label, "%s: the reveal prompt", name);
+    want_ink(label, f->prompt, 40);
 }
 
 /* --- the dock -------------------------------------------------------------- */
@@ -1088,6 +1137,56 @@ static void shot(const kanji_t *k, const kanji_nav_t *nav,
     write_bmp(name);
 }
 
+/* 문제 MUST NOT READ examples[].
+ *
+ * This is the machine-checkable half of the spoiler rule, and it is stricter than
+ * check_front_hides_the_answer() above, which only catches Korean reaching the glass. The bug it
+ * exists for was entirely Japanese and therefore invisible to that check: the face used to set
+ * examples[0].text as a pull-quote with examples[0].reading beneath it, and because the catalog's
+ * examples are the word list under the kanji's reading entries rather than sentences using the
+ * headword, 破れる printed 破る / やぶる — the reading of a different word, one kana off the
+ * answer, in the slot a learner reads as the answer.
+ *
+ * A rectangle-based check cannot catch the regression, because reintroducing the quote would come
+ * with its own rectangle and every "does this rectangle have ink" assertion would pass. So this
+ * renders the same card twice — once with its examples, once with example_count zeroed — and
+ * demands the two frames be identical to the pixel. Any path from examples[] to the front, at any
+ * size, in any slot, differs somewhere and fails here. It is also the 1,525-of-9,956 case running
+ * on every build: those cards have no example, and this face must be the same face for them. */
+static uint16_t twin_frame[HOR * VER];
+
+static void check_front_ignores_examples(const char *name, const kanji_t *rich,
+                                         const kanji_t *bare, const kanji_nav_t *nav)
+{
+    if (rich->card.example_count == 0) {
+        FAILV("%s: the reference card carries no examples, so this compares a card "
+              "with none against a card with none and proves nothing", name);
+        return;
+    }
+
+    ui_kanji_set_nav(nav);
+    ui_kanji_set_status(&ONLINE);
+
+    ui_kanji_set_data(rich);
+    refresh();
+    memcpy(twin_frame, capture, sizeof twin_frame);
+
+    /* bare LAST, so the caller's shot and the framebuffer still agree afterwards. */
+    ui_kanji_set_data(bare);
+    refresh();
+
+    for (int y = 0; y < VER; y++) {
+        for (int x = 0; x < HOR; x++) {
+            if (twin_frame[y * HOR + x] == capture[y * HOR + x]) continue;
+            FAILV("%s: 문제 draws pixel (%d,%d) differently for a card with %d "
+                  "examples than for the same card with none — the question face "
+                  "is reading examples[] again, which is how 破る / やぶる got "
+                  "printed under 破れる", name, x, y, rich->card.example_count);
+            return;
+        }
+    }
+}
+
 /* --- main ------------------------------------------------------------------ */
 
 int main(int argc, char **argv)
@@ -1120,8 +1219,9 @@ int main(int argc, char **argv)
 
     /* 01 — the demo card's front, which is what a board with no URL shows. */
     shot(&demo, &front, NULL, "01-front");
-    check_page_budget("01-front", 23, 40);
+    check_page_budget("01-front", 21, 40);
     check_no_label_overlap("01-front");
+    check_front_blocks("01-front");
     check_front_hides_the_answer(&demo);
     want_text_somewhere("01-front", S_HINT_REVEAL);
 
@@ -1140,8 +1240,9 @@ int main(int argc, char **argv)
 
     /* 03/04 — a real kanji card, which is where 성립 and 구성 do their work. */
     shot(&go, &front, NULL, "03-front-kanji");
-    check_page_budget("03-front-kanji", 23, 40);
+    check_page_budget("03-front-kanji", 21, 40);
     check_no_label_overlap("03-front-kanji");
+    check_front_blocks("03-front-kanji");
     check_front_hides_the_answer(&go);
 
     shot(&go, &back, NULL, "04-back-kanji");
@@ -1192,12 +1293,16 @@ int main(int argc, char **argv)
         check_columns_contained("08-back-new-card");
     }
 
-    /* 09 — no examples at all: the pull-quote and its ornament go together. */
+    /* 09 — no examples at all. The front prints none of them either way, so this shot is now
+     * proving the OPPOSITE of what it used to: 1,525 of the 9,956 shipped cards have no example,
+     * and this face must be pixel-identical for them and for a card with three. A front that
+     * still reserved paper for an example would show up here as a shot that differs from 03. */
     {
         kanji_t bare = go;
         bare.card.example_count = 0;
         shot(&bare, &front, NULL, "09-front-no-examples");
         check_no_label_overlap("09-front-no-examples");
+        check_front_ignores_examples("09-front-no-examples", &go, &bare, &front);
     }
 
     /* 10 — the worst case the model permits, on the denser face. */

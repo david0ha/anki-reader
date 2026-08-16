@@ -31,7 +31,7 @@ Eighteen shots, one per state the board can be in:
 | `03-front-kanji`, `04-back-kanji` | a real kanji card (語), where 성립 and 구성 do their work — the demo card is a VOCAB card and honestly has no on-yomi, no principle and one component |
 | `05-back-again`, `06-back-easy` | a grade committed, reached through a real `kanji_nav_press()` |
 | `07-front-new-card`, `08-back-new-card` | a card with no history: the plate collapses to 새 카드 |
-| `09-front-no-examples` | the pull-quote and its ornament go together, or not at all |
+| `09-front-no-examples` | must be pixel-identical to `03-front-kanji` — the question face reads no example at all, and 1,525 of the 9,956 shipped cards have none |
 | `10-back-worst-case`, `11-front-worst-case` | every field at its model maximum in the widest glyph the body face has |
 | `12-front-offline`, `13-back-stale` | the two failure badges |
 | `14-session-complete` | 오늘 학습 완료 — no card, session counters intact |
