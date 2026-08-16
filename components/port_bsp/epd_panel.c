@@ -50,17 +50,32 @@ static const char *TAG = "epd";
 
 #define DEEP_SLEEP_MAGIC       0xA5
 
+/* First byte of 0x50 (VCOM and data interval). Its high bits select the border
+ * data and the DATA POLARITY — which way a RAM bit maps to black or white — and
+ * its low nibble is the interval itself. So this register decides, among other
+ * things, whether the panel prints the frame or its negative.
+ *
+ * 0x21 is what EPD_5IN83_V2_Init() sends for a full refresh, and 0xA9 is what
+ * Display_Partial() sends for a windowed one. Note that those two agree in the
+ * polarity bits (0x21 -> 0b0010_0001, 0xA9 -> 0b1010_1001) and differ only in
+ * border and interval — which is the check that says the pair is right.
+ *
+ * This driver used to send 0x10 (0b0001_0000) for the full case. It was the
+ * only register left in the init sequence that disagreed with the reference,
+ * and it disagreed in exactly the bits that choose polarity: every full refresh
+ * printed the negative of the card — crisp, correctly laid out, and inverted,
+ * white type on a black field. The windowed refresh, using the vendor's own
+ * 0xA9, was unaffected, so the dock was the one region on the glass coming out
+ * the right way round. */
+#define VCOM_FULL_CDI          0x21
+#define VCOM_PARTIAL_CDI       0xA9
+
 /* A 5.83" full refresh is seconds, and the controller holds BUSY low for all of
  * it. 30s is "the panel is not there", not "the panel is slow". */
 #define BUSY_TIMEOUT_MS        30000
 
 static esp_lcd_panel_io_handle_t s_io;
 static uint8_t                  *s_fb;
-/* One row of DMA-capable scratch, for priming a plane with a constant. A static
- * array would very probably work — .bss is internal SRAM — but "probably
- * DMA-capable and probably word-aligned" is not a property to rely on for the
- * buffer every full refresh passes to the DMA engine. */
-static uint8_t                  *s_scratch_row;
 static epd_pins_t                s_pins;
 static bool                      s_ready;
 static bool                      s_asleep;
@@ -136,21 +151,6 @@ static void wr_ram(uint8_t cmd, const uint8_t *data, size_t len)
     ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(s_io, -1, data, len));
 }
 
-/* Fill a whole plane with one byte, without a second 39KB buffer: send one
- * scratch row 480 times. Only used to prime the "previous image" plane.
- *
- * CS toggles between rows, which is fine on this controller — Waveshare's own
- * driver toggles it around every single byte — because the write pointer lives
- * in the controller and only a new command moves it. */
-static void wr_ram_fill(uint8_t cmd, uint8_t value)
-{
-    memset(s_scratch_row, value, EPD_STRIDE);
-    wr_cmd(cmd);
-    for (int y = 0; y < EPD_PANEL_H; y++) {
-        ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(s_io, -1, s_scratch_row, EPD_STRIDE));
-    }
-}
-
 static void panel_init_full(void)
 {
     hw_reset();
@@ -177,7 +177,7 @@ static void panel_init_full(void)
 
     wr_cmd_u8(CMD_DUAL_SPI, 0x00);             /* single-SPI source data */
 
-    const uint8_t vcom[2] = { 0x10, 0x07 };
+    const uint8_t vcom[2] = { VCOM_FULL_CDI, 0x07 };
     wr_cmd_data(CMD_VCOM_INTERVAL, vcom, sizeof vcom);
 
     wr_cmd_u8(CMD_TCON_SETTING, 0x22);
@@ -188,7 +188,13 @@ static void panel_init_full(void)
 
 /* Re-arm for partial updates. Unlike the SSD1680 port this replaces, the panel
  * is NOT reset here — a reset would drop the "previous image" plane the partial
- * waveform diffs against, which is the whole point. */
+ * waveform diffs against, which is the whole point.
+ *
+ * 0xE0 = 0x02 is TSFIX: stop reading the on-chip temperature sensor and use
+ * whatever 0xE5 says. The controller picks its OTP waveform by temperature, so
+ * pinning it at 0x6E is what selects the short waveform that makes a partial
+ * ~600ms instead of ~4s. Every one of these has to come back off in
+ * panel_leave_partial() — see the note there. */
 static void panel_enter_partial(void)
 {
     if (s_partial_mode) return;
@@ -205,8 +211,24 @@ static void panel_leave_partial(void)
      * which leaves the un-refreshed area of the panel visibly darkened; leaving
      * it in place means the NEXT full refresh inherits it and comes out with a
      * grey cast that looks like a failing panel rather than a wrong register. */
-    const uint8_t vcom[2] = { 0x10, 0x07 };
+    const uint8_t vcom[2] = { VCOM_FULL_CDI, 0x07 };
     wr_cmd_data(CMD_VCOM_INTERVAL, vcom, sizeof vcom);
+
+    /* Hand the waveform temperature back to the on-chip sensor. This is the
+     * half that used to be missing, and it is the expensive one: 0x92 only
+     * closes the window, so with TSFIX still set the panel stayed on the
+     * partial waveform and every subsequent FULL refresh ran it too — 699ms
+     * where the same call took 3959ms before the first partial. Four hundred
+     * milliseconds of drive is nowhere near enough to carry a pixel all the way
+     * to black or all the way to white, so the previous frame stayed half
+     * printed under the new one: black streaks through white type, and patches
+     * of the panel lighter or darker than their neighbours. It reads as a
+     * failing panel, and nothing logs it — the only trace is the refresh time
+     * in this driver's own log line, which is why epd_refresh_full() now
+     * complains when that number collapses.
+     *
+     * 0xE5 needs no counterpart write: with TSFIX clear its value is ignored. */
+    wr_cmd_u8(CMD_CASCADE_SETTING, 0x00);
     s_partial_mode = false;
 }
 
@@ -319,9 +341,6 @@ esp_err_t epd_init(const epd_pins_t *pins)
     ESP_RETURN_ON_FALSE(s_fb, ESP_ERR_NO_MEM, TAG, "framebuffer");
     memset(s_fb, 0xFF, EPD_FB_SIZE);
 
-    s_scratch_row = heap_caps_malloc(EPD_STRIDE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    ESP_RETURN_ON_FALSE(s_scratch_row, ESP_ERR_NO_MEM, TAG, "scratch row");
-
     panel_init_full();
     busy_line_probe();
     s_ready = true;
@@ -370,16 +389,38 @@ void epd_refresh_full(void)
     panel_leave_partial();
     int64_t t0 = esp_timer_get_time();
 
-    /* NOTE: Waveshare primes the "previous image" plane with 0x00 rather than
-     * with the outgoing frame. That forces every pixel through the full
-     * black->target transition, which is exactly what makes a full refresh
-     * clear ghosting instead of merely repainting. */
-    wr_ram_fill(CMD_WRITE_RAM_OLD, 0x00);
+    /* Both planes get the outgoing frame, which is what EPD_5IN83_V2_Display()
+     * does — its 0x10 loop and its 0x13 loop send the same `Image` bytes, and
+     * Clear() likewise sends 0xFF to both to land on white.
+     *
+     * An earlier version of this file primed 0x10 with 0x00 instead, under a
+     * comment claiming that was Waveshare's own trick for clearing ghosting.
+     * It is not: no 0x00 fill appears anywhere in that driver. The consequence
+     * was not a subtle one. In KW mode the OTP LUT is indexed by the (old, new)
+     * pair, and because the vendor always writes old == new, only the WW and BB
+     * entries are ever exercised by a real full refresh. Priming old to all-zero
+     * drove every background pixel down the mixed BW path instead — a path this
+     * panel's OTP waveform ends on the opposite rail. The panel therefore built
+     * the correct image early, in the phase driven by the 0x13 data, and then
+     * spent the rest of the waveform carrying it to its inverse: a sharp,
+     * fully-driven, entirely black-backgrounded card. Sharp is the tell. An
+     * under-driven panel is streaky; this one was crisp and simply wrong, which
+     * is what separates this bug from the partial-waveform one above. */
+    wr_ram(CMD_WRITE_RAM_OLD, s_fb, EPD_FB_SIZE);
     wr_ram(CMD_WRITE_RAM_NEW, s_fb, EPD_FB_SIZE);
     turn_on();
 
     s_partial_chain = 0;
     s_last_full_ms  = (int)((esp_timer_get_time() - t0) / 1000);
+    /* The one symptom this failure has. A full refresh that returns early did
+     * not fail — it under-drove the panel, and the only place that shows is
+     * here. See panel_leave_partial(). */
+    if (s_last_full_ms < EPD_FULL_REFRESH_MIN_MS) {
+        ESP_LOGE(TAG, "full refresh %dms — under %dms means the waveform is "
+                      "still the partial one (0xE0/0xE5 not restored). The "
+                      "panel is under-driven and the previous frame will show "
+                      "through.", s_last_full_ms, EPD_FULL_REFRESH_MIN_MS);
+    }
     ESP_LOGI(TAG, "full refresh %dms", s_last_full_ms);
 }
 
@@ -415,7 +456,7 @@ void epd_refresh_partial_area(int x1, int y1, int x2, int y2)
     /* 0xA9/0x07: the partial-mode VCOM and data interval Waveshare uses. It
      * differs from the full-refresh 0x10/0x07 — with the full-refresh value the
      * un-refreshed area of the panel visibly darkens. */
-    const uint8_t vcom[2] = { 0xA9, 0x07 };
+    const uint8_t vcom[2] = { VCOM_PARTIAL_CDI, 0x07 };
     wr_cmd_data(CMD_VCOM_INTERVAL, vcom, sizeof vcom);
 
     panel_enter_partial();

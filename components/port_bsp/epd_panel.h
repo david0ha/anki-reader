@@ -55,6 +55,16 @@ typedef enum {
  * than on a dense fortune slip. */
 #define EPD_PARTIAL_CHAIN_MAX  6
 
+/* A full refresh on this panel is ~3.9s and has never been under 3.5s. If one
+ * comes back faster than this, the controller is not running the full waveform
+ * — the partial path pins the waveform temperature (0xE0/0xE5) and something
+ * failed to hand it back, so the panel is doing a ~400ms partial-length update
+ * of the whole screen. That does not fail; it under-drives every pixel and
+ * leaves the previous frame showing through, which looks like dying hardware.
+ * epd_refresh_full() logs an error rather than letting the number pass as one
+ * more INFO line nobody reads. */
+#define EPD_FULL_REFRESH_MIN_MS  2000
+
 typedef struct {
     int sck;
     int mosi;
