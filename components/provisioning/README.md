@@ -14,7 +14,7 @@ load config (NVS)
       │                          │
       no                        fail
       ▼                          ▼
-  start SoftAP "Kanjis Board-XXXX" (open) + captive portal
+  start SoftAP "AnkiReader-XXXX" (open) + captive portal
       │
   user submits SSID / password / study_url  →  save to NVS  →  reboot
 ```

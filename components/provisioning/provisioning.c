@@ -122,7 +122,7 @@ static void ensure_nvs(void)
 void provisioning_default_options(prov_options_t *opts)
 {
     memset(opts, 0, sizeof(*opts));
-    strlcpy(opts->ap_ssid_prefix, "Kanjis Board", sizeof(opts->ap_ssid_prefix));
+    strlcpy(opts->ap_ssid_prefix, "AnkiReader", sizeof(opts->ap_ssid_prefix));
     opts->sta_connect_timeout_ms = 15000;
     opts->event_cb = NULL;
     opts->user = NULL;
@@ -193,7 +193,7 @@ bool provisioning_run(const prov_options_t *opts, prov_config_t *out)
     // the MAC suffix uniquely names this board, and the model is the fixed product name.
     prov_portal_info_t info = {
         .device_id = suffix,
-        .model = "Kanjis Board",
+        .model = "AnkiReader",
         .ap_ssid = ap_ssid,
     };
     prov_portal_start(have_config ? &cfg : NULL, on_portal_save, on_app_provision, &info, NULL);

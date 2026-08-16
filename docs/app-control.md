@@ -1,7 +1,7 @@
 # The device HTTP API
 
 A JSON control server on port 80, up once Wi-Fi is connected, advertised over mDNS as
-**`obsidianboard.local`**.
+**`ankireader.local`**.
 
 Local-network only: no auth, no TLS, no cloud. That is a scope decision, not an oversight — the
 device holds no credentials worth stealing. The kanjis.ai session lives in `tools/kanji_server.py`
@@ -9,11 +9,12 @@ on your own machine and never reaches the board (see [`kanji-contract.md`](kanji
 the only things this API can do are "show a different screen" and "fetch from a different URL on
 this LAN".
 
-> The hostname is deliberately **not** renamed to follow the board's new job: paired clients and
-> already-flashed boards answer to `obsidianboard`. It is **not** `tickerboard` either — that name
-> belongs to the fortune board this project forked from, whose shipped app resolves it, and two
-> devices answering one discovery probe on the same LAN is a fault nobody can diagnose from the
-> phone side.
+> The hostname follows the board's own name: `ankireader`, the same word as the setup AP prefix and
+> the `model` string. It is **not** `tickerboard` — that name belongs to the fortune board this
+> project forked from, whose shipped app resolves it, and two devices answering one discovery probe
+> on the same LAN is a fault nobody can diagnose from the phone side. Boards flashed before the
+> rename still advertise `obsidianboard`; a client that wants one of those has to be given the host
+> by hand.
 
 ## Endpoints
 
@@ -53,7 +54,7 @@ two disagreeing about which card is up.
 ## `GET /api/info`
 
 ```json
-{"deviceId":"1A2B","model":"Kanjis Board","fw":"0.1.0","ip":"192.168.0.42"}
+{"deviceId":"1A2B","model":"AnkiReader","fw":"0.1.0","ip":"192.168.0.42"}
 ```
 
 Four fields, fixed shape: a discovery probe fetches this from every candidate host on the LAN and
@@ -63,7 +64,7 @@ reads `ip` to pick the best one. Renaming any of them is a client release, not a
 
 ```json
 {
-  "deviceId": "1A2B", "model": "Kanjis Board", "fw": "0.1.0", "ip": "192.168.0.42",
+  "deviceId": "1A2B", "model": "AnkiReader", "fw": "0.1.0", "ip": "192.168.0.42",
 
   "screen": 1, "screenTitle": "정답", "revealed": true, "grade": 3,
 
@@ -109,7 +110,7 @@ the same proxy the board polls, which the client can reach too.
 | Field | Type | Notes |
 |---|---|---|
 | `deviceId` | string | The last two bytes of the STA MAC, hex. Stable per board. |
-| `model` | string | `Kanjis Board`. |
+| `model` | string | `AnkiReader`. |
 | `fw` | string | Firmware version. |
 | `ip` | string | The station IP, or `""` before DHCP has finished. |
 
@@ -165,7 +166,7 @@ than a timestamp. Do not try to parse it into a date — there is no instant beh
 |---|---|---|
 | `url` | string | What the board polls. `""` = no remote polling; study from the offline catalog, with the demo only as its corrupt/missing fallback. |
 | `lastResult` | string | `ok`, `no_url`, `transport`, `http_status`, `bad_payload`. |
-| `pollSeconds` | int | The poll interval — 300 unless `CONFIG_OBSIDIAN_POLL_SECONDS` says otherwise. |
+| `pollSeconds` | int | The poll interval — 300 unless `CONFIG_ANKIREADER_POLL_SECONDS` says otherwise. |
 | `ageSeconds` | int | Since the last **successful** fetch. **`-1` = never.** |
 | `stale` | bool | Nothing has arrived for two whole poll intervals. |
 
@@ -249,21 +250,21 @@ buttons for the duration.
 ## Examples
 
 ```bash
-curl http://obsidianboard.local/api/state | jq
+curl http://ankireader.local/api/state | jq
 
-curl -X POST http://obsidianboard.local/api/screen -d '{"screen":4}'   # the FSRS sheet
-curl -X POST http://obsidianboard.local/api/refresh
-curl -X POST http://obsidianboard.local/api/study \
+curl -X POST http://ankireader.local/api/screen -d '{"screen":4}'   # the FSRS sheet
+curl -X POST http://ankireader.local/api/refresh
+curl -X POST http://ankireader.local/api/study \
      -d '{"url":"http://mymac.local:8123/kanji.json"}'
 
 # back to the persistent offline catalog (also stops polling after a reboot)
-curl -X POST http://obsidianboard.local/api/study -d '{"url":""}'
+curl -X POST http://ankireader.local/api/study -d '{"url":""}'
 
 # how long a refresh actually takes on this board
-curl -s http://obsidianboard.local/api/state | jq .panel
+curl -s http://ankireader.local/api/state | jq .panel
 
 # where the learner is in today's queue
-curl -s http://obsidianboard.local/api/state | jq '.session | "\(.track)/\(.trackTotal)"'
+curl -s http://ankireader.local/api/state | jq '.session | "\(.track)/\(.trackTotal)"'
 ```
 
 ## Provisioning API

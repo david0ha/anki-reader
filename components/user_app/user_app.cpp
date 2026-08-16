@@ -81,10 +81,10 @@ static prov_config_t s_cfg;
 
 /* --- cadences ------------------------------------------------------------ */
 
-#ifndef CONFIG_OBSIDIAN_POLL_SECONDS
-#define CONFIG_OBSIDIAN_POLL_SECONDS 300
+#ifndef CONFIG_ANKIREADER_POLL_SECONDS
+#define CONFIG_ANKIREADER_POLL_SECONDS 300
 #endif
-#define POLL_SECONDS       CONFIG_OBSIDIAN_POLL_SECONDS
+#define POLL_SECONDS       CONFIG_ANKIREADER_POLL_SECONDS
 
 /* A minute wake keeps battery telemetry current. Nothing on the glass changes
  * with the clock — the board has no RTC and every span is worded by the proxy —

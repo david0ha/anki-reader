@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "Kanjis Board",
-    "slug": "obsidian-board",
-    "scheme": "obsidianboard",
+    "name": "AnkiReader",
+    "slug": "ankireader",
+    "scheme": "ankireader",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.obsidianboard.app",
+      "bundleIdentifier": "com.ankireader.app",
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Kanjis Board connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
+        "NSLocalNetworkUsageDescription": "AnkiReader connects to your ESP32 over your local Wi-Fi to set it up and control what the panel shows.",
         "NSBonjourServices": ["_http._tcp"],
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
@@ -19,7 +19,7 @@
     },
     "android": {
       "predictiveBackGestureEnabled": false,
-      "package": "com.obsidianboard.app",
+      "package": "com.ankireader.app",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"

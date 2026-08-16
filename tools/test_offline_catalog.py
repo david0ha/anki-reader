@@ -1560,10 +1560,10 @@ def assert_idf_flash_metadata(build_directory):
     expected_normal = {
         0x0: "bootloader/bootloader.bin",
         0x8000: "partition_table/partition-table.bin",
-        0x10000: "obsidian_board.bin",
+        0x10000: "ankireader.bin",
         0x810000: "kanji-catalog.bin",
     }
-    expected_app = {0x10000: "obsidian_board.bin"}
+    expected_app = {0x10000: "ankireader.bin"}
     normal_map = {payload["offset"]: payload["file"] for payload in normal_payloads}
     app_map = {payload["offset"]: payload["file"] for payload in app_payloads}
     T.eq(normal_map, expected_normal,

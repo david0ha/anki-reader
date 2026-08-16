@@ -68,16 +68,16 @@ function runMock(mode: string, input?: unknown) {
 describe('esp32 client — getInfo', () => {
   it('parses device identity and trims the base URL', async () => {
     const { fetchImpl, calls } = fakeFetch([
-      { body: { deviceId: '9F3A', model: 'Kanjis Board', apSsid: 'Kanjis Board-AB12' } },
+      { body: { deviceId: '9F3A', model: 'AnkiReader', apSsid: 'AnkiReader-AB12' } },
     ])
     const c = createEsp32Client({ baseUrl: 'http://192.168.4.1/', fetchImpl })
     const info = await c.getInfo()
     expect(info).toEqual({
       deviceId: '9F3A',
-      model: 'Kanjis Board',
-      // The setup AP keeps the name of the board this firmware replaced — same hardware, same
-      // network identity, so the SSID the user joins did not change with the software.
-      apSsid: 'Kanjis Board-AB12',
+      model: 'AnkiReader',
+      // The setup AP is `<model>-<deviceId>`, so the network the learner joins, the model this
+      // probe reads back and the mDNS host are one name and cannot drift apart.
+      apSsid: 'AnkiReader-AB12',
       fw: '',
       ip: '',
     })
@@ -86,11 +86,11 @@ describe('esp32 client — getInfo', () => {
 
   it('parses the STA-mode info (fw + ip present, apSsid empty)', async () => {
     const { client: c } = client([
-      { body: { deviceId: '9F3A', model: 'Kanjis Board', fw: '0.1.0', ip: '192.168.0.42' } },
+      { body: { deviceId: '9F3A', model: 'AnkiReader', fw: '0.1.0', ip: '192.168.0.42' } },
     ])
     expect(await c.getInfo()).toEqual({
       deviceId: '9F3A',
-      model: 'Kanjis Board',
+      model: 'AnkiReader',
       apSsid: '',
       fw: '0.1.0',
       ip: '192.168.0.42',
@@ -283,7 +283,7 @@ describe('esp32 client — getState', () => {
   // The documented payload from docs/app-control.md, verbatim.
   const FULL = {
     deviceId: '1A2B',
-    model: 'Kanjis Board',
+    model: 'AnkiReader',
     fw: '0.1.0',
     ip: '192.168.0.42',
     screen: 1,
@@ -661,7 +661,7 @@ describe('companion mock — as a running board', () => {
       mock.stdout?.on('data', (chunk) => {
         output += String(chunk)
       })
-      expect(await eventually(() => output.includes('mock Kanjis Board listening'), 1000)).toBe(true)
+      expect(await eventually(() => output.includes('mock AnkiReader listening'), 1000)).toBe(true)
 
       const baseUrl = `http://127.0.0.1:${mockPort}`
       const setResponse = await requestJson(`${baseUrl}/api/study`, 'POST', {
@@ -705,7 +705,7 @@ describe('companion mock — as a running board', () => {
       mock.stdout?.on('data', (chunk) => {
         output += String(chunk)
       })
-      expect(await eventually(() => output.includes('mock Kanjis Board listening'), 1000)).toBe(true)
+      expect(await eventually(() => output.includes('mock AnkiReader listening'), 1000)).toBe(true)
 
       const baseUrl = `http://127.0.0.1:${mockPort}`
       await requestJson(`${baseUrl}/api/study`, 'POST', {
@@ -763,7 +763,7 @@ describe('companion mock — as a running board', () => {
       mock.stdout?.on('data', (chunk) => {
         output += String(chunk)
       })
-      expect(await eventually(() => output.includes('mock Kanjis Board listening'), 1000)).toBe(true)
+      expect(await eventually(() => output.includes('mock AnkiReader listening'), 1000)).toBe(true)
 
       const baseUrl = `http://127.0.0.1:${mockPort}`
       const oldPost = requestJson(`${baseUrl}/api/study`, 'POST', {

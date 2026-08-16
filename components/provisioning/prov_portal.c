@@ -203,7 +203,7 @@ static esp_err_t send_result_page(httpd_req_t *req, const char *title, const cha
     httpd_resp_sendstr_chunk(req,
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<title>Kanjis Board</title><style>"
+        "<title>AnkiReader</title><style>"
         "body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;"
         "background:#0b0e14;color:#e8edf4;font-family:system-ui,-apple-system,sans-serif}"
         ".box{max-width:380px;text-align:center}.box h1{font-size:18px;margin:0 0 10px}"
