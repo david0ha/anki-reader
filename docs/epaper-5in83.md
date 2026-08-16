@@ -39,16 +39,91 @@ rather than obviously.
 | `0x04` | Power on | after the reset, before anything else |
 | `0x06` | Booster soft start | the "enhanced display drive" values |
 | `0x07` | Deep sleep | payload `0xA5` |
-| `0x10` | Write RAM (previous image) | primed with `0x00` for a full refresh |
+| `0x10` | Write RAM (previous image) | gets the **same** frame as `0x13` — see below |
 | `0x12` | Display refresh | the actual update trigger |
 | `0x13` | Write RAM (new image) | where our framebuffer goes |
 | `0x15` | Dual SPI | `0x00`, single-SPI source data |
-| `0x50` | VCOM / data interval | `0x10 0x07` full, `0xA9 0x07` partial, `0xF7` before sleep |
+| `0x50` | VCOM / data interval — **and data polarity** | `0x21 0x07` full, `0xA9 0x07` partial, `0xF7` before sleep |
 | `0x60` | TCON setting | `0x22` |
 | `0x61` | Resolution | `0x0288 0x01E0` = 648 × 480 |
 | `0x71` | Get status | issued before every BUSY sample |
 | `0x90`/`0x91`/`0x92` | Partial window / in / out | the windowed refresh |
-| `0xE0`/`0xE5` | Cascade / force temperature | partial-mode waveform |
+| `0xE0`/`0xE5` | Cascade / force temperature | partial-mode waveform — `0x02`/`0x6E` entering, **`0xE0` back to `0x00` leaving** |
+
+## `0x50` decides whether the panel prints the frame or its negative
+
+The high bits of `0x50`'s first byte select the border data and the **data polarity** — which way a
+RAM bit maps to black or white. The vendor sends `0x21` from `Init()` for a full refresh and `0xA9`
+from `Display_Partial()` for a windowed one. Those two agree in the polarity bits and differ only in
+border and interval:
+
+```
+0x21 -> 0b0010_0001     full     (reference)
+0xA9 -> 0b1010_1001     partial  (reference, and what this driver already sent)
+0x10 -> 0b0001_0000     full     (what this driver used to send)
+```
+
+That agreement between the vendor's two values is the check that says a pair is right, and `0x10`
+failed it. Every full refresh printed the negative of the card: crisp, correctly laid out, entirely
+inverted — white type on a black field. The windowed refresh used the vendor's own `0xA9` and was
+unaffected, so the grade dock was the one region on the glass coming out the right way round.
+
+**Crispness is what separates this from an under-driven panel.** An inverted card is sharp and
+simply wrong; a panel running the partial waveform by mistake is streaky and patchy. Read the
+refresh time before assuming which one you have.
+
+## A full refresh writes the frame to both planes
+
+`EPD_5IN83_V2_Display()` sends the same `Image` bytes to `0x10` and then to `0x13`; `Clear()`
+likewise sends `0xFF` to both and lands on white. **`epd_refresh_full()` does the same, and the
+reason is not stylistic.**
+
+In KW mode the OTP LUT is indexed by the `(old, new)` pair. Because the vendor always writes
+`old == new`, only the `WW` and `BB` entries are ever exercised by a real full refresh — the mixed
+`BW`/`WB` paths are never used and are not something this panel's waveform was validated against.
+
+This driver used to prime `0x10` with `0x00` instead, under a comment claiming that was Waveshare's
+own trick for clearing ghosting. It was not — there is no `0x00` fill anywhere in that driver. What
+it actually did was drive every background pixel down the mixed `BW` path, which on this panel ends
+on the opposite rail. The panel built the correct image early, during the phase driven by the `0x13`
+data, then spent the remainder of the waveform carrying it to its inverse. The card came out
+**sharp, fully driven, and completely inverted** — white type on a black field.
+
+Sharpness is the tell, and it is what separates this from the partial-waveform bug below:
+
+| symptom | cause |
+|---|---|
+| crisp image, colours inverted | `0x10` primed with something other than the frame |
+| correct colours, streaky and patchy | full refresh running the partial waveform (`0xE0`/`0xE5`) |
+
+Ghosting is cleared by the full OTP waveform itself, which runs either way — the priming was never
+what did it.
+
+## Leaving partial mode is two registers, not one
+
+The controller picks its OTP waveform **by temperature**. `0xE0 = 0x02` is TSFIX — "ignore the
+on-chip sensor, use whatever `0xE5` says" — and pinning `0xE5` at `0x6E` is what selects the short
+waveform that makes a windowed refresh ~600 ms instead of ~4 s.
+
+So `0x92` (partial out) is only half of leaving partial mode. It closes the window; it does not give
+the temperature back. Leave TSFIX set and the panel stays on the partial waveform for **every
+subsequent full refresh** — and a full refresh does not fail, it just returns early:
+
+```
+epd: full refresh 3959ms      <- before the first partial
+epd: partial refresh 616ms
+epd: full refresh 699ms       <- and every one after it
+```
+
+Four hundred milliseconds of drive cannot carry a pixel all the way to black or all the way to
+white. The previous frame stays half printed under the new one: black streaks through white type,
+and patches of panel lighter or darker than their neighbours. It reads as failing hardware, and
+nothing logs an error — the whole signature is that one number in this driver's own INFO line.
+
+Which is why `epd_refresh_full()` now asserts on it: a full refresh under `EPD_FULL_REFRESH_MIN_MS`
+(2 s) logs `ESP_LOGE`. The measurement was always there; nobody was reading it.
+
+`0xE5` needs no counterpart write — with TSFIX clear its value is ignored.
 
 ## BUSY is active LOW
 
@@ -157,6 +232,8 @@ chosen cell invert. That inversion is the board's only partial refresh.
 | six partials in a row leave no residue | raise it — every promotion the learner does not need is a full flash they do not see | same |
 | a partial is over ~1 s | the dock stops feeling like an input; consider a shorter dock rectangle before anything else | `components/vault_core/ui_kanji_layout.c` |
 | full refresh is over ~6 s | nothing to change — it is why API writes return before the panel has caught up | — |
+| the card renders but looks streaky, with black lines through white type and uneven light/dark patches | check the refresh time first: if `full refresh` collapsed to well under 2 s after the first partial, the waveform is stuck in partial mode — `panel_leave_partial()` must write `0xE0 = 0x00` | `components/port_bsp/epd_panel.c` |
+| the card is crisp but inverted — white type on a black field — and the correct image is visible partway through the refresh before it flips | `0x10` is not getting the outgoing frame; both planes must receive it | same |
 
 ## Memory
 
