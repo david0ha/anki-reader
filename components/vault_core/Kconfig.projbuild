@@ -1,6 +1,6 @@
-menu "Kanjis Board"
+menu "AnkiReader"
 
-config OBSIDIAN_TIMEZONE
+config ANKIREADER_TIMEZONE
     string "Local timezone (POSIX TZ)"
     default "KST-9"
     help
@@ -9,8 +9,8 @@ config OBSIDIAN_TIMEZONE
       Examples: "KST-9" (Korea), "JST-9" (Japan), "EST5EDT,M3.2.0,M11.1.0"
       (US Eastern), "CET-1CEST,M3.5.0,M10.5.0/3" (Central Europe), "UTC0".
 
-config OBSIDIAN_POLL_SECONDS
-    int "Vault poll interval (seconds)"
+config ANKIREADER_POLL_SECONDS
+    int "Study poll interval (seconds)"
     default 300
     range 30 86400
     help

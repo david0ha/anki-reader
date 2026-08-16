@@ -355,7 +355,7 @@ function Header({
       <View style={styles.headerText}>
         {/* The board names itself (DEVICE_MODEL). Reading it back beats hardcoding a second copy
             of the name here that a firmware rename would silently make wrong. */}
-        <Text style={styles.headerTitle}>{model || 'Kanjis Board'}</Text>
+        <Text style={styles.headerTitle}>{model || 'AnkiReader'}</Text>
         <Text style={styles.headerSub} numberOfLines={1}>
           {baseUrl ?? ''}
         </Text>

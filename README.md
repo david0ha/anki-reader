@@ -1,9 +1,11 @@
-# Obsidian Board
+# AnkiReader
 
-> The repository and the firmware image keep the name this project was built under. The device
-> itself introduces itself as **Kanjis Board** — that is the setup Wi-Fi it raises, the model it
-> reports over `/api/info`, and the name the companion app shows. Its mDNS hostname stays
-> `obsidianboard.local`, so boards flashed before the rename are still reachable.
+> One name, everywhere: the firmware image, the setup Wi-Fi it raises (`AnkiReader-XXXX`), the
+> model it reports over `/api/info`, its mDNS host `ankireader.local`, and the companion app all
+> say **AnkiReader**. Only the git repository is still `obsidian_board_esp32`, inherited from the
+> vault dashboard this forked from. **A board flashed before this rename answers to
+> `obsidianboard.local` and raises `Kanjis Board-XXXX`** — reflash it, because nothing here looks
+> for either name any more.
 
 A desk-sized Japanese vocabulary trainer. A 5.83" monochrome e-Paper panel on a Seeed EE04 carrier
 and a XIAO ESP32-S3 Plus boots directly into a 9,956-card offline JLPT catalog — headword, かな
@@ -39,7 +41,7 @@ idf.py build
 ```
 
 The first boot displays the restored offline card immediately and does not force Wi-Fi setup. Hold
-KEY2 for five seconds when you want the `Kanjis Board-XXXX` setup network, then give it Wi-Fi
+KEY2 for five seconds when you want the `AnkiReader-XXXX` setup network, then give it Wi-Fi
 credentials and, optionally, a remote study URL. A missing or corrupt catalog uses the built-in
 card badged `DEMO` as the final fallback rather than leaving a blank board.
 
@@ -208,7 +210,7 @@ components/
     fonts/              Noto Sans KR + JP faces (OFL) — generated, do not hand-edit
     test/host/          unit tests for all of the above
   provisioning/         SoftAP + captive portal + NVS + SNTP onboarding
-  device_api/           STA-mode HTTP/JSON control server + mDNS (obsidianboard.local)
+  device_api/           STA-mode HTTP/JSON control server + mDNS (ankireader.local)
   board_io/             battery ADC
   buttons/              KEY0/1/2 + BOOT edge events
   user_app/             the two tasks, the command queue, the source guard
@@ -241,10 +243,11 @@ third_party/cJSON/      vendored (ESP-IDF v6 dropped cJSON from core)
 Forked from `saju_omi_esp32`, a 2.13" fortune-slip board on an EE05, by way of an Obsidian vault
 dashboard and a daily-tarot display on this same panel. Each of those replaced the content axis
 whole and kept the skeleton — the draw-and-present split, the captive-portal provisioning, the
-device API, the simulator, and the habit of writing a host test before believing anything. The
-repository name and the mDNS name are inherited; the content is not. Two devices answering one
-discovery probe on the same LAN is a fault nobody can diagnose, so this board deliberately does not
-reuse the *fortune* board's names either.
+device API, the simulator, and the habit of writing a host test before believing anything.
+**AnkiReader** is this board's own name — the firmware, the AP, the mDNS host and the app all use
+it, and only the repository name is still inherited from that vault dashboard. Two devices
+answering one discovery probe on the same LAN is a fault nobody can diagnose, so this board
+deliberately does not reuse the *fortune* board's names either.
 
 ## License
 

@@ -24,15 +24,17 @@
 
 #include "device_api_model.h"
 
-/* The human-readable identity: reported by GET /api/info and advertised as the
- * mDNS service instance name. The mDNS HOSTNAME is a separate string and does
- * not follow this one — device_api.c says why.
+/* The human-readable identity: reported by GET /api/info, advertised as the
+ * mDNS service instance name, and used as the setup AP's SSID prefix. The mDNS
+ * HOSTNAME is this word lowercased, spelled out separately in device_api.c so
+ * the string is greppable — one name for everything the learner and the app
+ * can see.
  *
  * Not the fortune board's "Ticker Board" either. That name and
  * `tickerboard.local` are hardcoded in another project's shipped companion app,
  * so reusing them would make two different devices answer one discovery probe
  * on the same LAN. */
-#define DEVICE_MODEL  "Kanjis Board"
+#define DEVICE_MODEL  "AnkiReader"
 #define DEVICE_FW     "0.1.0"
 
 #ifdef __cplusplus

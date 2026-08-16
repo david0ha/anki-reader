@@ -122,7 +122,7 @@ or partition needs investigation.
 
 To configure Wi-Fi, hold KEY2 for five seconds. After the reboot expect
 `user forced setup mode (KEY2 long-press) — starting portal` and
-`setup portal ready — join Wi-Fi 'Kanjis Board-XXXX' and open http://192.168.4.1`. Join that network
+`setup portal ready — join Wi-Fi 'AnkiReader-XXXX' and open http://192.168.4.1`. Join that network
 from a phone or laptop, fill in the form, and expect:
 
 ```
@@ -138,7 +138,7 @@ It reboots. On the second boot: `stored network 'X' — attempting to connect`.
 I app: online — study URL '...'
 I net_time: time synced
 I device_api: control server up on port 80
-I device_api: mDNS advertising http://obsidianboard.local
+I device_api: mDNS advertising http://ankireader.local
 ```
 
 `sntp sync timeout` changes nothing on the glass. This board prints no clock and computes no
@@ -147,7 +147,7 @@ clock and arrives as a string. Card staleness is measured monotonically and is u
 the board is reachable:
 
 ```bash
-curl -s http://obsidianboard.local/api/info
+curl -s http://ankireader.local/api/info
 ```
 
 If mDNS does not resolve — some routers and most corporate networks block it — use the IP from the
@@ -157,7 +157,7 @@ list is in [app-control.md](app-control.md).
 ## 3. Run the self-test
 
 ```bash
-curl -X POST http://obsidianboard.local/api/display/test
+curl -X POST http://ankireader.local/api/display/test
 ```
 
 Six patterns, tens of seconds, each failing differently on purpose — what each one proves is in
@@ -170,7 +170,7 @@ corner the origin is, because every other pattern is symmetric enough to look ri
 These are the measurements the firmware was deliberately built not to guess at.
 
 ```bash
-curl -s http://obsidianboard.local/api/state | jq '.panel, .battery'
+curl -s http://ankireader.local/api/state | jq '.panel, .battery'
 ```
 
 | number | where it goes |

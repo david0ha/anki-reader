@@ -1,6 +1,6 @@
-# Kanjis Board — companion app
+# AnkiReader — companion app
 
-A **local-only** React Native (Expo) app that sets up and controls the **ESP32-S3 Kanjis Board**
+A **local-only** React Native (Expo) app that sets up and controls the **ESP32-S3 AnkiReader board**
 over your home Wi-Fi. No cloud, no accounts, no API keys — the app talks **directly** to the board
 over plain HTTP on the LAN, and the board never holds a kanjis.ai credential either: it polls one
 URL, served by the proxy on your own machine.
@@ -17,11 +17,11 @@ The HTTP/JSON contract it implements is documented in [`../docs/app-control.md`]
 `src/lib/esp32.ts` is the TypeScript mirror of that document and the only file in the app that
 knows a field name.
 
-> Two names, on purpose. The setup AP and the model string `/api/info` reports are both
-> **`Kanjis Board`** — that is what the learner reads, and both come from the same literal in
-> `components/provisioning/provisioning.c`. The mDNS host stayed **`obsidianboard.local`**, because
-> boards flashed before the rename answer to it and this app resolves it; renaming it would strand
-> them for nothing.
+> One name, everywhere. The setup AP, the model string `/api/info` reports and the mDNS host are
+> all **AnkiReader** — `AnkiReader-XXXX`, `AnkiReader`, `ankireader.local` — and the first two come
+> from the same literal in `components/provisioning/provisioning.c`. A board flashed before the
+> rename still answers to `obsidianboard.local` and raises `Kanjis Board-XXXX`; this app resolves
+> neither, so reflash it.
 
 ## What the dashboard shows
 
@@ -58,7 +58,7 @@ reasons:
 - It talks to the board over **plain HTTP** on the local network. iOS requires
   `NSAllowsLocalNetworking` + `NSLocalNetworkUsageDescription` and Android requires
   `usesCleartextTraffic` — these are baked into a native build, not available in Expo Go.
-- mDNS discovery of `obsidianboard.local` needs the iOS `NSBonjourServices` entitlement.
+- mDNS discovery of `ankireader.local` needs the iOS `NSBonjourServices` entitlement.
 
 So you run it with `npx expo run:ios` / `npx expo run:android` (a real device or simulator with a
 dev build), not by scanning a QR code into Expo Go.
@@ -113,7 +113,7 @@ npx expo run:ios      # or: npx expo run:android
 Then follow the in-app onboarding:
 
 1. **Turn on** the board (USB-C). In your phone's Wi-Fi settings, join the network named
-   `Kanjis Board-XXXX`. The app probes `http://192.168.4.1` to confirm it's reachable.
+   `AnkiReader-XXXX`. The app probes `http://192.168.4.1` to confirm it's reachable.
 2. **Pick your Wi-Fi** from the scanned list (or "Other…" for a hidden SSID).
 3. **Enter the card URL** — or skip it, and the board runs on its built-in demo card. A URL you do
    type is validated against the firmware's own rule before anything is sent, because the board's
@@ -121,14 +121,14 @@ Then follow the in-app onboarding:
 4. **Enter the Wi-Fi password.** The app `POST`s to `/api/provision` and polls `/api/status` until
    the board confirms it joined.
 5. **Setup complete** — reconnect your phone to the same home Wi-Fi, then open the dashboard. The
-   board is reached at `http://obsidianboard.local` (mDNS) or its IP; you can override the address
+   board is reached at `http://ankireader.local` (mDNS) or its IP; you can override the address
    in **Settings** if mDNS isn't available on your network.
 
 ## Onboarding → control flow
 
 ```
 [AP setup]                                    [home LAN control]
-turn-on  ─ join "Kanjis Board-XXXX"         dashboard ─ GET /api/state (poll)
+turn-on  ─ join "AnkiReader-XXXX"           dashboard ─ GET /api/state (poll)
 wifi-list ─ GET /api/scan                       │           POST /api/{screen,refresh,display/test}
 study    ─ (validate locally)                   └─ settings ─ GET /api/info + /api/state
 password ─ POST /api/provision (ssid, pass,                   POST /api/study, change host,
@@ -186,10 +186,10 @@ app/
 ## Local-only by design
 
 There is **no** Supabase / AWS / MQTT / cloud auth anywhere in this app. The only network calls it
-makes are direct HTTP requests to the board's IP / `obsidianboard.local`. Wi-Fi credentials and the
+makes are direct HTTP requests to the board's IP / `ankireader.local`. Wi-Fi credentials and the
 card URL live on the board (NVS); the kanjis.ai session lives in the proxy on your own machine; the
 app persists only the board's base URL and an onboarding-complete flag in `AsyncStorage`.
 
-Those two AsyncStorage keys are namespaced `obsidianboard.*`, matching the board's own LAN identity.
+Those two AsyncStorage keys are namespaced `ankireader.*`, matching the board's own LAN identity.
 A phone that once ran the fortune board's app keeps its `tickerboard.*` entries untouched — they
 point at different hardware on the same LAN.

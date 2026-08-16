@@ -15,7 +15,7 @@
 static void fill(device_state_t *st)
 {
     memset(st, 0, sizeof(*st));
-    snprintf(st->model, sizeof(st->model), "Kanjis Board");
+    snprintf(st->model, sizeof(st->model), "AnkiReader");
     snprintf(st->fw, sizeof(st->fw), "0.1.0");
     snprintf(st->device_id, sizeof(st->device_id), "1A2B");
     snprintf(st->ip, sizeof(st->ip), "192.168.0.42");
@@ -115,14 +115,14 @@ static void check_bool(cJSON *o, const char *key, bool want)
 static void test_info(void)
 {
     char buf[256];
-    int n = device_api_json_info(buf, sizeof(buf), "1A2B", "Kanjis Board",
+    int n = device_api_json_info(buf, sizeof(buf), "1A2B", "AnkiReader",
                                  "0.1.0", "192.168.0.42");
     CHECK(n > 0);
     CHECK_INT((int)strlen(buf), n);
 
     /* The discovery probe reads these four names off every candidate host on
      * the LAN. Renaming one is an app release, not a firmware change. */
-    CHECK_STR(buf, "{\"deviceId\":\"1A2B\",\"model\":\"Kanjis Board\","
+    CHECK_STR(buf, "{\"deviceId\":\"1A2B\",\"model\":\"AnkiReader\","
                    "\"fw\":\"0.1.0\",\"ip\":\"192.168.0.42\"}");
 }
 
@@ -141,7 +141,7 @@ static void test_state_shape(void)
     if (!r) return;
 
     check_str(r, "deviceId", "1A2B");
-    check_str(r, "model", "Kanjis Board");
+    check_str(r, "model", "AnkiReader");
     check_str(r, "fw", "0.1.0");
     check_str(r, "ip", "192.168.0.42");
 
@@ -333,7 +333,7 @@ static void test_overflow_yields_an_empty_string_not_half_a_document(void)
     CHECK_INT(device_api_json_state(&st, full, (size_t)n + 1), n);
 
     char tiny[4];
-    CHECK_INT(device_api_json_info(tiny, sizeof(tiny), "1A2B", "Kanjis Board",
+    CHECK_INT(device_api_json_info(tiny, sizeof(tiny), "1A2B", "AnkiReader",
                                    "0.1.0", "1.2.3.4"), -1);
     CHECK_STR(tiny, "");
 

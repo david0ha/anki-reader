@@ -58,7 +58,7 @@ is unavailable, so a depopulated part never wedges the render loop.
 ## Power
 
 Seeed quotes about three months on a charge for a board that sleeps between refreshes. This firmware
-does not sleep — it holds Wi-Fi up so `obsidianboard.local` stays reachable and the poll interval
+does not sleep — it holds Wi-Fi up so `ankireader.local` stays reachable and the poll interval
 stays honest. On USB that is the right trade; on battery it is not, and a future revision that wants
 battery life should look at light sleep between polls before anything else.
 

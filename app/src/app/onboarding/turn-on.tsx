@@ -49,7 +49,7 @@ export default function TurnOn() {
     case 'checking':
       ctaLabel = 'CHECKING…'
       title = 'Looking for your board'
-      body = <>Looking for Kanjis Board on its setup Wi-Fi…</>
+      body = <>Looking for AnkiReader on its setup Wi-Fi…</>
       break
     case 'found':
       ctaLabel = 'NEXT'
@@ -72,7 +72,7 @@ export default function TurnOn() {
       body = (
         <>
           Power the board with USB-C, then in your phone’s Wi-Fi settings join the network named{' '}
-          <Text style={heroBold}>‘Kanjis Board-XXXX’</Text>. Come back and tap CHECK AGAIN.
+          <Text style={heroBold}>‘AnkiReader-XXXX’</Text>. Come back and tap CHECK AGAIN.
         </>
       )
       break

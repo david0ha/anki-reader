@@ -219,7 +219,7 @@ tick that keeps battery telemetry current never redraws anything.
 The constants below are placed to be *decided*, not guessed at twice. Read the measurement:
 
 ```bash
-curl -s http://obsidianboard.local/api/state | jq .panel
+curl -s http://ankireader.local/api/state | jq .panel
 # {"partialChain": 3, "fullRefreshMs": ..., "partialRefreshMs": ...}
 ```
 

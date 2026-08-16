@@ -4,8 +4,10 @@
 > `vault.json` contract — no longer ships. The board is now a kanjis.ai study device; see
 > [../kanji-contract.md](../kanji-contract.md) and the root `CLAUDE.md`. The hardware, the
 > draw-and-present split, the provisioning flow and the device API described below are still
-> accurate, which is why this record is kept. **§8 (Names) is not:** the AP prefix and model string
-> are now `"Kanjis Board"`, and only the mDNS hostname `obsidianboard` survives. The paragraph is
+> accurate, which is why this record is kept. **§8 (Names) is not:** the board is now
+> **AnkiReader** throughout — AP prefix `"AnkiReader"`, model string `"AnkiReader"`, mDNS hostname
+> `ankireader`. Nothing named below survives; it went by way of `"Kanjis Board"` on the AP and
+> model with `obsidianboard` kept for mDNS, and then that was renamed too. The paragraph is
 > left as written because this file is a record of what was decided on 2026-08-10, not a
 > description of what ships.
 

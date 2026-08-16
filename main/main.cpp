@@ -89,7 +89,7 @@ extern "C" void app_main(void)
 	// Keep the configured timezone for timestamped diagnostics. Nothing on the
 	// glass is a clock: the board has no RTC, and every span the UI prints
 	// ("9일 뒤") is worded by the proxy against the server's clock.
-	setenv("TZ", CONFIG_OBSIDIAN_TIMEZONE, 1);
+	setenv("TZ", CONFIG_ANKIREADER_TIMEZONE, 1);
 	tzset();
 
 	board_io_init(BATT_ADC_PIN, BATT_ENABLE_PIN);
@@ -150,7 +150,7 @@ extern "C" void app_main(void)
 			&startup_delivery, UserApp_SetOverlay(NULL, NULL));
 
 		// Companion-app control server on the home LAN (HTTP + mDNS
-		// "obsidianboard.local"), reading and driving the app through the
+		// "ankireader.local"), reading and driving the app through the
 		// user_app_api bridge.
 		if (startup_delivery_api_eligible(&startup_delivery)) {
 			device_api_start();

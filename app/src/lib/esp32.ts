@@ -1,4 +1,4 @@
-// Client for the Kanjis Board's two HTTP/JSON APIs (firmware:
+// Client for the AnkiReader's two HTTP/JSON APIs (firmware:
 // components/provisioning/prov_portal.c + components/device_api). See docs/app-control.md and
 // components/provisioning/README.md for the contract — this file is the TypeScript mirror of it,
 // and the only place in the app that knows a field name.
@@ -9,7 +9,7 @@
 //   POST /api/provision  (x-www-form-urlencoded: ssid, password, study_url?) -> 202 | 4xx
 //   GET  /api/status     -> { state: idle|connecting|connected|failed, ssid?, reason? }
 //
-// [2] Control (STA, http://obsidianboard.local or the board's IP): same home Wi-Fi.
+// [2] Control (STA, http://ankireader.local or the board's IP): same home Wi-Fi.
 //   GET  /api/info          -> { deviceId, model, fw, ip }
 //   GET  /api/state         -> DeviceState snapshot (polled by the dashboard)
 //   POST /api/refresh       -> poll the study source now

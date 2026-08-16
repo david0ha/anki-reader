@@ -202,7 +202,7 @@ components/
     fonts/                Noto Sans KR + JP faces (OFL) — generated, do not hand-edit
     test/host/            unit tests for all of the above
   provisioning/           SoftAP + captive portal + NVS + SNTP + /api/* onboarding
-  device_api/             STA-mode HTTP/JSON control server + mDNS (obsidianboard.local)
+  device_api/             STA-mode HTTP/JSON control server + mDNS (ankireader.local)
   board_io/               battery ADC
   buttons/                KEY0/1/2 + BOOT edge events
   user_app/               the two tasks, the command queue, the source guard
@@ -255,14 +255,15 @@ tools/
 - **`sdkconfig` holds per-developer values and is gitignored — never commit it.** Wi-Fi passwords
   live in NVS via the portal, never in Kconfig; kanjis.ai credentials live in
   `tools/kanji_server.py`'s environment and never touch the board at all.
-- The setup AP prefix and the model string are both `"Kanjis Board"`
-  (`components/provisioning/provisioning.c`), and the app prints the same words at every step of
-  onboarding. The mDNS hostname stays `obsidianboard` — it is what already-flashed boards answer to
-  and what `app/src/lib/discovery.ts` probes, and renaming it would strand them. Neither is the
-  `tickerboard` / `"Ticker Board"` of the project this forked from, whose shipped app resolves
-  those names. **A doc that names a different AP than the firmware raises sends the learner hunting
-  for a network that does not exist**, so these three strings and the docs quoting them move
-  together.
+- **The board is called AnkiReader everywhere.** The setup AP prefix and the model string are both
+  `"AnkiReader"` (`components/provisioning/provisioning.c`), the mDNS hostname is `ankireader`
+  (`components/device_api/device_api.c`), and `app/src/lib/discovery.ts` probes that host. None of
+  them is the `tickerboard` / `"Ticker Board"` of the project this forked from, whose shipped app
+  resolves those names — two devices answering one discovery probe on the same LAN is a fault
+  nobody can diagnose. **A doc that names a different AP than the firmware raises sends the learner
+  hunting for a network that does not exist**, so these three strings and the docs quoting them
+  move together. Boards flashed before the rename still answer to `obsidianboard.local` and raise
+  `Kanjis Board-XXXX`; the fix for one of those is a reflash, not a doc that names both.
 - If anything about the hardware is uncertain, don't guess — check
   [docs/references.md](docs/references.md).
 

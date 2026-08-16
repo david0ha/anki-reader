@@ -246,17 +246,18 @@ static void start_mdns(void)
         ESP_LOGW(TAG, "mdns_init failed: %s", esp_err_to_name(err));
         return;
     }
-    // The hostname deliberately does NOT follow DEVICE_MODEL. It is what a
-    // paired app has stored and what the setup AP still calls itself, so
-    // renaming it to match the board's new job would strand every board already
-    // flashed and on a shelf to save a word. NOT "tickerboard" either: that name
-    // belongs to the fortune board this project forked from, whose shipped app
-    // resolves tickerboard.local, and two devices answering the same discovery
-    // probe on one LAN is a support ticket nobody can debug from the outside.
-    mdns_hostname_set("obsidianboard");
+    // DEVICE_MODEL lowercased, spelled out rather than computed so grepping the
+    // hostname finds this line: the AP the learner joins, the model /api/info
+    // reports and the host the app resolves are deliberately one word. NOT
+    // "tickerboard": that name belongs to the fortune board this project forked
+    // from, whose shipped app resolves tickerboard.local, and two devices
+    // answering the same discovery probe on one LAN is a support ticket nobody
+    // can debug from the outside. Boards flashed before the rename still
+    // advertise "obsidianboard" and need a reflash to be found.
+    mdns_hostname_set("ankireader");
     mdns_instance_name_set(DEVICE_MODEL);
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-    ESP_LOGI(TAG, "mDNS advertising http://obsidianboard.local");
+    ESP_LOGI(TAG, "mDNS advertising http://ankireader.local");
 }
 
 void device_api_start(void)
