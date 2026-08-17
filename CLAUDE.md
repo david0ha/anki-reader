@@ -123,7 +123,7 @@ and `test_kanji_nav.c` drives every button from every reachable state against a 
 
 | Face | What it holds |
 |---|---|
-| 문제 | an art print: the headword, a Japanese example set as a pull-quote, and the learner's own FSRS history with this card |
+| 문제 | an art print: the headword and the learner's own FSRS history with this card — and nothing else from the card |
 | 정답 | a dictionary spread: reading, senses, 성립, 구성, 예문, the FSRS figures, and the four-rating dock — all at once |
 
 | Button | 문제 | 정답 |
@@ -139,9 +139,18 @@ refresh on each — nine seconds of strobing before the learner had told the boa
 dock cell prints its own button glyph, so the legend documents itself instead of being a fixed
 strip that has to be kept true by hand.
 
-**The front is spoiler-bound.** It may print only Japanese and the learner's own history — never
-`senses`, never `parts[].meaning`, never `examples[].gloss`. The last is the trap: it reads as
-harmless context right up until it prints 우연히 만나다 under 会う. The simulator asserts it.
+**The front is spoiler-bound, and "no Korean" is not the bar — `card.front` is.** The question
+face prints the headword and the learner's own history, and no other card field at all. Korean is
+the obvious leak (`senses`, `parts[].meaning`, `examples[].gloss` — the last reads as harmless
+context right up until it prints 우연히 만나다 under 会う), but the leak that actually shipped was
+pure Japanese: the face used to set `examples[0].text` as a pull-quote with `examples[0].reading`
+under it, and the catalog's examples are **the words hanging off the kanji's reading entries, not
+sentences using the headword**. On 破れる that printed 破る and やぶる — a different word's reading,
+one kana off the answer, in the slot a learner reads as the answer, while the headword's own
+reading was correctly being withheld. 7,201 of the 9,956 shipped cards have a first example that
+is not the headword. The simulator asserts both halves: `check_front_hides_the_answer()` for the
+Korean, and `check_front_ignores_examples()` — which renders the same card with and without its
+examples and demands the two frames match to the pixel — for everything else.
 
 A second press while a grade is in flight is refused rather than counted, because the proxy answers
 a repeat of the id it just graded with the same payload, and a *different* rating on the same card

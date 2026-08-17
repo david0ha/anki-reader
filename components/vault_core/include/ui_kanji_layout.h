@@ -100,10 +100,16 @@ void kanji_rect_to_half_open(const kanji_rect_t *r,
  * An art print: one centred axis, a 3.5x scale step, a hairline broken by an ornament, and a
  * label|value plate at the foot.
  *
- * THE FRONT IS SPOILER-BOUND. It may print only Japanese and the learner's own history with
- * this card. Never senses, never parts[].meaning, never examples[].gloss — each of those is
- * Korean and each is the answer. examples[].gloss is the trap: it reads as innocuous context
- * right up until it prints 우연히 만나다 under 会う.
+ * THE FRONT IS SPOILER-BOUND, and the bar is higher than "no Korean". It prints the headword
+ * and the learner's own history with it, and NOTHING ELSE FROM THE CARD. Never senses, never
+ * parts[].meaning, never examples[].gloss — each of those is Korean and each is the answer, and
+ * examples[].gloss is the trap that reads as innocuous context right up until it prints
+ * 우연히 만나다 under 会う. But the Japanese half is not safe by default either: an example's
+ * text and かな are Japanese and still gave the game away, because the catalog's examples are
+ * the words hanging off the kanji's reading entries rather than sentences using the headword,
+ * and on 破れる the first one is 破る / やぶる — a reading one kana off the answer, set in the
+ * slot where the answer would go. There is therefore no rectangle on this face that any card
+ * field except `front` can reach. See ui_kanji_layout.c for the count across the catalog.
  *
  * What is left is richer than it sounds. The plate carries 단계 / 반복 / 안정 / 실패 — the
  * learner's own record with this exact character. It spoils nothing, and it is the reason the
@@ -115,14 +121,14 @@ typedef struct {
     kanji_rect_t counters;      /* 연속 12 · 오늘 34, right-aligned                           */
     kanji_rect_t head_rule;
 
-    kanji_rect_t hero;          /* the headword, centred                                     */
+    /* The headword and the ornament under it are one unit, centred in the field between the
+     * head rule and the plate. Nothing sits between the ornament and the plate: see the
+     * composition note in ui_kanji_layout.c. */
+    kanji_rect_t hero;          /* the headword, centred — the only card field on this face  */
 
     kanji_rect_t orn_left;      /* hairline, ornament, hairline — one optical unit            */
     kanji_rect_t orn_mark;
     kanji_rect_t orn_right;
-
-    kanji_rect_t quote;         /* a Japanese example set as a pull-quote. No Korean.         */
-    kanji_rect_t quote_reading; /* its かな, a step down the scale                            */
 
     kanji_rect_t plate_label[KANJI_PLATE_ROWS];   /* right-aligned                            */
     kanji_rect_t plate_rule;                      /* the vertical hairline between them       */

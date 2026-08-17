@@ -11,17 +11,37 @@
  *   y      what                                             h
  *   16     header band (badge, brand, status, counters)     24
  *   48     hairline                                          1
- *   80     the headword                                     72
- *  176     hairline, ornament, hairline                       1
- *  200     the pull-quote and its かな                       72
- *  288     the plate, four rows of 34                       136
+ *  112     the headword                                     72
+ *  216     hairline, ornament, hairline                       1
+ *  284     the plate, four rows of 36                       144
  *  436     hairline                                          1
  *  446     queue counters and the reveal prompt             20
  *
- * The air between the hero and the ornament (24 px) and between the ornament and the quote
- * (24 px) is equal, but the air ABOVE the ornament rule is measured to the headword's box and
- * not to its ink, so optically the mark still belongs to the rule under the word rather than
- * floating between the two.
+ * ## Why there is no example on this face
+ *
+ * There was one — a Japanese 예문 set as a pull-quote at y=200 with its かな under it — and it
+ * was wrong twice over. The catalog's examples are not sentences that USE the headword; they
+ * are the word list hanging off each reading entry of the kanji (kanji_server.py's
+ * card_examples() walks on_yomi[] then kun_yomi[] and takes the first three). Across the 9,956
+ * shipped cards, 7,201 have a first example that is NOT the headword. On a card whose headword
+ * is already a word that reads as a near-duplicate: 破れる printed 破る, and under it やぶる —
+ * one kana off the answer the learner was being asked to produce. The face withheld the
+ * headword's own reading, which IS the answer and lives on 정답, and then printed a different
+ * word's reading in the same slot at the same scale. A learner cannot tell those two apart.
+ *
+ * So the question face is the headword and the learner's own record with it, and nothing else.
+ * The examples did not go anywhere — the 정답 spread's 예문 block still prints all three with
+ * their readings and glosses, which is where a usage list belongs.
+ *
+ * ## The vertical composition, now that the middle is empty
+ *
+ * The hero and its ornament are ONE unit — 27 px apart, tighter than anything else on the face —
+ * and that unit is centred in the field between the head rule and the plate: 64 px of paper above
+ * it, 63 px below. The asymmetry inside the unit is the point. Equal gaps above and below the
+ * mark would make it float between the headword and the plate and belong to neither; bound this
+ * close it reads as the rule under the word, which is what a printer's ornament is for. The
+ * _Static_assert below holds the two outer gaps to within 2 px of each other, because that
+ * balance is the whole composition and nothing else in the build would notice it drifting.
  *
  * The plate's row pitch is 34 rather than a line of 16 px type, because its VALUES are set in
  * the 28 px face. That is the one place the front spends scale on something other than the
@@ -31,15 +51,11 @@
 #define F_HEAD_Y        16
 #define F_HEAD_H        24
 #define F_HEAD_RULE_Y   48
-#define F_HERO_Y        80
+#define F_HERO_Y       112
 #define F_HERO_H        72
-#define F_ORN_Y        176
+#define F_ORN_Y        216
 #define F_ORN_MARK      10
 #define F_ORN_SEG_W    120
-#define F_QUOTE_Y      200
-#define F_QUOTE_LEAD    40     /* the word, KR 28 */
-#define F_QUOTE_H       72     /* the word and its かな together */
-#define F_QUOTE_INSET   60     /* a pull-quote wants a shorter measure than the page */
 #define F_PLATE_Y      284
 #define F_PLATE_STEP    36     /* kr_28 sets a 35 px line; 34 overlapped by one */
 #define F_PLATE_COL_W  124
@@ -82,11 +98,6 @@ static const kanji_front_layout_t FRONT = {
                     F_ORN_MARK, F_ORN_MARK },
     .orn_right  = { F_CENTER + F_ORN_MARK / 2 + 20, F_ORN_Y,
                     F_ORN_SEG_W, KANJI_RULE_HAIR },
-
-    .quote         = { KANJI_CONTENT_X + F_QUOTE_INSET, F_QUOTE_Y,
-                       KANJI_CONTENT_W - 2 * F_QUOTE_INSET, F_QUOTE_LEAD },
-    .quote_reading = { KANJI_CONTENT_X + F_QUOTE_INSET, F_QUOTE_Y + F_QUOTE_LEAD + 6,
-                       KANJI_CONTENT_W - 2 * F_QUOTE_INSET, 26 },
 
     .plate_label = { F_PLATE_LABEL(0), F_PLATE_LABEL(1),
                      F_PLATE_LABEL(2), F_PLATE_LABEL(3) },
@@ -236,12 +247,24 @@ static const kanji_back_layout_t BACK = {
 _Static_assert(F_HEAD_Y + F_HEAD_H < F_HEAD_RULE_Y
                && F_HEAD_RULE_Y < F_HERO_Y
                && F_HERO_Y + F_HERO_H < F_ORN_Y - F_ORN_MARK / 2
-               && F_ORN_Y + F_ORN_MARK / 2 < F_QUOTE_Y
-               && F_QUOTE_Y + F_QUOTE_H < F_PLATE_Y
+               && F_ORN_Y + F_ORN_MARK / 2 < F_PLATE_Y
                && F_PLATE_Y + F_PLATE_H < F_FOOT_RULE_Y
                && F_FOOT_RULE_Y < F_FOOT_Y
                && F_FOOT_Y + F_FOOT_H < KANJI_SCREEN_H,
                "the front's bands must stack down the page without overlapping");
+
+/* The composition, as an inequality. The headword and its ornament are one unit floating in the
+ * field between the head rule and the plate, and the two gaps that centre it are 64 and 63 — a
+ * balance no other test on this board can see. check_no_label_overlap() passes for any stack that
+ * does not collide and occupancy_pct() passes for any stack that inks enough cells, so a hero
+ * nudged 40 px up would ship looking like a mistake with a green build behind it. The 2 px slack
+ * is there because the unit's own height is odd, not as room to drift. */
+#define F_UNIT_ABOVE (F_HERO_Y - F_HEAD_RULE_Y)
+#define F_UNIT_BELOW (F_PLATE_Y - (F_ORN_Y + F_ORN_MARK / 2))
+_Static_assert(F_UNIT_ABOVE - F_UNIT_BELOW <= 2 && F_UNIT_BELOW - F_UNIT_ABOVE <= 2
+               && (F_ORN_Y - F_ORN_MARK / 2) - (F_HERO_Y + F_HERO_H) < F_UNIT_ABOVE,
+               "the headword and its ornament are one unit, centred between the head rule and "
+               "the plate, and bound to each other more tightly than either is to the page");
 
 _Static_assert(F_PLATE_L_X + F_PLATE_COL_W + F_PLATE_GAP == F_CENTER
                && F_PLATE_V_X - F_CENTER == F_PLATE_GAP

@@ -13,8 +13,11 @@ reading, Korean senses, and shape notes — and accepts four ratings on three bu
 [kanjis.ai](https://kanjis.ai) proxy can take over when Wi-Fi is available. Reveal, rate, next card.
 No screen to unlock, no app to open, no notification.
 
-Two faces, and nothing else. **문제** is an art print — the headword, one Japanese example set as a
-pull-quote, and the learner's own record with this card. **정답** is a dictionary spread that puts
+Two faces, and nothing else. **문제** is an art print — the headword and the learner's own record
+with this card, and deliberately nothing else: an example printed here turns out to be a spoiler
+even when it is pure Japanese, because the catalog's examples are the words hanging off the
+kanji's readings rather than sentences using the headword, so 破れる was captioned 破る / やぶる —
+a reading one kana off the answer. **정답** is a dictionary spread that puts
 everything on one page at once: the reading, the Korean senses, where the character comes from, what
 it is built out of, its examples, its FSRS figures, and the four-rating dock. Nothing is behind a
 button, because a learner does not have time to press four of them to read two lines.

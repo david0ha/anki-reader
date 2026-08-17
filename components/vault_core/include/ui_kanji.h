@@ -3,8 +3,9 @@
  *
  * A card has two faces and nothing else:
  *
- *   문제   an art print — the headword alone, a Japanese example set as a
- *          pull-quote, and the learner's own history with this card
+ *   문제   an art print — the headword alone, and the learner's own history
+ *          with this card. Nothing else from the card reaches this face; the
+ *          reasoning is in ui_card_front.c's spoiler note
  *   정답   a dictionary spread — reading, senses, 성립, 구성, 예문, the FSRS
  *          figures, and the four ratings, all at once
  *

@@ -4,19 +4,30 @@
  * This face is an art print. The board stands on a desk all day and is looked at far more often
  * than it is pressed, so the question side is composed to be worth looking at while nobody is
  * studying: one centred axis, a 3.5x step from the hero down to the labels, a hairline broken by
- * a mark, and a label|value plate at the foot. Everything it prints is either Japanese or the
+ * a mark, and a label|value plate at the foot. Everything it prints is either the headword or the
  * learner's own record with this exact character.
  *
  * ## The front is spoiler-bound
  *
- * The one rule this file must not get wrong. It may print the headword, a Japanese example, that
- * example's かな, and the FSRS numbers — and nothing else. Never `senses`, never
- * `parts[].meaning`, never `examples[].gloss`: each of those is Korean and each is the answer.
- * `examples[].gloss` is the trap, because it reads as harmless context right up until it prints
- * 우연히 만나다 under 会う and the card the learner was about to recall is spoiled. There is
- * therefore no widget on this face that a Korean sense could reach even by accident — the quote
- * pair takes `.text` and `.reading` and the plate takes integers and `state_label`, and no other
- * card field is touched.
+ * The one rule this file must not get wrong. It may print the headword and the FSRS numbers —
+ * and nothing else. Never `senses`, never `parts[].meaning`, never `examples[].gloss`: each of
+ * those is Korean and each is the answer. `examples[].gloss` is the obvious trap, because it
+ * reads as harmless context right up until it prints 우연히 만나다 under 会う and the card the
+ * learner was about to recall is spoiled.
+ *
+ * The subtler one is why there is no example on this face AT ALL. There used to be: a pull-quote
+ * under the ornament carrying `examples[0].text` with `examples[0].reading` beneath it, both
+ * Japanese and so both apparently safe. They were not. The catalog's examples are not sentences
+ * that use the headword — they are the word list hanging off each of the kanji's reading entries
+ * — so on a card whose headword is 破れる the first example is 破る and its reading is やぶる.
+ * The face was withholding the headword's own reading (やぶれる, which is the answer and lives on
+ * 정답) while printing a near-identical word's reading in its place, at the same scale, one line
+ * down. A learner reads that as the answer, and it is off by one kana.
+ *
+ * So: `k->card.front` is the only card field this file touches, beside the FSRS integers and
+ * `state_label`. There is no widget here that any other field could reach even by accident. The
+ * examples are not lost — 정답's 예문 block prints all three with their readings and glosses,
+ * which is where a usage list belongs and where none of it is a spoiler.
  *
  * ## Two calls, and why creating in the second one is a leak
  *
@@ -54,9 +65,6 @@ typedef struct {
     lv_obj_t *orn_left;
     lv_obj_t *orn_mark;
     lv_obj_t *orn_right;
-
-    lv_obj_t *quote;
-    lv_obj_t *quote_reading;
 
     lv_obj_t *plate_label[KANJI_PLATE_ROWS];
     lv_obj_t *plate_value[KANJI_PLATE_ROWS];
@@ -181,11 +189,6 @@ lv_obj_t *ui_card_front_create(lv_obj_t *par)
     f.orn_right = ui_rule(f.root, l->orn_right.x, l->orn_right.y,
                           l->orn_right.w, l->orn_right.h);
 
-    f.quote         = ui_lab_r(f.root, l->quote,         UI_F_TITLE,
-                               LV_TEXT_ALIGN_CENTER, "");
-    f.quote_reading = ui_lab_r(f.root, l->quote_reading, UI_F_HEAD,
-                               LV_TEXT_ALIGN_CENTER, "");
-
     /* The plate is the print's ORIGIN | USAGE | NOTE block: right-aligned labels, a vertical
      * hairline, left-aligned values. The labels never change, so they are written once here —
      * update() has no business touching a string that is the same on every card. */
@@ -284,26 +287,15 @@ void ui_card_front_update(const kanji_t *k, const ui_status_t *st)
         ui_apply_headword(f.hero, "");
     }
 
-    /* --- the ornament and the pull-quote --------------------------------------------------- */
+    /* --- the ornament ---------------------------------------------------------------------- */
 
-    /* The ornament belongs to the rule below the headword, not to the quote under it, so it
-     * survives a card with no example and goes only when there is no card. The layout's unequal
-     * gaps — 24 px above it, 28 px below — say the same thing in numbers. */
+    /* The ornament is the rule under the headword, so it tracks the headword and nothing else:
+     * it is on whenever there is a card and off when there is not. It no longer depends on the
+     * card having an example — there is no example on this face — and the layout says the same
+     * thing in numbers, binding it 27 px under the hero against 63 px of paper below it. */
     ui_show(f.orn_left,  have);
     ui_show(f.orn_mark,  have);
     ui_show(f.orn_right, have);
-
-    /* 「」 and not quotation marks: the catalog is written in Japanese typography and the corner
-     * brackets are what a Japanese sentence is quoted in. Both are in S_DATA_PUNCT, so the faces
-     * carry them. The example's GLOSS is deliberately absent — see the spoiler note above. */
-    const bool quoted = have && k->card.example_count > 0;
-    if (quoted) ui_setf(f.quote, "「%s」", k->card.examples[0].text);
-    else        ui_set(f.quote, "");
-    ui_show(f.quote, quoted);
-
-    const bool voiced = quoted && k->card.examples[0].reading[0] != '\0';
-    ui_set(f.quote_reading, voiced ? k->card.examples[0].reading : "");
-    ui_show(f.quote_reading, voiced);
 
     /* --- the plate ------------------------------------------------------------------------- */
 

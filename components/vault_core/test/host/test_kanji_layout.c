@@ -168,8 +168,6 @@ static void front_common(rect_set_t *s)
     ADD(s, f, orn_left);
     ADD(s, f, orn_mark);
     ADD(s, f, orn_right);
-    ADD(s, f, quote);
-    ADD(s, f, quote_reading);
     ADD(s, f, foot_rule);
     ADD(s, f, queue);
     ADD(s, f, prompt);
