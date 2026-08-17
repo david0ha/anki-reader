@@ -1,9 +1,8 @@
 # AnkiReader
 
-> One name, everywhere: the firmware image, the setup Wi-Fi it raises (`AnkiReader-XXXX`), the
-> model it reports over `/api/info`, its mDNS host `ankireader.local`, and the companion app all
-> say **AnkiReader**. Only the git repository is still `obsidian_board_esp32`, inherited from the
-> vault dashboard this forked from. **A board flashed before this rename answers to
+> One name, everywhere: the repository, the firmware image, the setup Wi-Fi it raises
+> (`AnkiReader-XXXX`), the model it reports over `/api/info`, its mDNS host `ankireader.local`, and
+> the companion app all say **AnkiReader**. **A board flashed before this rename answers to
 > `obsidianboard.local` and raises `Kanjis Board-XXXX`** — reflash it, because nothing here looks
 > for either name any more.
 
@@ -247,10 +246,10 @@ Forked from `saju_omi_esp32`, a 2.13" fortune-slip board on an EE05, by way of a
 dashboard and a daily-tarot display on this same panel. Each of those replaced the content axis
 whole and kept the skeleton — the draw-and-present split, the captive-portal provisioning, the
 device API, the simulator, and the habit of writing a host test before believing anything.
-**AnkiReader** is this board's own name — the firmware, the AP, the mDNS host and the app all use
-it, and only the repository name is still inherited from that vault dashboard. Two devices
-answering one discovery probe on the same LAN is a fault nobody can diagnose, so this board
-deliberately does not reuse the *fortune* board's names either.
+**AnkiReader** is this board's own name — the repository, the firmware, the AP, the mDNS host and
+the app all use it, and nothing of the vault dashboard's naming survives. Two devices answering one
+discovery probe on the same LAN is a fault nobody can diagnose, so this board deliberately does not
+reuse the *fortune* board's names either.
 
 ## License
 
